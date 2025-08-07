@@ -32,9 +32,9 @@ async def main():
         link_preview=False
     )
     # ...to some chat ID
-    await client.send_message('BKQTechJobs', 'Hello, group!')
+    await client.send_message('placeholder', 'Hello, group!')
     # ...to your contacts
-    await client.send_message('+9647804315610', 'test 123')
+    await client.send_message('placeholder', 'test 123')
 
 with client:
     client.loop.run_until_complete(main())
