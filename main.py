@@ -23,7 +23,7 @@ level_keywords_en = [
     "intern", "internship", "trainee", "junior",
     "entry level", "graduate", "co-op"
 ]
-level_keywords_ar = ['خريجين جدد', "تدريب", ""]
+level_keywords_ar = ['خريجين جدد', "تدريب"]
 
 role_keywords_en = [
     "help desk", "it support", "it technician", "network support",
@@ -34,10 +34,10 @@ role_keywords_en = [
     "cybersecurity technician", "ICSS", "technical support", "computer science", "control engineer",
     "instrumentation engineer", "instrumentation technician"
 ]
-role_keywords_ar = []
+role_keywords_ar = ['دعم تقني', 'مهندس نظم', 'محلل نظم', 'تقني شبكات']
 
 location_keywords_en = ['remote', 'basra']
-location_keywords_ar = []
+location_keywords_ar = ['البصرة', 'عن بعد']
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
 def build_hybrid_regex(en_list, ar_list):
@@ -53,17 +53,12 @@ level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 role_pattern = build_hybrid_regex(role_keywords_en, role_keywords_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 
+# Listen for new messages, look for matches and forward
 @client.on(events.NewMessage(chats=chats))
 async def new_message_handler(event):
     text = event.raw_text
     if level_pattern.search(text) and role_pattern.search(text) and location_pattern.search(text):
         await event.forward_to('BQTechJobs')
-
-async def main():
-
-    # You can print all the dialogs/conversations that you are part of:
-    async for dialog in client.iter_dialogs():
-        print(dialog.name, 'has ID', dialog.id)
 
 with client:
     client.run_until_disconnected()
