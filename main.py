@@ -6,7 +6,7 @@ import re
 logging.basicConfig(format='[%(levelname) %(asctime)s] %(name)s: %(message)s',
                     level=logging.WARNING)
 
-# Use your own values from my.telegram.org and keep them private!
+# Use your own values from my.telegram.org and KEEP THEM PRIVATE!
 api_id = 0
 api_hash = '0'
 client = TelegramClient('test', api_id, api_hash)
