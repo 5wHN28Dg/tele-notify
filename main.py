@@ -154,7 +154,9 @@ async def process_unread_messages():
             if dialog.unread_count > 0:
                 last_read_id = dialog.message.id - dialog.unread_count
                 async for message in client.iter_messages(dialog.id, min_id=last_read_id):
-                    if level_pattern.search(message.text) and role_pattern.search(message.text) and location_pattern.search(message.text):
+                    if level_pattern.search(message.text) and \
+                        role_pattern.search(message.text) and \
+                        location_pattern.search(message.text):
                         await message.forward_to('BQTechJobs')
 
 # Listen for new messages, look for matches and forward
@@ -163,7 +165,6 @@ async def new_message_handler(event):
     text = event.raw_text
     if level_pattern.search(text) and role_pattern.search(text) and location_pattern.search(text):
         await event.forward_to('BQTechJobs')
-
 
 async def main():
     await process_unread_messages()
