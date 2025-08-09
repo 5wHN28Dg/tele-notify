@@ -11,7 +11,7 @@ api_id = 0
 api_hash = '0'
 client = TelegramClient('test', api_id, api_hash)
 
-# keyowrds
+# chats to monitor
 chats = ['jobsalbasra', 'basrajobs', 'basrajobs3', 'jobbbs', 'basrajobs_ads', 'basrahvacancies',
         'vacancies_training', 'jobs_basra1', 'engineers_jobs_basra', 'basra_job', 'alisaedhsn',
         'Jobs_Advices', 'engahmad88', 'jobs_iraq1', 'Muhannad_job', 'Iraq_careers', 'YSPjobs',
@@ -19,25 +19,118 @@ chats = ['jobsalbasra', 'basrajobs', 'basrajobs3', 'jobbbs', 'basrajobs_ads', 'b
         'jobs_free'
 ]
 
+# keywords
 level_keywords_en = [
-    "intern", "internship", "trainee", "junior",
-    "entry level", "graduate", "co-op"
+    "intern", "internship", "trainee", "junior", "graduate",
+    "entry level", "fresh graduate", "co-op",
+    "summer training", "training program", "apprentice", "apprenticeship",
+    "volunteer", "probation", "on-the-job training"
 ]
-level_keywords_ar = ['خريجين جدد', "تدريب"]
+level_keywords_ar = [
+    "متدرب", "تدريب", "تدريب صيفي", "تدريب عملي",
+    "خريج جديد", "خريجون جدد", "حديث التخرج", "خريجة جديدة",
+    "متدربة", "متدربين", "برنامج تدريبي", "متدرب هندسة", "فرصة تدريب",
+    "فترة تجربة", "متطوع", "وظيفة مؤقتة"
+]
 
 role_keywords_en = [
-    "help desk", "it support", "it technician", "network support",
-    "noc technician", "desktop support", "system admin",
-    "systems analyst", "data center technician", "pc technician",
-    "control systems engineer", "automation engineer",
-    "embedded systems", "junior developer", "software intern",
-    "cybersecurity technician", "ICSS", "technical support", "computer science", "control engineer",
-    "instrumentation engineer", "instrumentation technician"
-]
-role_keywords_ar = ['دعم تقني', 'مهندس نظم', 'محلل نظم', 'تقني شبكات']
+    # IT support roles
+    "help desk", "it support", "technical support", "support technician",
+    "desktop support", "pc technician", "it technician",
+    "network support", "network technician", "noc technician",
+    "system admin", "systems administrator", "systems analyst",
+    "data center technician",
 
-location_keywords_en = ['remote', 'basra']
-location_keywords_ar = ['البصرة', 'عن بعد']
+    # Software & dev
+    "junior developer", "junior programmer", "software intern",
+    "software engineer intern", "web developer intern",
+    "mobile app developer intern", "python developer intern",
+
+    # Cybersecurity
+    "cybersecurity intern", "security analyst intern", "security technician",
+
+    # Embedded / control / automation
+    "control systems engineer", "automation engineer",
+    "embedded systems engineer", "embedded systems developer",
+    "control engineer", "ics engineer", "icss engineer",
+    "instrumentation engineer", "instrumentation technician",
+    "plc programmer", "scada engineer", "dcs engineer",
+    "industrial automation", "process control engineer",
+
+    # Academic background
+    "computer science", "control engineering", "computer engineering",
+    "electrical and computer engineering"
+]
+
+role_keywords_ar = [
+    # IT support
+    "دعم تقني", "دعم فني", "فني حاسوب", "فني دعم", "فني شبكات", "فني كمبيوتر",
+    "فني صيانة حاسوب", "مشغل كمبيوتر", "فني تقنية معلومات", "فني برمجيات",
+    "مسؤول نظم", "مسؤول انظمة", "محلل نظم",
+
+    # Software
+    "مبرمج مبتدئ", "مبرمج جافا", "مبرمج بايثون", "مبرمج مواقع", "مبرمج تطبيقات",
+    "مبرمج أندرويد", "مبرمج كيوت", "مبرمج نظم", "مبرمج قواعد بيانات",
+
+    # Cybersecurity
+    "أمن سيبراني", "مختبر اختراق", "محلل أمن", "محلل أمني",
+
+    # Control / automation / engineering
+    "مهندس نظم تحكم", "مهندس تحكم", "مهندس اوتوميشن", "مهندس أتمتة",
+    "مهندس أجهزة دقيقة", "فني أجهزة دقيقة", "مهندس plc", "مبرمج plc",
+    "مهندس scada", "مهندس dcs", "تحكم صناعي", "أتمتة صناعية", "تحكم العمليات",
+    "مهندس أنظمة صناعية", "مهندس الكترونيات صناعية", "مهندس كهرباء وتحكم",
+    "مهندس ميكاترونكس", "مهندس نظم صناعية"
+]
+
+
+location_keywords_en = [
+    # General
+    "basra", "basrah", "al basra", "al-basra",
+
+    # Remote
+    "remote", "work from home", "wfh", "from home",
+
+    # Major cities/districts
+    "um qasr", "um al qasr", "umm qasr", "umm al qasr",
+    "zubeir", "zubair", "az zubayr", "al zubair", "az-zubayr",
+    "shatt al arab", "shatt-al-arab",
+    "qurna", "al qurna", "al-qurnah", "qurnah",
+
+    # Towns / subdistricts
+    "abu al khasib", "abu al-khasib", "abu al khasib",
+    "mdaina", "al medina", "al madinah", "medinah", "madina",
+    "faw", "al faw", "al-fao", "fao",
+
+    # Ports / oil fields / industrial zones
+    "north rumaila", "south rumaila", "rumaila",
+    "majnoon oil field", "majnoon", "west qurna", "west qurna 1", "west qurna 2",
+    "nahr umar", "luhais", "rafidain oil field",
+    "khor al zubair", "khor az zubair", "khor al-zubair",
+    "basra refinery", "shuaiba industrial zone", "shuaiba", "shuaibah",
+    "al baradiyah", "tanuma", "jubaish", "gharma", "karma ali", "karma-ali"
+]
+
+location_keywords_ar = [
+    # General
+    "البصرة", "بصرة",
+
+    # Remote
+    "عن بعد", "من المنزل", "العمل من المنزل",
+
+    # Major cities/districts
+    "أم قصر", "ام قصر", "الزبير", "الزُبير",
+    "شط العرب", "القرنة", "القرنه",
+
+    # Towns / subdistricts
+    "أبو الخصيب", "ابو الخصيب", "المدينة", "المدينه", "الفاو",
+
+    # Ports / oil fields / industrial zones
+    "حقل الرميلة", "الرميلة", "رميلة", "حقل مجنون", "مجنون",
+    "غرب القرنة", "غرب القرنه", "نهر عمر", "لحيس", "اللحيس", "حقل الرافدين",
+    "خور الزبير", "الزبير الصناعي", "مصفى البصرة", "الشناشيل",
+    "الشعيبة", "الشعيبه", "البراضعية", "التنومة", "كَرمة علي", "كرمة علي"
+]
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
 def build_hybrid_regex(en_list, ar_list):
