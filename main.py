@@ -1,10 +1,10 @@
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, errors
 import logging
 import re
 
 # logging for easier debugging
 logging.basicConfig(format='[%(levelname) %(asctime)s] %(name)s: %(message)s',
-                    level=logging.WARNING)
+                    level=logging.INFO)
 
 # Use your own values from my.telegram.org and KEEP THEM PRIVATE!
 api_id = 0
@@ -42,12 +42,12 @@ role_keywords_en = [
     "data center technician",
 
     # Software & dev
-    "junior developer", "junior programmer", "software intern",
-    "software engineer intern", "web developer intern",
-    "mobile app developer intern", "python developer intern",
+    "junior developer", "junior programmer", "software",
+    "software engineer", "web developer",
+    "mobile app developer", "python developer",
 
     # Cybersecurity
-    "cybersecurity intern", "security analyst intern", "security technician",
+    "cybersecurity", "security analyst", "security technician",
 
     # Embedded / control / automation
     "control systems engineer", "automation engineer",
@@ -59,7 +59,8 @@ role_keywords_en = [
 
     # Academic background
     "computer science", "control engineering", "computer engineering",
-    "electrical and computer engineering"
+    "electrical and computer engineering", "electrical engineering", "control systems engineering",
+    "automation engineering"
 ]
 
 role_keywords_ar = [
@@ -153,17 +154,24 @@ async def process_unread_messages():
         if dialog.entity.Username in chats:
             if dialog.unread_count > 0:
                 last_read_id = dialog.message.id - dialog.unread_count
-                async for message in client.iter_messages(dialog.id, min_id=last_read_id):
-                    if level_pattern.search(message.text) and \
-                        role_pattern.search(message.text) and \
-                        location_pattern.search(message.text):
-                        await message.forward_to('BQTechJobs')
+                try:
+                    async for message in client.iter_messages(dialog.id, min_id=last_read_id):
+                        if level_pattern.search(message.text) and \
+                            role_pattern.search(message.text) and \
+                            location_pattern.search(message.text):
+                                await message.forward_to('BQTechJobs')
+                except errors.FloodWaitError as e:
+                    # e.seconds is how many seconds you have
+                    # to wait before making the request again.
+                    print('Flood for', e.seconds)
 
 # Listen for new messages, look for matches and forward
 @client.on(events.NewMessage(chats=chats))
 async def new_message_handler(event):
     text = event.raw_text
-    if level_pattern.search(text) and role_pattern.search(text) and location_pattern.search(text):
+    if level_pattern.search(text) and \
+        role_pattern.search(text) and \
+        location_pattern.search(text):
         await event.forward_to('BQTechJobs')
 
 async def main():
