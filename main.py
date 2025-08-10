@@ -1,6 +1,7 @@
 from telethon import TelegramClient, events, errors
 import logging
 import re
+import asyncio
 
 # logging for easier debugging
 logging.basicConfig(format='[%(levelname) %(asctime)s] %(name)s: %(message)s',
@@ -149,21 +150,28 @@ location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar
 
 # check unread messages 1st if there is any
 async def process_unread_messages():
-    dialogs = await client.get_dialogs()
-    for dialog in dialogs:
-        if dialog.entity.Username in chats:
-            if dialog.unread_count > 0:
-                last_read_id = dialog.message.id - dialog.unread_count
-                try:
+    try:
+        dialogs = await client.get_dialogs()
+        for dialog in dialogs:
+            if dialog.entity.Username in chats:
+                if dialog.unread_count > 0:
+                    last_read_id = dialog.message.id - dialog.unread_count
                     async for message in client.iter_messages(dialog.id, min_id=last_read_id):
                         if level_pattern.search(message.text) and \
                             role_pattern.search(message.text) and \
                             location_pattern.search(message.text):
-                                await message.forward_to('BQTechJobs')
-                except errors.FloodWaitError as e:
-                    # e.seconds is how many seconds you have
-                    # to wait before making the request again.
-                    print('Flood for', e.seconds)
+                                try:
+                                    await message.forward_to('BQTechJobs')
+                                    await asyncio.sleep(1)
+                                except errors.FloodWaitError as e:
+                                    # e.seconds is how many seconds you have
+                                    # to wait before making the request again.
+                                    print('Flood for', e.seconds)
+                                    await asyncio.sleep(e.seconds)
+                                    await message.forward_to('BQTechJobs')
+    except Exception as e:
+        print('Unexpected error:', e)
+        raise
 
 # Listen for new messages, look for matches and forward
 @client.on(events.NewMessage(chats=chats))
@@ -172,7 +180,15 @@ async def new_message_handler(event):
     if level_pattern.search(text) and \
         role_pattern.search(text) and \
         location_pattern.search(text):
-        await event.forward_to('BQTechJobs')
+        try:
+            await event.forward_to('BQTechJobs')
+            await asyncio.sleep(1)
+        except errors.FloodWaitError as e:
+            # e.seconds is how many seconds you have
+            # to wait before making the request again.
+            print('Flood for', e.seconds)
+            await asyncio.sleep(e.seconds)
+            await event.forward_to('BQTechJobs')
 
 async def main():
     await process_unread_messages()
