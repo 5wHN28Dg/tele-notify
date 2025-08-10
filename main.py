@@ -29,6 +29,7 @@ level_keywords_en = [
     "summer training", "training program", "apprentice", "apprenticeship",
     "volunteer", "probation", "on-the-job training"
 ]
+
 level_keywords_ar = [
     "متدرب", "تدريب", "تدريب صيفي", "تدريب عملي",
     "خريج جديد", "خريجون جدد", "حديث التخرج", "خريجة جديدة",
@@ -62,8 +63,8 @@ role_keywords_en = [
 
     # Academic background
     "computer science", "control engineering", "computer engineering",
-    "electrical and computer engineering", "electrical engineering", "control systems engineering",
-    "automation engineering"
+    "electrical and computer engineering", "electrical engineering",
+    "control systems engineering", "automation engineering"
 ]
 
 role_keywords_ar = [
@@ -159,18 +160,36 @@ async def process_unread_messages():
                 if dialog.unread_count > 0:
                     last_read_id = dialog.message.id - dialog.unread_count
                     async for message in client.iter_messages(dialog.id, min_id=last_read_id):
-                        if level_pattern.search(message.text) and \
-                            role_pattern.search(message.text) and \
-                            location_pattern.search(message.text):
-                                try:
-                                    await message.forward_to('BQTechJobs')
-                                    await asyncio.sleep(1)
-                                except errors.FloodWaitError as e:
-                                    # e.seconds is how many seconds you have
-                                    # to wait before making the request again.
-                                    print('Flood for', e.seconds)
-                                    await asyncio.sleep(e.seconds)
-                                    await message.forward_to('BQTechJobs')
+                        if message.text is not None:
+                            if level_pattern.search(message.text) and \
+                                role_pattern.search(message.text) and \
+                                location_pattern.search(message.text):
+                                    try:
+                                        await message.forward_to('BQTechJobs')
+                                        await asyncio.sleep(1)
+                                    except errors.FloodWaitError as e:
+                                        # e.seconds is how many seconds you have
+                                        # to wait before making the request again.
+                                        print('Flood for', e.seconds)
+                                        await asyncio.sleep(e.seconds)
+                                        await message.forward_to('BQTechJobs')
+                        elif message.text is None and message.is_image:
+                            try:
+                                image = await message.download_media(file=bytes)
+                                image_text = pytesseract.image_to_string(Image.open(image), lang='ara, eng')
+                                if level_pattern.search(image_text) and \
+                                    role_pattern.search(image_text) and \
+                                    location_pattern.search(image_text):
+                                    try:
+                                        await message.forward_to('BQTechJobs')
+                                        await asyncio.sleep(1)
+                                    except errors.FloodWaitError as e:
+                                        print('Flood for', e.seconds)
+                                        await asyncio.sleep(e.seconds)
+                                        await message.forward_to('BQTechJobs')
+                            except Exception as e:
+                                print('Error processing image:', e)
+                                raise
     except Exception as e:
         print('Unexpected error:', e)
         raise
@@ -178,7 +197,7 @@ async def process_unread_messages():
 # Listen for new messages, look for matches and forward
 @client.on(events.NewMessage(chats=chats))
 async def new_message_handler(event):
-    if event.raw_text != None:
+    if event.raw_text is not None:
         text = event.raw_text
         if level_pattern.search(text) and \
             role_pattern.search(text) and \
@@ -187,11 +206,26 @@ async def new_message_handler(event):
                 await event.forward_to('BQTechJobs')
                 await asyncio.sleep(1)
             except errors.FloodWaitError as e:
-                # e.seconds is how many seconds you have
-                # to wait before making the request again.
                 print('Flood for', e.seconds)
                 await asyncio.sleep(e.seconds)
                 await event.forward_to('BQTechJobs')
+    elif event.raw_text is None and event.is_image:
+        try:
+            image = await event.download_media(file=bytes)
+            image_text = pytesseract.image_to_string(Image.open(image), lang='ara, eng')
+            if level_pattern.search(image_text) and \
+                role_pattern.search(image_text) and \
+                location_pattern.search(image_text):
+                try:
+                    await event.forward_to('BQTechJobs')
+                    await asyncio.sleep(1)
+                except errors.FloodWaitError as e:
+                    print('Flood for', e.seconds)
+                    await asyncio.sleep(e.seconds)
+                    await event.forward_to('BQTechJobs')
+        except Exception as e:
+            print('Error processing image:', e)
+            raise
 
 async def main():
     await process_unread_messages()
