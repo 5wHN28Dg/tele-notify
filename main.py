@@ -2,7 +2,7 @@ from telethon import TelegramClient, events, errors
 import logging
 import re
 import asyncio
-import PIL
+from PIL import Image
 import pytesseract
 
 # logging for easier debugging

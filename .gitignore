@@ -1,2 +1,6 @@
 test.session
 function.md
+*.jpg
+*.jpeg
+myFile.txt
+test.py
