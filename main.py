@@ -192,6 +192,25 @@ async def process_unread_messages():
                             except Exception as e:
                                 logging.error(f'Error processing image: {e}')
                                 # Continue processing other messages instead of crashing
+                        elif message.text is not None and message.is_image:
+                            try:
+                                image_bytes = await message.download_media(file=bytes)
+                                image = Image.open(io.BytesIO(image_bytes))
+                                image_text = pytesseract.image_to_string(image, lang='ara+eng')
+                                whole_text = image_text + '\n' + message.text
+                                if level_pattern.search(whole_text) and \
+                                    role_pattern.search(whole_text) and \
+                                    location_pattern.search(whole_text):
+                                    try:
+                                        await message.forward_to('BQTechJobs')
+                                        await asyncio.sleep(1)
+                                    except errors.FloodWaitError as e:
+                                        print('Flood for', e.seconds)
+                                        await asyncio.sleep(e.seconds)
+                                        await message.forward_to('BQTechJobs')
+                            except Exception as e:
+                                logging.error(f'Error processing message: {e}')
+                                # Continue processing other messages instead of crashing
     except Exception as e:
         print('Unexpected error:', e)
         raise
@@ -228,6 +247,25 @@ async def new_message_handler(event):
                     await event.forward_to('BQTechJobs')
         except Exception as e:
             logging.error(f'Error processing image: {e}')
+            # Continue processing other messages instead of crashing
+    elif event.text is not None and event.is_image:
+        try:
+            image_bytes = await event.download_media(file=bytes)
+            image = Image.open(io.BytesIO(image_bytes))
+            image_text = pytesseract.image_to_string(image, lang='ara+eng')
+            whole_text = image_text + '\n' + event.text
+            if level_pattern.search(whole_text) and \
+                role_pattern.search(whole_text) and \
+                location_pattern.search(whole_text):
+                try:
+                    await event.forward_to('BQTechJobs')
+                    await asyncio.sleep(1)
+                except errors.FloodWaitError as e:
+                    print('Flood for', e.seconds)
+                    await asyncio.sleep(e.seconds)
+                    await event.forward_to('BQTechJobs')
+        except Exception as e:
+            logging.error(f'Error processing message: {e}')
             # Continue processing other messages instead of crashing
 
 
