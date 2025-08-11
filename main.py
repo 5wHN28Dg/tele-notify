@@ -177,8 +177,8 @@ async def process_unread_messages():
                         elif message.text is None and message.is_image:
                             try:
                                 image_bytes = await message.download_media(file=bytes)
-                                image = Image.open(io.BytesIO(image_bytes))
-                                image_text = pytesseract.image_to_string(image, lang='ara+eng')
+                                with Image.open(io.BytesIO(image_bytes)) as image:
+                                    image_text = pytesseract.image_to_string(image, lang='ara+eng')
                                 if level_pattern.search(image_text) and \
                                     role_pattern.search(image_text) and \
                                     location_pattern.search(image_text):
@@ -195,8 +195,8 @@ async def process_unread_messages():
                         elif message.text is not None and message.is_image:
                             try:
                                 image_bytes = await message.download_media(file=bytes)
-                                image = Image.open(io.BytesIO(image_bytes))
-                                image_text = pytesseract.image_to_string(image, lang='ara+eng')
+                                with Image.open(io.BytesIO(image_bytes)) as image:
+                                    image_text = pytesseract.image_to_string(image, lang='ara+eng')
                                 whole_text = image_text + '\n' + message.text
                                 if level_pattern.search(whole_text) and \
                                     role_pattern.search(whole_text) and \
@@ -233,8 +233,8 @@ async def new_message_handler(event):
     elif event.raw_text is None and event.is_image:
         try:
             image_bytes = await event.download_media(file=bytes)
-            image = Image.open(io.BytesIO(image_bytes))
-            image_text = pytesseract.image_to_string(image, lang='ara+eng')
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                image_text = pytesseract.image_to_string(image, lang='ara+eng')
             if level_pattern.search(image_text) and \
                 role_pattern.search(image_text) and \
                 location_pattern.search(image_text):
@@ -251,8 +251,8 @@ async def new_message_handler(event):
     elif event.text is not None and event.is_image:
         try:
             image_bytes = await event.download_media(file=bytes)
-            image = Image.open(io.BytesIO(image_bytes))
-            image_text = pytesseract.image_to_string(image, lang='ara+eng')
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                image_text = pytesseract.image_to_string(image, lang='ara+eng')
             whole_text = image_text + '\n' + event.text
             if level_pattern.search(whole_text) and \
                 role_pattern.search(whole_text) and \
