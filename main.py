@@ -4,6 +4,7 @@ import re
 import asyncio
 from PIL import Image
 import pytesseract
+import io
 
 # logging for easier debugging
 logging.basicConfig(format='[%(levelname) %(asctime)s] %(name)s: %(message)s',
@@ -175,8 +176,9 @@ async def process_unread_messages():
                                         await message.forward_to('BQTechJobs')
                         elif message.text is None and message.is_image:
                             try:
-                                image = await message.download_media(file=bytes)
-                                image_text = pytesseract.image_to_string(Image.open(image), lang='ara, eng')
+                                image_bytes = await message.download_media(file=bytes)
+                                image = Image.open(io.BytesIO(image_bytes))
+                                image_text = pytesseract.image_to_string(image, lang='ara+eng')
                                 if level_pattern.search(image_text) and \
                                     role_pattern.search(image_text) and \
                                     location_pattern.search(image_text):
@@ -188,8 +190,8 @@ async def process_unread_messages():
                                         await asyncio.sleep(e.seconds)
                                         await message.forward_to('BQTechJobs')
                             except Exception as e:
-                                print('Error processing image:', e)
-                                raise
+                                logging.error(f'Error processing image: {e}')
+                                # Continue processing other messages instead of crashing
     except Exception as e:
         print('Unexpected error:', e)
         raise
@@ -211,8 +213,9 @@ async def new_message_handler(event):
                 await event.forward_to('BQTechJobs')
     elif event.raw_text is None and event.is_image:
         try:
-            image = await event.download_media(file=bytes)
-            image_text = pytesseract.image_to_string(Image.open(image), lang='ara, eng')
+            image_bytes = await event.download_media(file=bytes)
+            image = Image.open(io.BytesIO(image_bytes))
+            image_text = pytesseract.image_to_string(image, lang='ara+eng')
             if level_pattern.search(image_text) and \
                 role_pattern.search(image_text) and \
                 location_pattern.search(image_text):
@@ -224,8 +227,9 @@ async def new_message_handler(event):
                     await asyncio.sleep(e.seconds)
                     await event.forward_to('BQTechJobs')
         except Exception as e:
-            print('Error processing image:', e)
-            raise
+            logging.error(f'Error processing image: {e}')
+            # Continue processing other messages instead of crashing
+
 
 async def main():
     await process_unread_messages()
