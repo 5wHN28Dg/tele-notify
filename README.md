@@ -9,12 +9,12 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 * **Image text recognition**: Downloads attached images and extracts text using OCR (`pytesseract`).
 * **Duplicate prevention**: Checks your last 10 forwarded messages before sending a new one.
 * **Customizable filters**: Store your keywords and Telegram API keys in a JSON file.
-* **Multi-channel monitoring**: Watch multiple Telegram channels at once.
+* **Multi-chat monitoring**: Watch multiple Telegram chats at once.
 
 ## 📦 Requirements
 
 * Python 3.8+
-* Telegram API credentials (API ID & API Hash)
+* Telegram API credentials (API ID & API Hash, check [Telethon documentation](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) for detailed instructions)
 * Installed `tesseract-ocr` on your system (for OCR functionality)
 
 ## 📚 Dependencies
@@ -30,7 +30,7 @@ scikit-learn
 
 ## ⚙️ Installation
 
-1. Download main.py, requirments.txt or clone the repository:
+1. clone the repository:
 
    ```bash
    git clone https://github.com/5wHN28Dg/tele-notify.git
@@ -38,10 +38,10 @@ scikit-learn
    ```
 2. create a virutal environment:
 
-  ```bash
-  cd path/to/main.py_and_requirements.txt
-  python3 -m venv venv
-  ```
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 
 3. Install dependencies:
 
@@ -53,9 +53,7 @@ scikit-learn
    * **Ubuntu/Debian**:
 
      ```bash
-     sudo apt install tesseract-ocr
-     sudo apt install tesseract-ocr-eng #or any language you want
-     sudo apt install tesseract-ocr-ara
+     sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara # or any language you want
      ```
    * **Windows**: [Download installer](https://github.com/UB-Mannheim/tesseract/wiki)
    * **MacOS**:
@@ -63,6 +61,7 @@ scikit-learn
      ```bash
      brew install tesseract
      ```
+   * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
 ## 🛠 Configuration
 
@@ -90,7 +89,7 @@ python main.py
 
 The script will:
 
-1. login as the user (after you enter your phone number and code...)
+1. login as the user (after entering your phone number and code...)
 2. starts watching the specified Telegram chats.
 3. starts processing unread messages 1st.
 4. For each new message:
@@ -98,7 +97,7 @@ The script will:
    * Extract text from the message body and image (if present).
    * Check for required keywords.
    * Skip if it’s a duplicate of one of your last 10 messages.
-   * Forward it to your target channel.
+   * Forward it to your target chat.
 
 ## 📜 License
 
