@@ -3,6 +3,8 @@
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
+**Note**: This project is a custom-built solution designed for a specific problem I encountered. It was created solely to meet my personal needs and use case, so you may need to adapt or modify it to suit your own requirements.
+
 ## ✨ Features
 
 * **Keyword-based filtering**: Matches at least one keyword from each of three keyword categories.
@@ -71,11 +73,14 @@ scikit-learn
    {
      "api_id": "YOUR_API_ID",
      "api_hash": "YOUR_API_HASH",
-     "keywords_category_1": ["keyword1", "keyword2"],
-     "keywords_category_2": ["keyword3", "keyword4"],
-     "keywords_category_3": ["keyword5", "keyword6"],
+     "level_keywords_en": ["keyword1", "keyword2"],
+     "level_keywords_ar": ["keyword3", "keyword4"],
+     "role_keywords_en": ["keyword1", "keyword2"],
+     "role_keywords_ar": ["keyword3", "keyword4"],
+     "location_keywords_en": ["keyword1", "keyword2"],
+     "location_keywords_ar": ["keyword3", "keyword4"],
      "target_chat": "username",
-     "chats": ["username", "username", ...]
+     "chats": ["username", "username"]
    }
    ```
 
@@ -89,9 +94,9 @@ python main.py
 
 The script will:
 
-1. login as the user (after entering your phone number and code...)
+1. ask you to login as the user by entering your phone number and code.
 2. starts watching the specified Telegram chats.
-3. starts processing unread messages 1st.
+3. starts processing unread messages 1stencountered if there are any.
 4. For each new message:
 
    * Extract text from the message body and image (if present).
