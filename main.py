@@ -118,15 +118,14 @@ async def unread_messages_retriever():
         dialogs = await client.get_dialogs()
         for dialog in dialogs:
             if dialog.entity.username in chats:
-                if dialog.unread_count > 0:
-                    if dialog.message:
-                        last_read_id = dialog.message.id - dialog.unread_count
-                        async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                            is_match, full_message = await check_for_a_match(msg)
-                            if is_match:
-                                if not await check_for_duplicates(full_message):
-                                    await message_forwarder(msg)
-                        print('completed processing unread messages')
+                if dialog.unread_count > 0 and dialog.message:
+                    last_read_id = dialog.message.id - dialog.unread_count
+                    async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
+                        is_match, full_message = await check_for_a_match(msg)
+                        if is_match:
+                            if not await check_for_duplicates(full_message):
+                                await message_forwarder(msg)
+                    print('completed processing unread messages')
     except Exception as e:
         logging.exception(f'Failed to process unread messages: {e}')
         raise
