@@ -36,7 +36,7 @@ def build_hybrid_regex(en_list, ar_list):
         parts.append(r'\b(?:' + '|'.join(re.escape(k) for k in en_list) + r')\b')
     if ar_list:
         parts.append(r'(?:' + '|'.join(re.escape(k) for k in ar_list) + r')')
-    return re.compile('|'.join(parts), re.IGNORECASE)
+    return re.compile('|'.join(parts), re.IGNORECASE) if parts else re.compile(r'$.')
 
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
@@ -86,7 +86,7 @@ async def check_for_duplicates(message_text):
             if not recent_messages:
                 return False
 
-        text = recent_messages + message_text
+        text = recent_messages + [message_text]
         vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
         vectors = vectorizer.fit_transform(text)
 
