@@ -18,7 +18,7 @@ api_hash = data['api_hash']
 client = TelegramClient('test', api_id, api_hash)
 
 # chats to monitor
-chats = data['chats']
+chats = [c.lower() for c in data['chats']]
 target_chat = data['target_chat']
 
 # keywords
@@ -119,15 +119,16 @@ async def unread_messages_retriever():
         for dialog in dialogs:
             if dialog.entity.username in chats:
                 if dialog.unread_count > 0:
-                    last_read_id = dialog.message.id - dialog.unread_count
-                    async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                        is_match, full_message = await check_for_a_match(msg)
-                        if is_match:
-                            if not await check_for_duplicates(full_message):
-                                await message_forwarder(msg)
-                    print('completed processing unread messages')
+                    if dialog.message:
+                        last_read_id = dialog.message.id - dialog.unread_count
+                        async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
+                            is_match, full_message = await check_for_a_match(msg)
+                            if is_match:
+                                if not await check_for_duplicates(full_message):
+                                    await message_forwarder(msg)
+                        print('completed processing unread messages')
     except Exception as e:
-        print('Unexpected error, failed to process unread messages:', e)
+        logging.exception(f'Failed to process unread messages: {e}')
         raise
 
 # -------- live handler --------
