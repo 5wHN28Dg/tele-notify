@@ -43,6 +43,7 @@ level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 role_pattern = build_hybrid_regex(role_keywords_en, role_keywords_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 
+# -------- helpers --------
 # check if the message passes the filters
 async def check_for_a_match(message):
     full_message = await message_processor(message)
@@ -52,13 +53,6 @@ async def check_for_a_match(message):
             role_pattern.search(full_message),
             location_pattern.search(full_message)
         ]), full_message
-
-# downloads then extracts the image text
-async def image_processor(msg):
-    image_bytes = await msg.download_media(file=bytes)
-    with Image.open(io.BytesIO(image_bytes)) as image:
-        image_text = pytesseract.image_to_string(image, lang='ara+eng')
-    return image_text
 
 # ckecks the message type then makes it ready for processing
 async def message_processor(msg):
@@ -72,6 +66,13 @@ async def message_processor(msg):
     text_content = msg.text or ""
     full_message = message_text + " " + text_content
     return full_message
+
+# downloads then extracts the image text
+async def image_processor(msg):
+    image_bytes = await msg.download_media(file=bytes)
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        image_text = pytesseract.image_to_string(image, lang='ara+eng')
+    return image_text
 
 # compares the message to be sent with the last 10 sent messages
 async def check_for_duplicates(message_text):
@@ -111,8 +112,8 @@ async def message_forwarder(msg):
         await asyncio.sleep(e.seconds)
         await msg.forward_to(target_chat)
 
-# check unread messages 1st if there is any
-async def unread_messages_retriver():
+# -------- unread bootstrap --------
+async def unread_messages_retriever():
     try:
         dialogs = await client.get_dialogs()
         for dialog in dialogs:
@@ -129,7 +130,7 @@ async def unread_messages_retriver():
         print('Unexpected error, failed to process unread messages:', e)
         raise
 
-# Listen for new messages, look for matches and forward
+# -------- live handler --------
 @client.on(events.NewMessage(chats=chats))
 async def new_message_handler(event):
     msg = event.message
@@ -139,7 +140,7 @@ async def new_message_handler(event):
             await message_forwarder(msg)
 
 async def main():
-    await unread_messages_retriver()
+    await unread_messages_retriever()
     print("Unread messages processed. Now listening for new messages...")
 
 with client:
