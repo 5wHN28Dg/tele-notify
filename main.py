@@ -88,9 +88,14 @@ async def check_for_duplicates(message_text):
         text = recent_messages + message_text
         vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
         vectors = vectorizer.fit_transform(text)
-        if cosine_similarity(vectors)[0, 1] > 0.8:
-            return True
+
+         # Compare new message with each recent message
+        for i in range(len(recent_messages)):
+                    similarity = cosine_similarity(vectors[i:i+1], vectors[-1:])[0, 0]
+                    if similarity > 0.8:
+                        return True  # Duplicate found
         return False
+
     except Exception as e:
         print(f"Error checking for duplicates: {e}")
         return False
