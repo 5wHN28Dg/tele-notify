@@ -1,0 +1,4 @@
+Pillow>=11.3.0
+pytesseract>=0.3.13
+scikit_learn>=1.7.1
+Telethon>=1.40.0
