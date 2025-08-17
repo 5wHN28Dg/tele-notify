@@ -135,6 +135,7 @@ async def unread_messages_retriever():
 async def new_message_handler(event):
     msg = event.message
     is_match, full_message = await check_for_a_match(msg)
+    await client.send_read_acknowledge(entity=msg.chat_id, max_id=msg.id)
     if is_match and not await check_for_duplicates(full_message):
         await message_forwarder(msg, full_message)
 
