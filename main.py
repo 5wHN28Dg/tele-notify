@@ -29,6 +29,9 @@ role_keywords_ar = data['role_keywords_ar']
 location_keywords_en = data['location_keywords_en']
 location_keywords_ar = data['location_keywords_ar']
 
+# last 10 forwarded messages
+recent_messages = []
+
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
 def build_hybrid_regex(en_list, ar_list):
     parts = []
@@ -77,15 +80,6 @@ async def image_processor(msg):
 # compares the message to be sent with the last 10 sent messages
 async def check_for_duplicates(message_text):
     try:
-        recent_messages = []
-        async for sent_message in client.iter_messages(target_chat, limit = 10):
-            if sent_message:
-                full_message = await message_processor(sent_message)
-                recent_messages.append(full_message)
-
-            if not recent_messages:
-                return False
-
         text = recent_messages + [message_text]
         vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
         vectors = vectorizer.fit_transform(text)
@@ -98,19 +92,29 @@ async def check_for_duplicates(message_text):
         return False
 
     except Exception as e:
-        print(f"Error checking for duplicates: {e}")
+        logging.exception(f"Error checking for duplicates: {e}")
         return False
 
-async def message_forwarder(msg):
+async def message_forwarder(msg, full_message):
     try:
         await msg.forward_to(target_chat)
         await asyncio.sleep(1)
+        if len(recent_messages) >= 10:
+            recent_messages.pop(0)
+            recent_messages.append(full_message)
+        else:
+            recent_messages.append(full_message)
     except errors.FloodWaitError as e:
         # e.seconds is how many seconds you have
         # to wait before making the request again.
         print('Flood for', e.seconds)
         await asyncio.sleep(e.seconds)
         await msg.forward_to(target_chat)
+        if len(recent_messages) >= 10:
+            recent_messages.pop(0)
+            recent_messages.append(full_message)
+        else:
+            recent_messages.append(full_message)
 
 # -------- unread bootstrap --------
 async def unread_messages_retriever():
@@ -122,7 +126,7 @@ async def unread_messages_retriever():
                 async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
                     is_match, full_message = await check_for_a_match(msg)
                     if is_match and not await check_for_duplicates(full_message):
-                        await message_forwarder(msg)
+                        await message_forwarder(msg, full_message)
                     print('completed processing unread messages')
     except Exception as e:
         logging.exception(f'Failed to process unread messages: {e}')
@@ -134,7 +138,7 @@ async def new_message_handler(event):
     msg = event.message
     is_match, full_message = await check_for_a_match(msg)
     if is_match and not await check_for_duplicates(full_message):
-        await message_forwarder(msg)
+        await message_forwarder(msg, full_message)
 
 async def main():
     await unread_messages_retriever()
