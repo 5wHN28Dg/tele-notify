@@ -17,7 +17,7 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 
 * Python 3.8+
 * Telegram API credentials (API ID & API Hash, check [Telethon documentation](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) for detailed instructions)
-* Installed `tesseract-ocr` on your system (for OCR functionality)
+* `tesseract-ocr` for OCR functionality
 
 ## 📚 Dependencies
 

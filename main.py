@@ -105,8 +105,6 @@ async def message_forwarder(msg, full_message):
         else:
             recent_messages.append(full_message)
     except errors.FloodWaitError as e:
-        # e.seconds is how many seconds you have
-        # to wait before making the request again.
         print('Flood for', e.seconds)
         await asyncio.sleep(e.seconds)
         await msg.forward_to(target_chat)
