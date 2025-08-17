@@ -98,21 +98,20 @@ async def check_for_duplicates(message_text):
 async def message_forwarder(msg, full_message):
     try:
         await msg.forward_to(target_chat)
+        await add_to_recent(full_message)
         await asyncio.sleep(1)
-        if len(recent_messages) >= 10:
-            recent_messages.pop(0)
-            recent_messages.append(full_message)
-        else:
-            recent_messages.append(full_message)
     except errors.FloodWaitError as e:
         print('Flood for', e.seconds)
         await asyncio.sleep(e.seconds)
         await msg.forward_to(target_chat)
-        if len(recent_messages) >= 10:
-            recent_messages.pop(0)
-            recent_messages.append(full_message)
-        else:
-            recent_messages.append(full_message)
+        await add_to_recent(full_message)
+
+async def add_to_recent(full_message):
+    if len(recent_messages) >= 10:
+        recent_messages.pop(0)
+        recent_messages.append(full_message)
+    else:
+        recent_messages.append(full_message)
 
 # -------- unread bootstrap --------
 async def unread_messages_retriever():
@@ -122,6 +121,7 @@ async def unread_messages_retriever():
             if dialog.entity.username in chats and dialog.unread_count > 0 and dialog.message:
                 last_read_id = dialog.message.id - dialog.unread_count
                 async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
+                    await client.send_read_acknowledge(dialog.id, msg.id)
                     is_match, full_message = await check_for_a_match(msg)
                     if is_match and not await check_for_duplicates(full_message):
                         await message_forwarder(msg, full_message)
