@@ -6,7 +6,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # logging for easier debugging
-logging.basicConfig(format='[%(levelname) %(asctime)s] %(name)s: %(message)s',
+logging.basicConfig(format='[%(levelname)s %(asctime)s] %(name)s: %(message)s',
                     level=logging.INFO)
 
 with open('config.json', 'r') as f:
@@ -18,7 +18,7 @@ api_hash = data['api_hash']
 client = TelegramClient('test', api_id, api_hash)
 
 # chats to monitor
-chats = [c.lower() for c in data['chats']]
+chats = data['chats']
 target_chat = data['target_chat']
 
 # keywords
@@ -51,6 +51,7 @@ location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar
 async def check_for_a_match(message):
     full_message = await message_processor(message)
 
+    logging.info(f"checked message: {message.id}")
     return all([
             level_pattern.search(full_message),
             role_pattern.search(full_message),
@@ -66,8 +67,9 @@ async def message_processor(msg):
         except Exception as e:
             logging.error(f"OCR failed: {e}")
 
-    text_content = msg.text or ""
+    text_content = msg.raw_text or ""
     full_message = message_text + " " + text_content
+    logging.info(f"Processed message: {msg.id}")
     return full_message
 
 # downloads then extracts the image text
@@ -75,6 +77,7 @@ async def image_processor(msg):
     image_bytes = await msg.download_media(file=bytes)
     with Image.open(io.BytesIO(image_bytes)) as image:
         image_text = pytesseract.image_to_string(image, lang='ara+eng')
+        logging.info(f"Extracted text from image in message: {msg.id}")
     return image_text
 
 # compares the message to be sent with the last 10 sent messages
@@ -118,14 +121,19 @@ async def unread_messages_retriever():
     try:
         dialogs = await client.get_dialogs()
         for dialog in dialogs:
-            if dialog.entity.username in chats and dialog.unread_count > 0 and dialog.message:
-                last_read_id = dialog.message.id - dialog.unread_count
-                async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                    await client.send_read_acknowledge(dialog.id, msg.id)
-                    is_match, full_message = await check_for_a_match(msg)
-                    if is_match and not await check_for_duplicates(full_message):
-                        await message_forwarder(msg, full_message)
-                    print('completed processing unread messages')
+            try:
+                if dialog.id in chats and dialog.unread_count > 0 and dialog.message:
+                    last_read_id = dialog.message.id - dialog.unread_count
+                    async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
+                        is_match, full_message = await check_for_a_match(msg)
+                        await msg.mark_read()
+                        logging.info(f'message {msg.id} from chat: {dialog.id} is {is_match}')
+                        if is_match and not await check_for_duplicates(full_message):
+                            await message_forwarder(msg, full_message)
+                    logging.info(f'completed processing unread messages for chat: {dialog.id}')
+            except:
+                logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
+
     except Exception as e:
         logging.exception(f'Failed to process unread messages: {e}')
         raise
@@ -135,6 +143,8 @@ async def unread_messages_retriever():
 async def new_message_handler(event):
     msg = event.message
     is_match, full_message = await check_for_a_match(msg)
+    logging.info(f'new message {msg.id} from chat: {msg.chat_id} is {is_match}')
+
     await client.send_read_acknowledge(entity=msg.chat_id, max_id=msg.id)
     if is_match and not await check_for_duplicates(full_message):
         await message_forwarder(msg, full_message)

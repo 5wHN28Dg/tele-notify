@@ -1,33 +1,15 @@
 {
   "api_id": 0,
-  "api_hash": 0,
-  "target_chat": "BQTechJobs",
+  "api_hash": "api_hash",
+  "target_chat": -1002864464454,
   "chats": [
-    "jobsalbasra",
-    "basrajobs",
-    "basrajobs3",
-    "jobbbs",
-    "basrajobs_ads",
-    "basrahvacancies",
-    "vacancies_training",
-    "jobs_basra1",
-    "engineers_jobs_basra",
-    "basra_job",
-    "alisaedhsn",
-    "Jobs_Advices",
-    "engahmad88",
-    "jobs_iraq1",
-    "Muhannad_job",
-    "Iraq_careers",
-    "YSPjobs",
-    "jobs_for_us",
-    "iraq_jobs2",
-    "eng7600",
-    "iqjscout",
-    "Eng_job25",
-    "iraqjobs1995",
-    "iraqi_HR",
-    "jobs_free"
+    -1001258440615, -1001000617318, -1001109993638, -1001200718881,
+    -1001956527067, -1002135450719, -1001498116856, -1002055021659,
+    -1001447736847, -1001116917926, -1001604708849, -1002026933693,
+    -1001141608934, -1001568193145, -1001320824292, -1001935629051,
+    -1001570822633, -1001471014152, -1001701349467, -1001775200685,
+    -1001295463880, -1001562054808, -1001336218061, -1001648851957,
+    -1001211500052
   ],
   "level_keywords_en": [
     "intern",
@@ -37,6 +19,7 @@
     "graduate",
     "entry level",
     "fresh graduate",
+    "fresh graduates",
     "co-op",
     "summer training",
     "training program",
@@ -44,7 +27,8 @@
     "apprenticeship",
     "volunteer",
     "probation",
-    "on-the-job training"
+    "on-the-job training",
+    "early-career professionals"
   ],
 
   "level_keywords_ar": [
@@ -54,21 +38,28 @@
     "تدريب عملي",
     "خريج جديد",
     "خريجون جدد",
+    "للخريجين الجدد",
     "حديث التخرج",
     "خريجة جديدة",
     "متدربة",
+    "برنامجها التدريبي",
     "متدربين",
     "برنامج تدريبي",
     "متدرب هندسة",
     "فرصة تدريب",
+    "فرصة تدريبية",
     "فترة تجربة",
     "متطوع",
-    "وظيفة مؤقتة"
+    "وظيفة مؤقتة",
+    "حديثي التخرج",
+    "مستوى مبتدئ",
+    "لا يشترط وجود خبرة سابقة"
   ],
 
   "role_keywords_en": [
     "help desk",
     "it support",
+    "it specialist",
     "technical support",
     "support technician",
     "desktop support",
@@ -79,12 +70,13 @@
     "noc technician",
     "system admin",
     "systems administrator",
+    "sys admin",
+    "system administrator",
     "systems analyst",
     "data center technician",
 
     "junior developer",
     "junior programmer",
-    "software",
     "software engineer",
     "web developer",
     "mobile app developer",
@@ -108,6 +100,7 @@
     "dcs engineer",
     "industrial automation",
     "process control engineer",
+    "computer engineer",
 
     "computer science",
     "control engineering",
@@ -132,6 +125,9 @@
     "مسؤول نظم",
     "مسؤول انظمة",
     "محلل نظم",
+    "موظف تكنولوجيا المعلومات",
+    "متخصص تكنولوجيا المعلومات",
+    " أخصائي تكنولوجيا معلومات",
 
     "مبرمج مبتدئ",
     "مبرمج جافا",
@@ -165,7 +161,17 @@
     "مهندس الكترونيات صناعية",
     "مهندس كهرباء وتحكم",
     "مهندس ميكاترونكس",
-    "مهندس نظم صناعية"
+    "مهندس نظم صناعية",
+    "مهندس كهرباء",
+    "مهندس/ة تحكم وحاسبات",
+    "مهندس/ة تحكم",
+    "مهندس/ة حاسبات",
+    "مهندس سيطرة",
+
+    "هندسة سيطرة",
+    "هندسة حاسبات",
+    "هندسة كهرباء",
+    "هندسة نظم"
   ],
 
   "location_keywords_en": [

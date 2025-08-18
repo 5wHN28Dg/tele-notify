@@ -67,7 +67,23 @@ scikit-learn
 
 ## 🛠 Configuration
 
-1. Create a `config.json` file in the project directory with the following structure:
+1. Run this code to get a list of your chats with their names and IDs:
+   ```python
+   from telethon import TelegramClient
+
+   api_id = 'YOUR_API_ID'
+   api_hash = 'YOUR_API_HASH'
+
+   client = TelegramClient('session_name', api_id, api_hash)
+
+   async def main():
+       async for dialog in client.iter_dialogs():
+           print('{:>14}: {}'.format(dialog.id, dialog.title))
+
+   with client:
+    client.loop.run_until_complete(main())
+   ```
+2. Create a `config.json` file in the project directory with the following structure:
 
    ```json
    {
@@ -79,8 +95,8 @@ scikit-learn
      "role_keywords_ar": ["keyword3", "keyword4"],
      "location_keywords_en": ["keyword1", "keyword2"],
      "location_keywords_ar": ["keyword3", "keyword4"],
-     "target_chat": "username",
-     "chats": ["username", "username"]
+     "target_chat": chat_id,
+     "chats": [chat_id, chat_id]
    }
    ```
 
