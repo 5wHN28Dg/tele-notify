@@ -60,15 +60,15 @@ async def check_for_a_match(message):
 
 # ckecks the message type then makes it ready for processing
 async def message_processor(msg):
-    message_text = ""
+    image_text = ""
     if hasattr(msg, 'photo') and msg.photo:
         try:
-            message_text = await image_processor(msg)
+            image_text = await image_processor(msg)
         except Exception as e:
             logging.error(f"OCR failed: {e}")
 
     text_content = msg.raw_text or ""
-    full_message = message_text + " " + text_content
+    full_message = image_text + " " + text_content
     logging.info(f"Processed message: {msg.id}")
     return full_message
 
@@ -126,10 +126,10 @@ async def unread_messages_retriever():
                     last_read_id = dialog.message.id - dialog.unread_count
                     async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
                         is_match, full_message = await check_for_a_match(msg)
-                        await msg.mark_read()
                         logging.info(f'message {msg.id} from chat: {dialog.id} is {is_match}')
                         if is_match and not await check_for_duplicates(full_message):
                             await message_forwarder(msg, full_message)
+                        await msg.mark_read()
                     logging.info(f'completed processing unread messages for chat: {dialog.id}')
             except:
                 logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
@@ -145,9 +145,9 @@ async def new_message_handler(event):
     is_match, full_message = await check_for_a_match(msg)
     logging.info(f'new message {msg.id} from chat: {msg.chat_id} is {is_match}')
 
-    await client.send_read_acknowledge(entity=msg.chat_id, max_id=msg.id)
     if is_match and not await check_for_duplicates(full_message):
         await message_forwarder(msg, full_message)
+    await msg.mark_read()
 
 async def main():
     await unread_messages_retriever()
