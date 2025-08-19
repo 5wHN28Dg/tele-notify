@@ -61,17 +61,17 @@ scikit-learn
    * **MacOS**:
 
      ```bash
-     brew install tesseract
+     brew install tesseract tesseract-lang
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
 ## 🛠 Configuration
 
-1. Run this code to get a list of your chats with their names and IDs:
+1. Run this code to get a list of your chat list with their names and **IDs**:
    ```python
    from telethon import TelegramClient
 
-   api_id = 'YOUR_API_ID'
+   api_id = YOUR_API_ID
    api_hash = 'YOUR_API_HASH'
 
    client = TelegramClient('session_name', api_id, api_hash)
@@ -87,16 +87,16 @@ scikit-learn
 
    ```json
    {
-     "api_id": "YOUR_API_ID",
+     "api_id": YOUR_API_ID,
      "api_hash": "YOUR_API_HASH",
+     "target_chat": chat_id,
+     "chats": [chat_id, chat_id],
      "level_keywords_en": ["keyword1", "keyword2"],
      "level_keywords_ar": ["keyword3", "keyword4"],
      "role_keywords_en": ["keyword1", "keyword2"],
      "role_keywords_ar": ["keyword3", "keyword4"],
      "location_keywords_en": ["keyword1", "keyword2"],
      "location_keywords_ar": ["keyword3", "keyword4"],
-     "target_chat": chat_id,
-     "chats": [chat_id, chat_id]
    }
    ```
 
