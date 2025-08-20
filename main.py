@@ -74,11 +74,16 @@ async def message_processor(msg):
 
 # downloads then extracts the image text
 async def image_processor(msg):
-    image_bytes = await msg.download_media(file=bytes)
+    image_bytes = await msg.download_media(file=bytes, progress_callback=callback)
     with Image.open(io.BytesIO(image_bytes)) as image:
         image_text = pytesseract.image_to_string(image, lang='ara+eng')
         logging.info(f"Extracted text from image in message: {msg.id}")
     return image_text
+
+# Printing download progress
+def callback(current, total):
+    print('Downloaded', current, 'out of', total,
+          'bytes: {:.2%}'.format(current / total))
 
 # compares the message to be sent with the last 10 sent messages
 async def check_for_duplicates(message_text):
@@ -95,7 +100,7 @@ async def check_for_duplicates(message_text):
         return False
 
     except Exception as e:
-        logging.exception(f"Error checking for duplicates: {e}")
+        logging.error(f"Error checking for duplicates: {e}")
         return False
 
 async def message_forwarder(msg, full_message):
@@ -129,8 +134,8 @@ async def unread_messages_retriever():
                         logging.info(f'message {msg.id} from chat: {dialog.id} is {is_match}')
                         if is_match and not await check_for_duplicates(full_message):
                             await message_forwarder(msg, full_message)
-                        await msg.mark_read()
-                    logging.info(f'completed processing unread messages for chat: {dialog.id}')
+                    await client.send_read_acknowledge(dialog.id)
+                    logging.info(f'completed processing unread messages for chat: {dialog.id} with name {dialog.title}')
             except:
                 logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
 
