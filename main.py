@@ -2,6 +2,7 @@ from telethon import TelegramClient, events, errors
 import logging, re, asyncio, io, json
 from PIL import Image
 import pytesseract
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type, asyncretry
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -46,6 +47,13 @@ def build_hybrid_regex(en_list, ar_list):
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 role_pattern = build_hybrid_regex(role_keywords_en, role_keywords_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
+
+retry_transient = retry(
+    reraise=True,
+    stop=stop_after_attempt(5),  # give up after 5 tries
+    wait=wait_random_exponential(multiplier=1, max=60),  # exponential + full jitter, up to 60s
+    retry=retry_if_exception_type((asyncio.TimeoutError, OSError, errors.RpcCallFailError))
+)
 
 # -------- helpers --------
 # check if the message passes the filters
@@ -104,16 +112,11 @@ async def check_for_duplicates(message_text):
         logging.error(f"Error checking for duplicates: {e}")
         return False
 
+@retry_transient
 async def message_forwarder(msg, full_message):
-    try:
-        await msg.forward_to(target_chat)
-        await add_to_recent(full_message)
-        await asyncio.sleep(1)
-    except errors.RPCError:
-        print("something went wrong, don't know what so we just gonna wait then try again")
-        await asyncio.sleep(5)
-        await msg.forward_to(target_chat)
-        await add_to_recent(full_message)
+    await msg.forward_to(target_chat)
+    await add_to_recent(full_message)
+    await asyncio.sleep(1)
 
 async def add_to_recent(full_message):
     if len(recent_messages) >= 10:
