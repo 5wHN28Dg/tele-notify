@@ -28,6 +28,7 @@ telethon
 pillow
 pytesseract
 scikit-learn
+cryptg
 ```
 
 ## ⚙️ Installation
