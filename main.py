@@ -15,7 +15,8 @@ with open('config.json', 'r') as f:
 # Use your own values from my.telegram.org and KEEP THEM PRIVATE!
 api_id = data['api_id']
 api_hash = data['api_hash']
-client = TelegramClient('test', api_id, api_hash)
+client = TelegramClient('test', api_id, api_hash,
+                        request_retries=5, connection_retries=5, retry_delay=5, auto_reconnect=True)
 
 # chats to monitor
 chats = data['chats']
@@ -108,9 +109,9 @@ async def message_forwarder(msg, full_message):
         await msg.forward_to(target_chat)
         await add_to_recent(full_message)
         await asyncio.sleep(1)
-    except errors.FloodWaitError as e:
-        print('Flood for', e.seconds)
-        await asyncio.sleep(e.seconds)
+    except errors.RPCError:
+        print("something went wrong, don't know what so we just gonna wait then try again")
+        await asyncio.sleep(5)
         await msg.forward_to(target_chat)
         await add_to_recent(full_message)
 
@@ -156,7 +157,7 @@ async def new_message_handler(event):
 
 async def main():
     await unread_messages_retriever()
-    print("Unread messages processed. Now listening for new messages...")
+    print("Unread messages processed, now listening for new messages...")
 
 with client:
     client.loop.run_until_complete(main())
