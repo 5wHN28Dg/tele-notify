@@ -3,7 +3,7 @@
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
-**Note**: This project is a custom-built solution designed for a specific problem I encountered. It was created solely to meet my personal needs and use case, so you may need to adapt or modify it to suit your own requirements.
+**⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs. It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
 
 ## ✨ Features
 
