@@ -2,7 +2,7 @@ from telethon import TelegramClient, events, errors
 import logging, re, asyncio, io, json
 from PIL import Image
 import pytesseract
-from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type, asyncretry
+from tenacity import stop_after_attempt, wait_random_exponential, retry_if_exception_type, retry
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -48,13 +48,13 @@ level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 role_pattern = build_hybrid_regex(role_keywords_en, role_keywords_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 
+# retry policy in case something goes wrong
 retry_transient = retry(
     reraise=True,
     stop=stop_after_attempt(5),  # give up after 5 tries
     wait=wait_random_exponential(multiplier=1, max=60),  # exponential + full jitter, up to 60s
     retry=retry_if_exception_type((asyncio.TimeoutError, OSError, errors.RpcCallFailError))
 )
-
 # -------- helpers --------
 # check if the message passes the filters
 async def check_for_a_match(message):
@@ -82,6 +82,7 @@ async def message_processor(msg):
     return full_message
 
 # downloads then extracts the image text
+@retry_transient
 async def image_processor(msg):
     image_bytes = await msg.download_media(file=bytes, progress_callback=callback)
     with Image.open(io.BytesIO(image_bytes)) as image:
@@ -96,21 +97,16 @@ def callback(current, total):
 
 # compares the message to be sent with the last 10 sent messages
 async def check_for_duplicates(message_text):
-    try:
-        text = recent_messages + [message_text]
-        vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
-        vectors = vectorizer.fit_transform(text)
+    text = recent_messages + [message_text]
+    vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
+    vectors = vectorizer.fit_transform(text)
 
-         # Compare new message with each recent message
-        for i in range(len(recent_messages)):
-                    similarity = cosine_similarity(vectors[i:i+1], vectors[-1:])[0, 0]
-                    if similarity > 0.8:
-                        return True  # Duplicate found
-        return False
-
-    except Exception as e:
-        logging.error(f"Error checking for duplicates: {e}")
-        return False
+    # Compare new message with each recent message
+    for i in range(len(recent_messages)):
+        similarity = cosine_similarity(vectors[i:i+1], vectors[-1:])[0, 0]
+        if similarity > 0.8:
+            return True  # Duplicate found
+    return False
 
 @retry_transient
 async def message_forwarder(msg, full_message):
@@ -126,28 +122,25 @@ async def add_to_recent(full_message):
         recent_messages.append(full_message)
 
 # -------- unread bootstrap --------
+@retry_transient
 async def unread_messages_retriever():
-    try:
-        dialogs = await client.get_dialogs()
-        for dialog in dialogs:
-            try:
-                if dialog.id in chats and dialog.unread_count > 0 and dialog.message:
-                    last_read_id = dialog.message.id - dialog.unread_count
-                    async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                        is_match, full_message = await check_for_a_match(msg)
-                        logging.info(f'message {msg.id} from chat: {dialog.id} is {is_match}')
-                        if is_match and not await check_for_duplicates(full_message):
-                            await message_forwarder(msg, full_message)
-                    await client.send_read_acknowledge(dialog.id)
-                    logging.info(f'completed processing unread messages for chat: {dialog.id} with name {dialog.title}')
-            except:
-                logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
-
-    except Exception as e:
-        logging.exception(f'Failed to process unread messages: {e}')
-        raise
+    dialogs = await client.get_dialogs()
+    for dialog in dialogs:
+        try:
+            if dialog.id in chats and dialog.unread_count > 0 and dialog.message:
+                last_read_id = dialog.message.id - dialog.unread_count
+                async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
+                    is_match, full_message = await check_for_a_match(msg)
+                    logging.info(f'message {msg.id} from chat: {dialog.id} is {is_match}')
+                    if is_match and not await check_for_duplicates(full_message):
+                        await message_forwarder(msg, full_message)
+                await client.send_read_acknowledge(dialog.id)
+                logging.info(f'completed processing unread messages for chat: {dialog.id} with name {dialog.title}')
+        except:
+            logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
 
 # -------- live handler --------
+@retry_transient
 @client.on(events.NewMessage(chats=chats))
 async def new_message_handler(event):
     msg = event.message

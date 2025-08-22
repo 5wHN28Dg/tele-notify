@@ -68,7 +68,7 @@ cryptg
 
 ## 🛠 Configuration
 
-1. Run this code to get a list of your chat list with their names and **IDs**:
+1. Run this code (after you fill in your API ID and API Hash) to get a list of your chat list with their names and **IDs**:
    ```python
    from telethon import TelegramClient
 
@@ -113,9 +113,7 @@ The script will:
 
 1. ask you to login as the user by entering your phone number and code.
 2. starts watching the specified Telegram chats.
-3. starts processing unread messages 1stencountered if there are any.
-4. For each new message:
-
+3. starts processing unread messages if there are any and watch for new messages.
    * Extract text from the message body and image (if present).
    * Check for required keywords.
    * Skip if it’s a duplicate of one of your last 10 messages.
