@@ -32,7 +32,7 @@ location_keywords_en = data['location_keywords_en']
 location_keywords_ar = data['location_keywords_ar']
 
 # last 10 forwarded messages
-recent_messages = []
+recent_messages = data['recent_messages']
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
 def build_hybrid_regex(en_list, ar_list):
@@ -115,11 +115,15 @@ async def message_forwarder(msg, full_message):
     await asyncio.sleep(1)
 
 async def add_to_recent(full_message):
-    if len(recent_messages) >= 10:
-        recent_messages.pop(0)
-        recent_messages.append(full_message)
-    else:
-        recent_messages.append(full_message)
+    global recent_messages
+
+    recent_messages.append(full_message)
+    if len(recent_messages) > 10:
+        recent_messages = recent_messages[-10:]
+
+    data['recent_messages'] = recent_messages
+    with open('config.json', 'w') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 # -------- unread bootstrap --------
 @retry_transient
@@ -140,8 +144,8 @@ async def unread_messages_retriever():
             logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
 
 # -------- live handler --------
-@retry_transient
 @client.on(events.NewMessage(chats=chats))
+@retry_transient
 async def new_message_handler(event):
     msg = event.message
     is_match, full_message = await check_for_a_match(msg)
