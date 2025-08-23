@@ -1,8 +1,6 @@
-<p align="center">
-
+<div align="center">
 [🇮🇶 العربية](README.ar.md) | [🇬🇧 English](README.md)
-
-</p>
+</div>
 
 <div dir="rtl">
 
@@ -162,6 +160,7 @@ with client:
 python main.py
 ```
 
+
 <div dir="rtl">
 
 سيقوم البرنامج بـ:
@@ -178,6 +177,7 @@ python main.py
 </div>
 
 <div dir="rtl">
+
 ## 📝 قائمة المهام:
 
 * [ ] إصلاح مشاكل السباق عند تحديث recent\_messages / الكتابة إلى config.json. 🔄
