@@ -1,4 +1,8 @@
+<div align="center">
+
 [🇸🇦 العربية](README.ar.md) | [🇬🇧 English](README.md)
+
+</dev>
 
 # tele-notify
 
