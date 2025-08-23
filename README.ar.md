@@ -178,6 +178,7 @@ python main.py
 </div>
 
 <div dir="rtl">
+
 ## 📝 قائمة المهام:
 
 * [ ] إصلاح مشاكل السباق عند تحديث recent\_messages / الكتابة إلى config.json. 🔄
