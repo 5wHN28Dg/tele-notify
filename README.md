@@ -1,5 +1,4 @@
-[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
-[![العربية](https://img.shields.io/badge/اللغة-العربية-green.svg)](README.ar.md)
+[🇸🇦 العربية](README.ar.md) | [🇬🇧 English](README.md)
 
 # tele-notify
 

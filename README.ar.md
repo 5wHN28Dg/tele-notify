@@ -1,6 +1,8 @@
-[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
-[![العربية](https://img.shields.io/badge/اللغة-العربية-green.svg)](README.ar.md)
+<p align="center">
 
+[🇮🇶 العربية](README.ar.md) | [🇬🇧 English](README.md)
+
+</p>
 
 <div dir="rtl">
 
@@ -21,8 +23,11 @@
 * **عوامل تصفية قابلة للتخصيص**: خزّن الكلمات المفتاحية وبيانات اعتماد Telegram API في ملف JSON.
 * **مراقبة متعددة للمحادثات**: راقب عدة محادثات Telegram في وقت واحد.
 
-## 📦 المتطلبات
+</div>
 
+<div dir="rtl">
+
+## 📦 المتطلبات
 * Python 3.8+
 * بيانات اعتماد Telegram API (API ID و API Hash — راجع [وثائق Telethon](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) للحصول على التعليمات)
 * تثبيت `tesseract-ocr` لدعم وظيفة OCR
