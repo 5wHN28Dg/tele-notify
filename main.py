@@ -1,7 +1,6 @@
 from telethon import TelegramClient, events, errors
-import logging, re, asyncio, io, json
+import logging, re, asyncio, io, json, pytesseract
 from PIL import Image
-import pytesseract
 from tenacity import stop_after_attempt, wait_random_exponential, retry_if_exception_type, retry
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -114,6 +113,7 @@ async def message_forwarder(msg, full_message):
     await add_to_recent(full_message)
     await asyncio.sleep(1)
 
+# update recent messages
 async def add_to_recent(full_message):
     global recent_messages
 

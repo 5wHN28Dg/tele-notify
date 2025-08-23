@@ -1,3 +1,6 @@
+[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
+[![العربية](https://img.shields.io/badge/اللغة-العربية-green.svg)](README.ar.md)
+
 # tele-notify
 
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
@@ -29,6 +32,7 @@ pillow
 pytesseract
 scikit-learn
 cryptg
+tenacity
 ```
 
 ## ⚙️ Installation
@@ -98,6 +102,7 @@ cryptg
      "role_keywords_ar": ["keyword3", "keyword4"],
      "location_keywords_en": ["keyword1", "keyword2"],
      "location_keywords_ar": ["keyword3", "keyword4"],
+     "recent_messages": []
    }
    ```
 
@@ -113,11 +118,18 @@ The script will:
 
 1. ask you to login as the user by entering your phone number and code.
 2. starts watching the specified Telegram chats.
-3. starts processing unread messages if there are any and watch for new messages.
+3. starts processing unread messages if there are any and watch for new messages:
    * Extract text from the message body and image (if present).
    * Check for required keywords.
    * Skip if it’s a duplicate of one of your last 10 messages.
    * Forward it to your target chat.
+
+## 📝 To Do List:
+- [ ] Fix race conditions when updating recent_messages / writing to config.json. 🔄
+- [ ] Special processing for messages with info formatted like this: `#Basrah www.example.com/electrical-engineering-intern/`.
+- [ ] Set up a way for you to get notified if the script carshes.
+- [ ] A beautiful CLI with real-time statistics instead of this infinite stream of text.
+- [ ] analyze the code for a possible 2nd refactoring.
 
 ## 📜 License
 
