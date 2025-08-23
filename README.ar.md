@@ -26,13 +26,7 @@
 </div>
 
 <div dir="rtl">
-
 ## 📦 المتطلبات
-
-</div>
-
-<div dir="rtl">
-
 * Python 3.8+
 * بيانات اعتماد Telegram API (API ID و API Hash — راجع [وثائق Telethon](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) للحصول على التعليمات)
 * تثبيت `tesseract-ocr` لدعم وظيفة OCR
@@ -194,4 +188,5 @@ python main.py
 ## 📜 الترخيص
 
 هذا المشروع مرخّص تحت رخصة AGPL.
+
 </div>
