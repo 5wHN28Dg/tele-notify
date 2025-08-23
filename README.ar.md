@@ -26,6 +26,7 @@
 </div>
 
 <div dir="rtl">
+
 ## 📦 المتطلبات
 * Python 3.8+
 * بيانات اعتماد Telegram API (API ID و API Hash — راجع [وثائق Telethon](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) للحصول على التعليمات)
