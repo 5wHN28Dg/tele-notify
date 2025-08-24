@@ -73,6 +73,8 @@ tenacity
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
+> 📱 **Android Users:** Check [Setup on Android using Termux](https://github.com/5wHN28Dg/wiki/Android-Termux-Setup) for detailed instructions.
+
 ## 🛠 Configuration
 
 1. Run this code (after you fill in your API ID and API Hash) to get a list of your chat list with their names and **IDs**:
@@ -91,23 +93,14 @@ tenacity
    with client:
     client.loop.run_until_complete(main())
    ```
-2. Create a `config.json` file in the project directory with the following structure:
+2. Open `config.json` file in the project directory and fill it with the necessary information:
 
-   ```json
-   {
-     "api_id": YOUR_API_ID,
-     "api_hash": "YOUR_API_HASH",
-     "target_chat": chat_id,
-     "chats": [chat_id, chat_id],
-     "level_keywords_en": ["keyword1", "keyword2"],
-     "level_keywords_ar": ["keyword3", "keyword4"],
-     "role_keywords_en": ["keyword1", "keyword2"],
-     "role_keywords_ar": ["keyword3", "keyword4"],
-     "location_keywords_en": ["keyword1", "keyword2"],
-     "location_keywords_ar": ["keyword3", "keyword4"],
-     "recent_messages": []
-   }
-   ```
+  * Your API ID and API Hash.
+  * the IDs of the chats you want to watch.
+  * the ID of the chat you want to forward messages to.
+  * the keywords you want to filter messages based on.
+
+  **Note**: do not touch `recent_messages`.
 
 ## 🚀 Usage
 
@@ -130,7 +123,8 @@ The script will:
 ## 📝 To Do List:
 - [ ] Fix race conditions when updating recent_messages / writing to config.json. 🔄
 - [ ] Special processing for messages with info formatted like this: `#Basrah www.example.com/electrical-engineering-intern/`.
-- [ ] Set up a way for you to get notified if the script carshes.
+- [ ] Analyze the retry mechanism, it may need some improvements.
+- [ ] Set up a way for you to get notified if the script crashes.
 - [ ] A beautiful CLI with real-time statistics instead of this infinite stream of text.
 - [ ] analyze the code for a possible 2nd refactoring.
 
