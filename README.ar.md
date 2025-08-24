@@ -105,6 +105,8 @@ brew install tesseract tesseract-lang
 
 * **ملاحظة**: إذا واجهت مشاكل في تثبيت Tesseract، راجع [الوثائق الرسمية](https://tesseract-ocr.github.io/tessdoc/Installation.html).
 
+> 📱 **مستخدمي اندرويد**: يمكنك الاطلاع على كافة الخطوات على الويكي من خلال [الرابط](https://github.com/5wHN28Dg/wiki/Android-Termux-Setup)
+
 ## 🛠 الإعداد
 
 1. شغّل الكود التالي (بعد إدخال API ID و API Hash) للحصول على قائمة محادثاتك مع أسمائها و**معرّفاتها**:
@@ -129,7 +131,7 @@ with client:
 
 <div dir="rtl">
 
-2. أنشئ ملف `config.json` داخل مجلد المشروع بالصيغة التالية:
+2. أفتح ملف `config.json` داخل مجلد المشروع وادخل المعلومات الاتية:
 
 </div>
 
