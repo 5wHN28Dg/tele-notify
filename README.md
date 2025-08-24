@@ -121,7 +121,7 @@ The script will:
    * Forward it to your target chat.
 
 ## 📝 To Do List:
-- [ ] Fix race conditions when updating recent_messages / writing to config.json. 🔄
+- [x] Fix race conditions when updating recent_messages / writing to config.json.
 - [ ] Special processing for messages with info formatted like this: `#Basrah www.example.com/electrical-engineering-intern/`.
 - [ ] Analyze the retry mechanism, it may need some improvements.
 - [ ] Set up a way for you to get notified if the script crashes.

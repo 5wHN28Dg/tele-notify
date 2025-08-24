@@ -185,7 +185,7 @@ python main.py
 
 ## 📝 قائمة المهام:
 
-* [ ] إصلاح race condition عند تحديث recent\_messages / الكتابة إلى config.json. 🔄
+* [x] إصلاح race condition عند تحديث recent\_messages / الكتابة إلى config.json.
 * [ ] معالجة خاصة للرسائل مثل: `basra www.example.com/electrical-engineering-intern#`.
 * [ ] إعداد طريقة للإشعاري في حال توقف البرنامج عن العمل.
 * [ ] واجهة CLI جميلة مع إحصائيات في الوقت الفعلي بدلًا من ملئ الترمنل ب logging info.

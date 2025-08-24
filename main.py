@@ -1,5 +1,5 @@
 from telethon import TelegramClient, events, errors
-import logging, re, asyncio, io, json, pytesseract
+import logging, re, asyncio, io, json, pytesseract, tempfile, os
 from PIL import Image
 from tenacity import stop_after_attempt, wait_random_exponential, retry_if_exception_type, retry
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -17,6 +17,9 @@ api_id = data['api_id']
 api_hash = data['api_hash']
 client = TelegramClient('test', api_id, api_hash,
                         request_retries=5, connection_retries=5, retry_delay=5, auto_reconnect=True)
+
+# protecting recent messages from concurrent access
+recent_lock = asyncio.Lock()
 
 # chats to monitor
 chats = data['chats']
@@ -117,13 +120,22 @@ async def message_forwarder(msg, full_message):
 async def add_to_recent(full_message):
     global recent_messages
 
-    recent_messages.append(full_message)
-    if len(recent_messages) > 10:
-        recent_messages = recent_messages[-10:]
+    async with recent_lock:
+        recent_messages.append(full_message)
+        if len(recent_messages) > 10:
+            recent_messages = recent_messages[-10:]
 
-    data['recent_messages'] = recent_messages
-    with open('config.json', 'w') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+        data['recent_messages'] = recent_messages
+        await asyncio.to_thread(write_config_atomic, data, 'config.json')
+
+def write_config_atomic(data, path):
+    dir_name = os.path.dirname(path) or "."
+    with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False, encoding="utf-8") as tmp:
+        json.dump(data, tmp, indent=4, ensure_ascii=False)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        temp_name = tmp.name
+    os.replace(temp_name, path)
 
 # -------- unread bootstrap --------
 @retry_transient
