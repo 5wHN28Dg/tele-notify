@@ -73,7 +73,7 @@ tenacity
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
-> 📱 **Android Users:** Check [Setup on Android using Termux](https://github.com/5wHN28Dg/wiki/Android-Termux-Setup) for detailed instructions.
+> 📱 **Android Users:** lost in dependency hell(WIP).
 
 ## 🛠 Configuration
 

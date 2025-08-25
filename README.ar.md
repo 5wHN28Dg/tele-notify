@@ -105,7 +105,7 @@ brew install tesseract tesseract-lang
 
 * **ملاحظة**: إذا واجهت مشاكل في تثبيت Tesseract، راجع [الوثائق الرسمية](https://tesseract-ocr.github.io/tessdoc/Installation.html).
 
-> 📱 **مستخدمي اندرويد**: يمكنك الاطلاع على كافة الخطوات على الويكي من خلال [الرابط](https://github.com/5wHN28Dg/wiki/Android-Termux-Setup)
+> 📱 **مستخدمي الاندرويد**: ضائع بال dependency hell يعني WIP
 
 ## 🛠 الإعداد
 
@@ -133,23 +133,14 @@ with client:
 
 2. أفتح ملف `config.json` داخل مجلد المشروع وادخل المعلومات الاتية:
 
-</div>
+* الAPI ID و API Hash الخاصين بك.
+* ال ID الخاص بالحادثة التي ترغب بتحويل الرسائل لها.
+* ال IDs الخاص بالمحادثات التي ترغب بمراقبتها.
+* الكلمات المفتاحية التي تريد فلترة الرسائل بناء عليها.
 
-```json
-{
-  "api_id": YOUR_API_ID,
-  "api_hash": "YOUR_API_HASH",
-  "target_chat": chat_id,
-  "chats": [chat_id, chat_id],
-  "level_keywords_en": ["keyword1", "keyword2"],
-  "level_keywords_ar": ["keyword3", "keyword4"],
-  "role_keywords_en": ["keyword1", "keyword2"],
-  "role_keywords_ar": ["keyword3", "keyword4"],
-  "location_keywords_en": ["keyword1", "keyword2"],
-  "location_keywords_ar": ["keyword3", "keyword4"],
-  "recent_messages": []
-}
-```
+**ملاحظه**: اترك recent messages بحالها.
+
+</div>
 
 <div dir="rtl">
 

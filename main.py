@@ -118,7 +118,7 @@ async def message_forwarder(msg, full_message):
 
 # update recent messages
 async def add_to_recent(full_message):
-    global recent_messages
+    global recent_messages, data
 
     async with recent_lock:
         recent_messages.append(full_message)
