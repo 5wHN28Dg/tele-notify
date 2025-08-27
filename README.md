@@ -122,6 +122,7 @@ The script will:
 
 ## 📝 To Do List:
 - [x] Fix race conditions when updating recent_messages / writing to config.json.
+- [ ] add a FAQ section in the wiki with a table of contents.
 - [ ] Special processing for messages with info formatted like this: `#Basrah www.example.com/electrical-engineering-intern/`.
 - [ ] Analyze the retry mechanism, it may need some improvements.
 - [ ] Set up a way for you to get notified if the script crashes.
