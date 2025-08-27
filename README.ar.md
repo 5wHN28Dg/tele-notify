@@ -87,7 +87,7 @@ pip install -r requirements.txt
 </div>
 
 ```bash
-sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara # أو أي لغة أخرى تحتاجها
+sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara
 ```
 
 <div dir="rtl">

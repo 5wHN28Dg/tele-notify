@@ -63,7 +63,7 @@ tenacity
    * **Ubuntu/Debian**:
 
      ```bash
-     sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara # or any language you want
+     sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara
      ```
    * **Windows**: [Download installer](https://github.com/UB-Mannheim/tesseract/wiki)
    * **MacOS**:
