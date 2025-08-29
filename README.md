@@ -121,13 +121,35 @@ The script will:
    * Forward it to your target chat.
 
 ## 📝 To Do List:
-- [x] Fix race conditions when updating recent_messages / writing to config.json.
-- [ ] add a FAQ section in the wiki with a table of contents.
-- [ ] Special processing for messages with info formatted like this: `#Basrah www.example.com/electrical-engineering-intern/`.
-- [ ] Analyze the retry mechanism, it may need some improvements.
-- [ ] Set up a way for you to get notified if the script crashes.
-- [ ] A beautiful CLI with real-time statistics instead of this infinite stream of text.
-- [ ] analyze the code for a possible 2nd refactoring.
+* [x] **Fix** race conditions when updating `recent_messages` and writing to `config.json`.
+
+### Documentation & Support
+
+* [ ] **Add** a FAQ section in the wiki with a table of contents.
+
+### Message Processing
+
+* [ ] **Implement** special handling for messages formatted like:
+  `#Basrah www.example.com/electrical-engineering-intern/`.
+* [ ] **Detect** chats your account is banned from by logging and analyzing chat IDs.
+
+### Reliability & Error Handling
+
+* [ ] **Review** and improve the retry mechanism.
+* [ ] **Set up** crash notifications (email, webhook, or other).
+
+### CLI & User Experience
+
+* [ ] **Create** a modern CLI with real-time statistics instead of plain logs:
+
+  * [ ] **Show** progress bar for unread message processing.
+  * [ ] **Display** processed message counts per chat and overall (over a time period).
+  * [ ] **Display** forwarded message counts per chat and overall (over a time period).
+  * [ ] **Highlight** important events (account bans, connection issues, etc.).
+
+### Code Quality
+
+* [ ] **Analyze** the codebase for a possible second refactoring.
 
 ## 📜 License
 
