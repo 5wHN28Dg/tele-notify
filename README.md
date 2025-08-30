@@ -73,7 +73,7 @@ tenacity
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
-> 📱 **Android Users:** lost in dependency hell(WIP).
+> 📱 **Android Users:** lost in dependency hell (WIP).
 
 ## 🛠 Configuration
 
@@ -136,7 +136,7 @@ The script will:
 ### Reliability & Error Handling
 
 * [ ] **Review** and improve the retry mechanism.
-* [ ] **Set up** crash notifications (email, webhook, or other).
+* [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.
 
 ### CLI & User Experience
 
