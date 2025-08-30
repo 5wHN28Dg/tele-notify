@@ -136,7 +136,7 @@ The script will:
 ### Reliability & Error Handling
 
 * [ ] **Review** and improve the retry mechanism.
-* [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.
+* [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.🔄
 
 ### CLI & User Experience
 
