@@ -40,7 +40,12 @@ recent_messages = data['recent_messages']
 def build_hybrid_regex(en_list, ar_list):
     parts = []
     if en_list:
-        parts.append(r'\b(?:' + '|'.join(re.escape(k) for k in en_list) + r')\b')
+        processed_en_list = [
+            r'[\s_-]+'.join(re.escape(p) for p in k.split(' '))
+            for k in en_list
+        ]
+        en_pattern = r'(?<![a-zA-Z0-9])(?:' + '|'.join(processed_en_list) + r')(?![a-zA-Z0-9])'
+        parts.append(en_pattern)
     if ar_list:
         parts.append(r'(?:' + '|'.join(re.escape(k) for k in ar_list) + r')')
     return re.compile('|'.join(parts), re.IGNORECASE) if parts else re.compile(r'$.')

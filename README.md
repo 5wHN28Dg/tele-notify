@@ -129,7 +129,7 @@ The script will:
 
 ### Message Processing
 
-* [ ] **Implement** special handling for messages formatted like:
+* [x] **Improve** regex matching to detect messages formatted like:
   `#Basrah www.example.com/electrical-engineering-intern/`.
 * [ ] **Detect** chats your account is banned from by logging and analyzing chat IDs.
 
