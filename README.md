@@ -131,7 +131,7 @@ The script will:
 
 * [x] **Improve** regex matching to detect messages formatted like:
   `#Basrah www.example.com/electrical-engineering-intern/`.
-* [ ] **Detect** chats your account is banned from by logging and analyzing chat IDs.
+* [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
 
 ### Reliability & Error Handling
 
