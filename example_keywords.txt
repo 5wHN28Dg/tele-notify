@@ -21,7 +21,10 @@ these are just the keywords that I use personally for my channel to monitor for 
     "probation",
     "on-the-job training",
     "early-career professionals",
-    "no experience required"
+    "no experience required",
+    "0–1 years experience",
+    "no prior experience",
+    "no previous experience"
   ],
 
   "level_keywords_ar": [

@@ -132,6 +132,10 @@ The script will:
 * [x] **Improve** regex matching to detect messages formatted like:
   `#Basrah www.example.com/electrical-engineering-intern/`.
 * [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
+* [ ] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
+  - Draft rule: If employer will accept fresh graduates or minimal/no experience, they usually state it explicitly (e.g., "fresh graduates", "entry level", "0-1 years experience", "no experience required").
+  - If no such marker, default to role-based classification (traditionally entry-level vs mid/high level titles).
+  - Test this assumption on real-world data before finalizing.
 
 ### Reliability & Error Handling
 
