@@ -133,8 +133,8 @@ The script will:
   `#Basrah www.example.com/electrical-engineering-intern/`.
 * [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
 * [ ] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
-  - Draft rule: If employer will accept fresh graduates or minimal/no experience, they usually state it explicitly (e.g., "fresh graduates", "entry level", "0-1 years experience", "no experience required").
-  - If no such marker, default to role-based classification (traditionally entry-level vs mid/high level titles).
+  - Draft rule: If employer will accept fresh graduates or minimal/no experience, they usually state it explicitly (e.g., "fresh graduates", "entry level", "0-1 years experience", "no experience required", etc...).
+  - If no such marker, default to role-based classification (traditionally entry-level vs. mid/high level titles) with (weighted?) parameters, NO mid-level experience or range requirements, training/mentorship provided or not.
   - Test this assumption on real-world data before finalizing.
 
 ### Reliability & Error Handling
