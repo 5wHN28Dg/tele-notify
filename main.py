@@ -28,10 +28,14 @@ target_chat = data['target_chat']
 # keywords
 level_keywords_en = data['level_keywords_en']
 level_keywords_ar = data['level_keywords_ar']
-role_keywords_en = data['role_keywords_en']
-role_keywords_ar = data['role_keywords_ar']
+entry_level_role_en = data['entry_level_role_en']
+entry_level_role_ar = data['entry_level_role_ar']
+mid_level_role_en = data['mid_level_role_en']
+mid_level_role_ar = data['mid_level_role_ar']
 location_keywords_en = data['location_keywords_en']
 location_keywords_ar = data['location_keywords_ar']
+mid_level_keywords_en = data['mid_level_keywords_en']
+mid_level_keywords_ar = data['mid_level_keywords_ar']
 
 # last 10 forwarded messages
 recent_messages = data['recent_messages']
@@ -47,8 +51,10 @@ def build_hybrid_regex(en_list, ar_list):
 
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
-role_pattern = build_hybrid_regex(role_keywords_en, role_keywords_ar)
+entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
+mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
+mid_level_pattern = build_hybrid_regex(mid_level_keywords_en, mid_level_keywords_ar)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -63,13 +69,20 @@ async def check_for_a_match(message):
     full_message = await message_processor(message)
 
     logging.info(f"checked message: {message.id}")
-    return all([
-            level_pattern.search(full_message),
-            role_pattern.search(full_message),
+    if all([
+            (entry_level_role_pattern.search(full_message) or mid_level_role_pattern.search(full_message)),
             location_pattern.search(full_message)
-        ]), full_message
+        ]):
+            if level_pattern.search(full_message): # this is stage 1
+                return True, full_message
+            if not mid_level_pattern.search(full_message): # this is stage 2
+                return True, full_message
 
-# ckecks the message type then makes it ready for processing
+            await message.forward_to('me')
+            logging.info("forwarded the message to you, check it out!")
+    return False, full_message
+
+# checks the message type then makes it ready for processing
 async def message_processor(msg):
     image_text = ""
     if hasattr(msg, 'photo') and msg.photo:
