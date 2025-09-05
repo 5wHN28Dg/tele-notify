@@ -34,8 +34,8 @@ mid_level_role_en = data['mid_level_general_role_en']
 mid_level_role_ar = data['mid_level_general_role_ar']
 location_keywords_en = data['location_keywords_en']
 location_keywords_ar = data['location_keywords_ar']
-mid_level_keywords_en = data['mid_level_keywords_en']
-mid_level_keywords_ar = data['mid_level_keywords_ar']
+experience_keywords_en = data['experience_keywords_en']
+experience_keywords_ar = data['experience_keywords_ar']
 
 # last 10 forwarded messages
 recent_messages = data['recent_messages']
@@ -54,7 +54,7 @@ level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
 mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
-mid_level_pattern = build_hybrid_regex(mid_level_keywords_en, mid_level_keywords_ar)
+experience_pattern = build_hybrid_regex(experience_keywords_en, experience_keywords_ar)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -78,9 +78,9 @@ async def check_for_a_match(message):
             if level_pattern.search(full_message): # this is stage 1
                 return True, full_message
 
-            experience = experience_required.search(full_message)
-            certification = certification_required.search(full_message)
-            responsibilities = mid_level_pattern.search(full_message)
+            experience = experience_pattern.search(full_message)
+            certification = certification_pattern.search(full_message)
+            responsibilities = responsibilities_pattern.search(full_message)
 
             if entry_level and not all([experience, certification]):
                  return True, full_message
