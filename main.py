@@ -30,8 +30,8 @@ level_keywords_en = data['level_keywords_en']
 level_keywords_ar = data['level_keywords_ar']
 entry_level_role_en = data['entry_level_role_en']
 entry_level_role_ar = data['entry_level_role_ar']
-mid_level_role_en = data['mid_level_role_en']
-mid_level_role_ar = data['mid_level_role_ar']
+mid_level_role_en = data['mid_level_general_role_en']
+mid_level_role_ar = data['mid_level_general_role_ar']
 location_keywords_en = data['location_keywords_en']
 location_keywords_ar = data['location_keywords_ar']
 mid_level_keywords_en = data['mid_level_keywords_en']
@@ -75,7 +75,14 @@ async def check_for_a_match(message):
         ]):
             if level_pattern.search(full_message): # this is stage 1
                 return True, full_message
-            if not mid_level_pattern.search(full_message): # this is stage 2
+
+            experience = experience_required.search(full_message)
+            certification = certification_required.search(full_message)
+            responsibilities = mid_level_pattern.search(full_message)
+            if not all([experience, certification]):
+                 return True, full_message
+
+            if not all([experience, certification, responsibilities]):
                 return True, full_message
 
             await message.forward_to('me')
