@@ -56,8 +56,7 @@ location_keywords_en = data["location_keywords_en"]
 location_keywords_ar = data["location_keywords_ar"]
 experience_keywords_en = data["experience_keywords_en"]
 experience_keywords_ar = data["experience_keywords_ar"]
-certification_keywords_en = data["certification_keywords_en"]
-certification_keywords_ar = data["certification_keywords_ar"]
+certifications = data["certifications"]
 responsibility_keywords_en = data["responsibility_keywords_en"]
 responsibility_keywords_ar = data["responsibility_keywords_ar"]
 
@@ -82,7 +81,7 @@ mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 experience_pattern = build_hybrid_regex(experience_keywords_en, experience_keywords_ar)
 certification_pattern = build_hybrid_regex(
-    certification_keywords_en, certification_keywords_ar
+    certifications
 )
 responsibilities_pattern = build_hybrid_regex(
     responsibility_keywords_en, responsibility_keywords_ar
