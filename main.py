@@ -1,57 +1,79 @@
 from telethon import TelegramClient, events, errors
-import logging, re, asyncio, io, json, pytesseract, tempfile, os
+import logging
+import re
+import asyncio
+import io
+import json
+import pytesseract
+import tempfile
+import os
 from PIL import Image
-from tenacity import stop_after_attempt, wait_random_exponential, retry_if_exception_type, retry
+from tenacity import (
+    stop_after_attempt,
+    wait_random_exponential,
+    retry_if_exception_type,
+    retry,
+)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # logging for easier debugging
-logging.basicConfig(format='[%(levelname)s %(asctime)s] %(name)s: %(message)s',
-                    level=logging.INFO)
+logging.basicConfig(
+    format="[%(levelname)s %(asctime)s] %(name)s: %(message)s", level=logging.INFO
+)
 
-with open('config.json', 'r') as f:
+with open("config.json", "r") as f:
     data = json.load(f)
 
 # Use your own values from my.telegram.org and KEEP THEM PRIVATE!
-api_id = data['api_id']
-api_hash = data['api_hash']
-client = TelegramClient('test', api_id, api_hash,
-                        request_retries=5, connection_retries=5, retry_delay=5, auto_reconnect=True)
+api_id = data["api_id"]
+api_hash = data["api_hash"]
+client = TelegramClient(
+    "test",
+    api_id,
+    api_hash,
+    request_retries=5,
+    connection_retries=5,
+    retry_delay=5,
+    auto_reconnect=True,
+)
 
 # protecting recent messages from concurrent access
 recent_lock = asyncio.Lock()
 
 # chats to monitor
-chats = data['chats']
-target_chat = data['target_chat']
+chats = data["chats"]
+target_chat = data["target_chat"]
 
 # keywords
-level_keywords_en = data['level_keywords_en']
-level_keywords_ar = data['level_keywords_ar']
-entry_level_role_en = data['entry_level_role_en']
-entry_level_role_ar = data['entry_level_role_ar']
-mid_level_role_en = data['mid_level_general_role_en']
-mid_level_role_ar = data['mid_level_general_role_ar']
-location_keywords_en = data['location_keywords_en']
-location_keywords_ar = data['location_keywords_ar']
-experience_keywords_en = data['experience_keywords_en']
-experience_keywords_ar = data['experience_keywords_ar']
-certification_keywords_en = data['certification_keywords_en']
-certification_keywords_ar = data['certification_keywords_ar']
-responsibility_keywords_en = data['responsibility_keywords_en']
-responsibility_keywords_ar = data['responsibility_keywords_ar']
+level_keywords_en = data["level_keywords_en"]
+level_keywords_ar = data["level_keywords_ar"]
+entry_level_role_en = data["entry_level_role_en"]
+entry_level_role_ar = data["entry_level_role_ar"]
+mid_level_role_en = data["mid_level_general_role_en"]
+mid_level_role_ar = data["mid_level_general_role_ar"]
+location_keywords_en = data["location_keywords_en"]
+location_keywords_ar = data["location_keywords_ar"]
+experience_keywords_en = data["experience_keywords_en"]
+experience_keywords_ar = data["experience_keywords_ar"]
+certification_keywords_en = data["certification_keywords_en"]
+certification_keywords_ar = data["certification_keywords_ar"]
+responsibility_keywords_en = data["responsibility_keywords_en"]
+responsibility_keywords_ar = data["responsibility_keywords_ar"]
 
 # last 10 forwarded messages
-recent_messages = data['recent_messages']
+recent_messages = data["recent_messages"]
+
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
 def build_hybrid_regex(en_list, ar_list):
     parts = []
     if en_list:
-        parts.append(r'\b(?:' + '|'.join(re.escape(k) for k in en_list) + r')\b')
+        parts.append(r"\b(?:" + "|".join(re.escape(k) for k in en_list) + r")\b")
     if ar_list:
-        parts.append(r'(?:' + '|'.join(re.escape(k) for k in ar_list) + r')')
-    return re.compile('|'.join(parts), re.IGNORECASE) if parts else re.compile(r'$.')
+        parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
+    return re.compile("|".join(parts), re.IGNORECASE) if parts else re.compile(r"$.")
+
 
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
@@ -59,16 +81,26 @@ entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_r
 mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 experience_pattern = build_hybrid_regex(experience_keywords_en, experience_keywords_ar)
-certification_pattern = build_hybrid_regex(certification_keywords_en, certification_keywords_ar)
-responsibilities_pattern = build_hybrid_regex(responsibility_keywords_en, responsibility_keywords_ar)
+certification_pattern = build_hybrid_regex(
+    certification_keywords_en, certification_keywords_ar
+)
+responsibilities_pattern = build_hybrid_regex(
+    responsibility_keywords_en, responsibility_keywords_ar
+)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
     reraise=True,
     stop=stop_after_attempt(5),  # give up after 5 tries
-    wait=wait_random_exponential(multiplier=1, max=60),  # exponential + full jitter, up to 60s
-    retry=retry_if_exception_type((asyncio.TimeoutError, OSError, errors.RpcCallFailError))
+    wait=wait_random_exponential(
+        multiplier=1, max=60
+    ),  # exponential + full jitter, up to 60s
+    retry=retry_if_exception_type(
+        (asyncio.TimeoutError, OSError, errors.RpcCallFailError)
+    ),
 )
+
+
 # -------- helpers --------
 # check if the message passes the filters
 async def check_for_a_match(message):
@@ -77,31 +109,29 @@ async def check_for_a_match(message):
     logging.info(f"checked message: {message.id}")
     entry_level = entry_level_role_pattern.search(full_message)
     mid_level = mid_level_role_pattern.search(full_message)
-    if all([
-            (entry_level or mid_level),
-            location_pattern.search(full_message)
-        ]):
-            if level_pattern.search(full_message): # this is stage 1
-                return True, full_message
+    if all([(entry_level or mid_level), location_pattern.search(full_message)]):
+        if level_pattern.search(full_message):  # this is stage 1
+            return True, full_message
 
-            experience = experience_pattern.search(full_message)
-            certification = certification_pattern.search(full_message)
-            responsibilities = responsibilities_pattern.search(full_message)
+        experience = experience_pattern.search(full_message)
+        certification = certification_pattern.search(full_message)
+        responsibilities = responsibilities_pattern.search(full_message)
 
-            if entry_level and not all([experience, certification]):
-                 return True, full_message
+        if entry_level and not all([experience, certification]):
+            return True, full_message
 
-            if mid_level and not all([experience, certification, responsibilities]):
-                return True, full_message
+        if mid_level and not all([experience, certification, responsibilities]):
+            return True, full_message
 
-            await message.forward_to('me')
-            logging.info("forwarded the message to you, check it out!")
+        await message.forward_to("me")
+        logging.info("forwarded the message to you, check it out!")
     return False, full_message
+
 
 # checks the message type then makes it ready for processing
 async def message_processor(msg):
     image_text = ""
-    if hasattr(msg, 'photo') and msg.photo:
+    if hasattr(msg, "photo") and msg.photo:
         try:
             image_text = await image_processor(msg)
         except Exception as e:
@@ -112,19 +142,23 @@ async def message_processor(msg):
     logging.info(f"Processed message: {msg.id}")
     return full_message
 
+
 # downloads then extracts the image text
 @retry_transient
 async def image_processor(msg):
     image_bytes = await msg.download_media(file=bytes, progress_callback=callback)
     with Image.open(io.BytesIO(image_bytes)) as image:
-        image_text = pytesseract.image_to_string(image, lang='ara+eng')
+        image_text = pytesseract.image_to_string(image, lang="ara+eng")
         logging.info(f"Extracted text from image in message: {msg.id}")
     return image_text
 
+
 # Printing download progress
 def callback(current, total):
-    print('Downloaded', current, 'out of', total,
-          'bytes: {:.2%}'.format(current / total))
+    print(
+        "Downloaded", current, "out of", total, "bytes: {:.2%}".format(current / total)
+    )
+
 
 # compares the message to be sent with the last 10 sent messages
 async def check_for_duplicates(message_text):
@@ -134,16 +168,18 @@ async def check_for_duplicates(message_text):
 
     # Compare new message with each recent message
     for i in range(len(recent_messages)):
-        similarity = cosine_similarity(vectors[i:i+1], vectors[-1:])[0, 0]
+        similarity = cosine_similarity(vectors[i : i + 1], vectors[-1:])[0, 0]
         if similarity > 0.8:
             return True  # Duplicate found
     return False
+
 
 @retry_transient
 async def message_forwarder(msg, full_message):
     await msg.forward_to(target_chat)
     await add_to_recent(full_message)
     await asyncio.sleep(1)
+
 
 # update recent messages
 async def add_to_recent(full_message):
@@ -154,17 +190,21 @@ async def add_to_recent(full_message):
         if len(recent_messages) > 10:
             recent_messages = recent_messages[-10:]
 
-        data['recent_messages'] = recent_messages
-        await asyncio.to_thread(write_config_atomic, data, 'config.json')
+        data["recent_messages"] = recent_messages
+        await asyncio.to_thread(write_config_atomic, data, "config.json")
+
 
 def write_config_atomic(data, path):
     dir_name = os.path.dirname(path) or "."
-    with tempfile.NamedTemporaryFile('w', dir=dir_name, delete=False, encoding="utf-8") as tmp:
+    with tempfile.NamedTemporaryFile(
+        "w", dir=dir_name, delete=False, encoding="utf-8"
+    ) as tmp:
         json.dump(data, tmp, indent=4, ensure_ascii=False)
         tmp.flush()
         os.fsync(tmp.fileno())
         temp_name = tmp.name
     os.replace(temp_name, path)
+
 
 # -------- unread bootstrap --------
 @retry_transient
@@ -176,13 +216,20 @@ async def unread_messages_retriever():
                 last_read_id = dialog.message.id - dialog.unread_count
                 async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
                     is_match, full_message = await check_for_a_match(msg)
-                    logging.info(f'message {msg.id} from chat: {dialog.id} is {is_match}')
+                    logging.info(
+                        f"message {msg.id} from chat: {dialog.id} is {is_match}"
+                    )
                     if is_match and not await check_for_duplicates(full_message):
                         await message_forwarder(msg, full_message)
                 await client.send_read_acknowledge(dialog.id)
-                logging.info(f'completed processing unread messages for chat: {dialog.id} with name {dialog.title}')
-        except:
-            logging.exception(f'Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}')
+                logging.info(
+                    f"completed processing unread messages for chat: {dialog.id} with name {dialog.title}"
+                )
+        except Exception:
+            logging.exception(
+                f"Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}"
+            )
+
 
 # -------- live handler --------
 @client.on(events.NewMessage(chats=chats))
@@ -190,15 +237,17 @@ async def unread_messages_retriever():
 async def new_message_handler(event):
     msg = event.message
     is_match, full_message = await check_for_a_match(msg)
-    logging.info(f'new message {msg.id} from chat: {msg.chat_id} is {is_match}')
+    logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {is_match}")
 
     if is_match and not await check_for_duplicates(full_message):
         await message_forwarder(msg, full_message)
     await msg.mark_read()
 
+
 async def main():
     await unread_messages_retriever()
     print("Unread messages processed, now listening for new messages...")
+
 
 with client:
     client.loop.run_until_complete(main())
