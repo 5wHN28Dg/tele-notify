@@ -69,8 +69,10 @@ async def check_for_a_match(message):
     full_message = await message_processor(message)
 
     logging.info(f"checked message: {message.id}")
+    entry_level = entry_level_role_pattern.search(full_message)
+    mid_level = mid_level_role_pattern.search(full_message)
     if all([
-            (entry_level_role_pattern.search(full_message) or mid_level_role_pattern.search(full_message)),
+            (entry_level or mid_level),
             location_pattern.search(full_message)
         ]):
             if level_pattern.search(full_message): # this is stage 1
@@ -79,10 +81,11 @@ async def check_for_a_match(message):
             experience = experience_required.search(full_message)
             certification = certification_required.search(full_message)
             responsibilities = mid_level_pattern.search(full_message)
-            if not all([experience, certification]):
+
+            if entry_level and not all([experience, certification]):
                  return True, full_message
 
-            if not all([experience, certification, responsibilities]):
+            if mid_level and not all([experience, certification, responsibilities]):
                 return True, full_message
 
             await message.forward_to('me')
