@@ -74,12 +74,18 @@ def build_hybrid_regex(en_list, ar_list):
     return re.compile("|".join(parts), re.IGNORECASE) if parts else re.compile(r"$.")
 
 
+# Function to build experience regex pattern
+def build_experience_regex():
+    pattern = r"(\d+((-\d+)?|\+)? years (of )?experience|experience required)"
+    return re.compile(pattern, re.IGNORECASE)
+
+
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
 mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
-experience_pattern = build_hybrid_regex(experience_keywords_en, experience_keywords_ar)
+experience_pattern = build_experience_regex()
 certification_pattern = build_hybrid_regex(
     certifications
 )
