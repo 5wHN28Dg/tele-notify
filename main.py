@@ -78,6 +78,11 @@ def build_experience_regex():
     return re.compile(pattern, re.IGNORECASE)
 
 
+def build_responsibilities_regex(en_list, ar_list):
+    pattern = r"(\d+\. |- |\d+- )?keyword"
+    return re.compile(pattern, re.IGNORECASE)
+
+
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
@@ -85,7 +90,7 @@ mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 experience_pattern = build_experience_regex()
 certification_pattern = build_hybrid_regex(certifications)
-responsibilities_pattern = build_hybrid_regex(
+responsibilities_pattern = build_responsibilities_regex(
     responsibility_keywords_en, responsibility_keywords_ar
 )
 
