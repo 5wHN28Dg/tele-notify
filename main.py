@@ -54,9 +54,8 @@ mid_level_role_en = data["mid_level_general_role_en"]
 mid_level_role_ar = data["mid_level_general_role_ar"]
 location_keywords_en = data["location_keywords_en"]
 location_keywords_ar = data["location_keywords_ar"]
-certifications = data["certifications"]
-responsibility_keywords_en = data["responsibility_keywords_en"]
-responsibility_keywords_ar = data["responsibility_keywords_ar"]
+certifications = [re.escape(x) for x in data['certifications']]
+responsibility_keywords = data["responsibility_keywords"]
 
 # last 10 forwarded messages
 recent_messages = data["recent_messages"]
@@ -78,9 +77,30 @@ def build_experience_regex():
     return re.compile(pattern, re.IGNORECASE)
 
 
-def build_responsibilities_regex(en_list, ar_list):
-    pattern = r"(\d+\. |- |\d+- )?keyword"
+def build_responsibilities_regex(responsibility_keywords):
+    keywords = "|".join(responsibility_keywords)
+    pattern = f"(?:\\d+\\. |- |\\d+- |\n)({keywords})"
     return re.compile(pattern, re.IGNORECASE)
+
+
+def build_certifications_regex(certifications):
+    cert_options = "|".join(certifications)
+    patterns = [
+            f"(must (have( one of the following: )?|possess|be|hold|obtain|demonstrate)|essential|require(s|d)|mandatory|meet).{{0,20}}({cert_options})(?! within)",
+            f"({cert_options}).{{0,20}}((is)? (required|mandatory)(?! or must be obtained))",
+            "(At least one of the following certifications required)|(Any of the following certifications accepted)",
+            "Must possess one or more of the following",
+            f"degree and {cert_options} or equivalent combination",
+            f"The successful candidate will hold {cert_options}",
+            f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
+            f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
+            f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
+            f"(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
+            f"(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)"
+        ]
+
+    combined_pattern = "|".join(patterns)
+    return re.compile(combined_pattern, re.IGNORECASE)
 
 
 # Compile patterns
@@ -89,10 +109,8 @@ entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_r
 mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar)
 location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
 experience_pattern = build_experience_regex()
-certification_pattern = build_hybrid_regex(certifications)
-responsibilities_pattern = build_responsibilities_regex(
-    responsibility_keywords_en, responsibility_keywords_ar
-)
+certification_pattern = build_certifications_regex(certifications)
+responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
