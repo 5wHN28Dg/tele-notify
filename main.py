@@ -54,7 +54,7 @@ mid_level_role_en = data["mid_level_general_role_en"]
 mid_level_role_ar = data["mid_level_general_role_ar"]
 location_keywords_en = data["location_keywords_en"]
 location_keywords_ar = data["location_keywords_ar"]
-certifications = [re.escape(x) for x in data['certifications']]
+certifications = [re.escape(x) for x in data["certifications"]]
 responsibility_keywords = data["responsibility_keywords"]
 
 # last 10 forwarded messages
@@ -84,20 +84,21 @@ def build_responsibilities_regex(responsibility_keywords):
 
 
 def build_certifications_regex(certifications):
-    cert_options = "|".join(certifications)
+    cert_options = "(?:" + "|".join(certifications) + ")"
     patterns = [
-            f"(must (have( one of the following: )?|possess|be|hold|obtain|demonstrate)|essential|require(s|d)|mandatory|meet).{{0,20}}({cert_options})(?! within)",
-            f"({cert_options}).{{0,20}}((is)? (required|mandatory)(?! or must be obtained))",
-            "(At least one of the following certifications required)|(Any of the following certifications accepted)",
-            "Must possess one or more of the following",
-            f"degree and {cert_options} or equivalent combination",
-            f"The successful candidate will hold {cert_options}",
-            f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
-            f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
-            f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
-            f"(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
-            f"(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)"
-        ]
+        f"(must (have( one of the following: )?|possess|be|hold|obtain|demonstrate)|essential|require(s|d)|mandatory|meet).{{0,20}}({cert_options})(?! within|.{{0,20}}are a plus)",
+        f"({cert_options}).{{0,20}}((is)? (required|mandatory)(?! or must be obtained|.{{0,20}}are a plus))",
+        "(At least one of the following certifications required)|(Any of the following certifications accepted)",
+        "Must possess one or more of the following",
+        f"degree and {cert_options} or equivalent combination",
+        f"The successful candidate will hold {cert_options}",
+        f"Any relevant certifications .{{0,20}}{cert_options}?(?!.{{0,30}}are a plus)",
+        f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
+        f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
+        f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
+        "(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
+        "(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)",
+    ]
 
     combined_pattern = "|".join(patterns)
     return re.compile(combined_pattern, re.IGNORECASE)
@@ -141,10 +142,10 @@ async def check_for_a_match(message):
         certification = certification_pattern.search(full_message)
         responsibilities = responsibilities_pattern.search(full_message)
 
-        if entry_level and not all([experience, certification]):
+        if entry_level and not any([experience, certification]):
             return True, full_message
 
-        if mid_level and not all([experience, certification, responsibilities]):
+        if mid_level and not any([experience, certification, responsibilities]):
             return True, full_message
 
         await message.forward_to("me")
