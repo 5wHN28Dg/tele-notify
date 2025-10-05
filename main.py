@@ -62,24 +62,32 @@ recent_messages = data["recent_messages"]
 
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
-def build_hybrid_regex(en_list, ar_list):
+def build_hybrid_regex(en_list, ar_list, special_patterns=None):
     parts = []
     if en_list:
-        parts.append(r"\b(?:" + "|".join(re.escape(k) for k in en_list) + r")\b")
+        processed_en_list = [
+            r"[\s_-]+".join(re.escape(p) for p in k.split(" ")) for k in en_list
+        ]
+        en_pattern = (
+            r"(?<![a-zA-Z0-9])(?:" + "|".join(processed_en_list) + r")(?![a-zA-Z0-9])"
+        )
+        parts.append(en_pattern)
     if ar_list:
         parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
+        if special_patterns:
+            parts.append(r"(?:" + "|".join(special_patterns) + r")")
     return re.compile("|".join(parts), re.IGNORECASE) if parts else re.compile(r"$.")
 
 
 # Function to build experience regex pattern
 def build_experience_regex():
-    pattern = r"(\d+((-\d+)?|\+)? years (of )?experience|experience required)|(خبرة لا تقل عن|(يشترط|يجب) تواجد خبرة|خبرة (سنة|سنتين|\d+))"
+    pattern = r"(\d+((-\d+)?|\+)? years (of )?(relevant )?experience|experience required)|(خبرة( عملية)? لا ?تقل عن|(يشترط|يجب) تواجد خبرة|خبرة (سنة|سنتين|\d+))"
     return re.compile(pattern, re.IGNORECASE)
 
 
 def build_responsibilities_regex(responsibility_keywords):
     keywords = "|".join(responsibility_keywords)
-    pattern = f"(?:\\d+\\. |- |\\d+- |\n)({keywords})"
+    pattern = f"(?:\\d+\\. |- |\\d+- |• |\n)({keywords})\\b"
     return re.compile(pattern, re.IGNORECASE)
 
 
@@ -96,8 +104,8 @@ def build_certifications_regex(certifications):
         f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
         f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
         f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
-        "(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
-        "(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)",
+        f"(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
+        f"(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)",
     ]
 
     combined_pattern = "|".join(patterns)
@@ -107,8 +115,16 @@ def build_certifications_regex(certifications):
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
-mid_level_role_pattern = build_hybrid_regex(mid_level_role_en, mid_level_role_ar)
-location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
+mid_level_special_pattern = [
+    r"(?<!senior )(?<!cost )(?<!estimation and )control engineer"
+]
+mid_level_role_pattern = build_hybrid_regex(
+    mid_level_role_en, mid_level_role_ar, mid_level_special_pattern
+)
+location_special_patterns = [r"(?<!شارع )الجمهورية"]
+location_pattern = build_hybrid_regex(
+    location_keywords_en, location_keywords_ar, location_special_patterns
+)
 experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
