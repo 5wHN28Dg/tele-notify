@@ -22,9 +22,8 @@ these are just the keywords that I use personally for my channel to monitor for 
     "on-the-job training",
     "early-career professionals",
     "no experience required",
-    "0–1 years experience",
-    "no prior experience",
-    "no previous experience"
+    "0–1 years of experience",
+    "Training will be provided"
   ],
 
   "level_keywords_ar": [
@@ -51,6 +50,11 @@ these are just the keywords that I use personally for my channel to monitor for 
     "لا يشترط وجود خبرة سابقة"
   ],
 
+  "mid_level_keywords_en": ["experience required", "1-2 years experience", "2-3 years experience", "3-5 years experience", "3+ years of experience", "10 years of experience", "leading projects",
+  "managing teams"],
+
+  "mid_level_keywords_ar": ["يجب تواجد خبرة", "خبرة لا تقل عن سنة", خبرة لا تقل عن سنتين", "خبرة 10 سنوات", "خبرة],
+
   "role_keywords_en": [
     "help desk",
     "it support",
@@ -69,6 +73,9 @@ these are just the keywords that I use personally for my channel to monitor for 
     "system administrator",
     "systems analyst",
     "data center technician",
+    "IT Technical Engineer",
+    "Information technology officer",
+    "IT assistant",
 
     "junior developer",
     "junior programmer",
@@ -184,6 +191,7 @@ these are just the keywords that I use personally for my channel to monitor for 
     "work from home",
     "wfh",
     "from home",
+    "work from anywhere",
 
     "um qasr",
     "um al qasr",

@@ -1,5 +1,12 @@
 from telethon import TelegramClient, events, errors
-import logging, re, asyncio, io, json, pytesseract, tempfile, os
+import logging
+import re
+import asyncio
+import io
+import json
+import pytesseract
+import tempfile
+import os
 from PIL import Image
 from tenacity import (
     stop_after_attempt,
@@ -41,17 +48,21 @@ target_chat = data["target_chat"]
 # keywords
 level_keywords_en = data["level_keywords_en"]
 level_keywords_ar = data["level_keywords_ar"]
-role_keywords_en = data["role_keywords_en"]
-role_keywords_ar = data["role_keywords_ar"]
+entry_level_role_en = data["entry_level_role_en"]
+entry_level_role_ar = data["entry_level_role_ar"]
+mid_level_role_en = data["mid_level_general_role_en"]
+mid_level_role_ar = data["mid_level_general_role_ar"]
 location_keywords_en = data["location_keywords_en"]
 location_keywords_ar = data["location_keywords_ar"]
+certifications = [re.escape(x) for x in data["certifications"]]
+responsibility_keywords = data["responsibility_keywords"]
 
 # last 10 forwarded messages
 recent_messages = data["recent_messages"]
 
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
-def build_hybrid_regex(en_list, ar_list):
+def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level = None):
     parts = []
     if en_list:
         processed_en_list = [
@@ -63,13 +74,61 @@ def build_hybrid_regex(en_list, ar_list):
         parts.append(en_pattern)
     if ar_list:
         parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
-    return re.compile("|".join(parts), re.IGNORECASE) if parts else re.compile(r"$.")
+        if special_patterns:
+            parts.append(r"(?:" + "|".join(special_patterns) + r")")
+    return re.compile(r"(?<!senior[\s_-])" + '|'.join(parts) if mid_level else '|'.join(parts), re.IGNORECASE) if parts else re.compile(r'$.')
+
+
+# Function to build experience regex pattern
+def build_experience_regex():
+    pattern = r"(\d+((-\d+)?|\+)? years (of )?(relevant )?experience|experience required)|(خبرة( عملية)? لا ?تقل عن|(يشترط|يجب) تواجد خبرة|خبرة (سنة|سنتين|\d+))"
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def build_responsibilities_regex(responsibility_keywords):
+    keywords = "|".join(responsibility_keywords)
+    pattern = f"(?:\\d+\\. |- |\\d+- |• |\n)({keywords})\\b"
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def build_certifications_regex(certifications):
+    cert_options = "(?:" + "|".join(certifications) + ")"
+    patterns = [
+        f"(must (have( one of the following: )?|possess|be|hold|obtain|demonstrate)|essential|require(s|d)|mandatory|meet).{{0,20}}({cert_options})(?! within|.{{0,20}}are a plus)",
+        f"({cert_options}).{{0,20}}((is)? (required|mandatory)(?! or must be obtained|.{{0,20}}are a plus))",
+        "(At least one of the following certifications required)|(Any of the following certifications accepted)",
+        "Must possess one or more of the following",
+        f"degree and {cert_options} or equivalent combination",
+        f"The successful candidate will hold {cert_options}",
+        f"Any relevant certifications .{{0,20}}{cert_options}?(?!.{{0,30}}are a plus)",
+        f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
+        f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
+        f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
+        f"(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
+        f"(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)",
+    ]
+
+    combined_pattern = "|".join(patterns)
+    return re.compile(combined_pattern, re.IGNORECASE)
 
 
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
-role_pattern = build_hybrid_regex(role_keywords_en, role_keywords_ar)
-location_pattern = build_hybrid_regex(location_keywords_en, location_keywords_ar)
+entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
+mid_level_special_pattern = [
+    r"(?<!senior )(?<!cost )(?<!estimation and )control engineer"
+]
+mid_level_role_pattern = build_hybrid_regex(
+    mid_level_role_en, mid_level_role_ar, mid_level_special_pattern, mid_level = True
+)
+location_special_patterns = [r"(?<!شارع )الجمهورية"]
+location_pattern = build_hybrid_regex(
+    location_keywords_en, location_keywords_ar, location_special_patterns
+)
+experience_pattern = build_experience_regex()
+certification_pattern = build_certifications_regex(certifications)
+responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
+not_a_job_pattern = re.compile("محتاج|((ابحث|باحث) عن) (فرصة )?(عمل|وظيفة|مهنة)", re.IGNORECASE)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -90,16 +149,28 @@ async def check_for_a_match(message):
     full_message = await message_processor(message)
 
     logging.info(f"checked message: {message.id}")
-    return all(
-        [
-            level_pattern.search(full_message),
-            role_pattern.search(full_message),
-            location_pattern.search(full_message),
-        ]
-    ), full_message
+    entry_level = entry_level_role_pattern.search(full_message)
+    mid_level = mid_level_role_pattern.search(full_message)
+    if all([(entry_level or mid_level), location_pattern.search(full_message), not not_a_job_pattern.search(full_message)]):
+        if level_pattern.search(full_message):  # this is stage 1
+            return True, full_message
+
+        experience = experience_pattern.search(full_message)
+        certification = certification_pattern.search(full_message)
+        responsibilities = responsibilities_pattern.search(full_message)
+
+        if entry_level and not any([experience, certification]):
+            return True, full_message
+
+        if mid_level and not any([experience, certification, responsibilities]):
+            return True, full_message
+
+        await message.forward_to("me")
+        logging.info("forwarded the message to you, check it out!")
+    return False, full_message
 
 
-# ckecks the message type then makes it ready for processing
+# checks the message type then makes it ready for processing
 async def message_processor(msg):
     image_text = ""
     if hasattr(msg, "photo") and msg.photo:
@@ -196,7 +267,7 @@ async def unread_messages_retriever():
                 logging.info(
                     f"completed processing unread messages for chat: {dialog.id} with name {dialog.title}"
                 )
-        except:
+        except Exception:
             logging.exception(
                 f"Failed to process unread messages for chat with id: {dialog.id}, title: {dialog.title}"
             )
