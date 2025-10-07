@@ -19,6 +19,45 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 * **Customizable filters**: Store your keywords and Telegram API keys in a JSON file.
 * **Multi-chat monitoring**: Watch multiple Telegram chats at once.
 
+## 🎯 Version Guide
+
+This project offers two versions to suit different needs:
+
+### **v2 (Current)** - Specialized Job Filter
+**Best for:** Filtering job postings with intelligent level detection
+- Two-stage filtering with inference logic
+- Entry-level vs. mid-level classification
+- Experience, certification, and responsibility pattern matching
+- Optimized for English/Arabic job market terminology
+- **Trade-off:** Highly tailored; requires significant modification for other use cases
+
+### **v1 (Legacy)** - General Message Filter
+**Best for:** Simple keyword-based filtering for any content type
+- Straightforward AND logic (level + role + location)
+- Easy to repurpose for different domains (e.g., real estate, events, products)
+- Minimal configuration required
+- **Trade-off:** Less intelligent; may miss nuanced matches
+
+📁 **Files:**
+- `main.py` - Current specialized version (v2)
+- `main_simple.py` - Original general-purpose version (v1)
+
+💡 **Which should you use?**
+- Filtering job postings specifically? → Use v2
+- Need a simple keyword filter for other content? → Use v1
+- Want to build something custom? → Start with v1 as a template
+
+---
+
+## 🔧 Customization Difficulty
+
+| Feature | v1 (Simple) | v2 (Specialized) |
+|---------|-------------|------------------|
+| Add new keywords | ⭐ Easy | ⭐ Easy |
+| Change filter logic | ⭐⭐ Moderate | ⭐⭐⭐⭐ Complex |
+| Repurpose for different domain | ⭐⭐ Moderate | ⭐⭐⭐⭐⭐ Very Complex |
+| Add new languages | ⭐⭐ Moderate | ⭐⭐⭐ Challenging |
+
 ## 📦 Requirements
 
 * Python 3.8+
