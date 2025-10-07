@@ -62,7 +62,7 @@ recent_messages = data["recent_messages"]
 
 
 # Function to build hybrid regex: \b for Latin, no \b for Arabic
-def build_hybrid_regex(en_list, ar_list, special_patterns=None):
+def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level = None):
     parts = []
     if en_list:
         processed_en_list = [
@@ -76,7 +76,7 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None):
         parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
         if special_patterns:
             parts.append(r"(?:" + "|".join(special_patterns) + r")")
-    return re.compile("|".join(parts), re.IGNORECASE) if parts else re.compile(r"$.")
+    return re.compile(r"(?<!senior[\s_-])" + '|'.join(parts) if mid_level else '|'.join(parts), re.IGNORECASE) if parts else re.compile(r'$.')
 
 
 # Function to build experience regex pattern
@@ -119,7 +119,7 @@ mid_level_special_pattern = [
     r"(?<!senior )(?<!cost )(?<!estimation and )control engineer"
 ]
 mid_level_role_pattern = build_hybrid_regex(
-    mid_level_role_en, mid_level_role_ar, mid_level_special_pattern
+    mid_level_role_en, mid_level_role_ar, mid_level_special_pattern, mid_level = True
 )
 location_special_patterns = [r"(?<!شارع )الجمهورية"]
 location_pattern = build_hybrid_regex(
@@ -128,6 +128,7 @@ location_pattern = build_hybrid_regex(
 experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
+not_a_job_pattern = re.compile("محتاج|((ابحث|باحث) عن) (عمل|وظيفة|مهنة)", re.IGNORECASE)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -150,7 +151,7 @@ async def check_for_a_match(message):
     logging.info(f"checked message: {message.id}")
     entry_level = entry_level_role_pattern.search(full_message)
     mid_level = mid_level_role_pattern.search(full_message)
-    if all([(entry_level or mid_level), location_pattern.search(full_message)]):
+    if all([(entry_level or mid_level), location_pattern.search(full_message), not not_a_job_pattern.search(full_message)]):
         if level_pattern.search(full_message):  # this is stage 1
             return True, full_message
 
