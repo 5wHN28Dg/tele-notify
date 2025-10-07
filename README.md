@@ -132,15 +132,17 @@ The script will:
 * [x] **Improve** regex matching to detect messages formatted like:
   `#Basrah www.example.com/electrical-engineering-intern/`.
 * [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
-* [ ] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
-  - Draft rule: If employer will accept fresh graduates or minimal/no experience, they usually state it explicitly (e.g., "fresh graduates", "entry level", "0-1 years experience", "no experience required", etc...).
-  - If no such marker, default to role-based classification (traditionally entry-level vs. mid/high level titles) with (weighted?) parameters, NO mid-level experience or range requirements, training/mentorship provided or not.
-  - Test this assumption on real-world data before finalizing.
+* [x] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
+  - ✅ Implemented two-stage filtering: explicit keywords (stage 1) + inference-based detection (stage 2)
+  - ✅ Entry-level: Matches if no experience/certification requirements found
+  - ✅ Mid-level: Matches if no experience/certification/responsibility requirements found
+  - ✅ Ambiguous messages forwarded to personal chat for manual review
 
 ### Reliability & Error Handling
 
 * [ ] **Review** and improve the retry mechanism.
 * [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.🔄
+* [ ] **Add** logging for pattern match stages (which stage matched, which patterns triggered) for debugging? Maybe, we will see.
 
 ### CLI & User Experience
 
@@ -149,6 +151,8 @@ The script will:
   * [ ] **Show** progress bar for unread message processing.
   * [ ] **Display** processed message counts per chat and overall (over a time period).
   * [ ] **Display** forwarded message counts per chat and overall (over a time period).
+  * [ ] **Show** breakdown of matches by stage (stage 1 vs. stage 2 inference)?
+  * [ ] **Display** count of ambiguous messages forwarded for manual review.
   * [ ] **Highlight** important events (account bans, connection issues, etc.).
 
 ### Code Quality
