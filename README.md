@@ -53,10 +53,10 @@ This project offers two versions to suit different needs:
 
 | Feature | v1 (Simple) | v2 (Specialized) |
 |---------|-------------|------------------|
-| Add new keywords | ⭐ Easy | ⭐ Easy |
-| Change filter logic | ⭐⭐ Moderate | ⭐⭐⭐⭐ Complex |
-| Repurpose for different domain | ⭐⭐ Moderate | ⭐⭐⭐⭐⭐ Very Complex |
-| Add new languages | ⭐⭐ Moderate | ⭐⭐⭐ Challenging |
+| Add new keywords | Easy | Easy |
+| Change filter logic | Moderate | Complex |
+| Repurpose for different domain | Moderate | Very Complex |
+| Add new languages | Moderate | Challenging |
 
 ## 📦 Requirements
 
