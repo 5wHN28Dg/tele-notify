@@ -19,6 +19,45 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 * **Customizable filters**: Store your keywords and Telegram API keys in a JSON file.
 * **Multi-chat monitoring**: Watch multiple Telegram chats at once.
 
+## 🎯 Version Guide
+
+This project offers two versions to suit different needs:
+
+### **v2 (Current)** - Specialized Job Filter
+**Best for:** Filtering job postings with intelligent level detection
+- Two-stage filtering with inference logic
+- Entry-level vs. mid-level classification
+- Experience, certification, and responsibility pattern matching
+- Optimized for English/Arabic job market terminology
+- **Trade-off:** Highly tailored; requires significant modification for other use cases
+
+### **v1 (Legacy)** - General Message Filter
+**Best for:** Simple keyword-based filtering for any content type
+- Straightforward AND logic (level + role + location)
+- Easy to repurpose for different domains (e.g., real estate, events, products)
+- Minimal configuration required
+- **Trade-off:** Less intelligent; may miss nuanced matches
+
+📁 **Files:**
+- `main.py` - Current specialized version (v2)
+- `main_simple.py` - Original general-purpose version (v1)
+
+💡 **Which should you use?**
+- Filtering job postings specifically? → Use v2
+- Need a simple keyword filter for other content? → Use v1
+- Want to build something custom? → Start with v1 as a template
+
+---
+
+## 🔧 Customization Difficulty
+
+| Feature | v1 (Simple) | v2 (Specialized) |
+|---------|-------------|------------------|
+| Add new keywords | Easy | Easy |
+| Change filter logic | Moderate | Complex |
+| Repurpose for different domain | Moderate | Very Complex |
+| Add new languages | Moderate | Challenging |
+
 ## 📦 Requirements
 
 * Python 3.8+
@@ -73,7 +112,7 @@ tenacity
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
-> 📱 **Android Users:** lost in dependency hell(WIP).
+> 📱 **Android Users:** lost in dependency hell (WIP).
 
 ## 🛠 Configuration
 
@@ -129,14 +168,20 @@ The script will:
 
 ### Message Processing
 
-* [ ] **Implement** special handling for messages formatted like:
+* [x] **Improve** regex matching to detect messages formatted like:
   `#Basrah www.example.com/electrical-engineering-intern/`.
-* [ ] **Detect** chats your account is banned from by logging and analyzing chat IDs.
+* [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
+* [x] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
+  - ✅ Implemented two-stage filtering: explicit keywords (stage 1) + inference-based detection (stage 2)
+  - ✅ Entry-level: Matches if no experience/certification requirements found
+  - ✅ Mid-level: Matches if no experience/certification/responsibility requirements found
+  - ✅ Ambiguous messages forwarded to personal chat for manual review
 
 ### Reliability & Error Handling
 
 * [ ] **Review** and improve the retry mechanism.
-* [ ] **Set up** crash notifications (email, webhook, or other).
+* [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.🔄
+* [ ] **Add** logging for pattern match stages (which stage matched, which patterns triggered) for debugging? Maybe, we will see.
 
 ### CLI & User Experience
 
@@ -145,6 +190,8 @@ The script will:
   * [ ] **Show** progress bar for unread message processing.
   * [ ] **Display** processed message counts per chat and overall (over a time period).
   * [ ] **Display** forwarded message counts per chat and overall (over a time period).
+  * [ ] **Show** breakdown of matches by stage (stage 1 vs. stage 2 inference)?
+  * [ ] **Display** count of ambiguous messages forwarded for manual review.
   * [ ] **Highlight** important events (account bans, connection issues, etc.).
 
 ### Code Quality

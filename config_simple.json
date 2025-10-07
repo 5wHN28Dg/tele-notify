@@ -1,0 +1,13 @@
+{
+  "api_id": YOUR_API_ID,
+  "api_hash": "YOUR_API_HASH",
+  "target_chat": chat_id,
+  "chats": [chat_id, chat_id],
+  "level_keywords_en": ["keyword1", "keyword2"],
+  "level_keywords_ar": ["keyword3", "keyword4"],
+  "role_keywords_en": ["keyword1", "keyword2"],
+  "role_keywords_ar": ["keyword3", "keyword4"],
+  "location_keywords_en": ["keyword1", "keyword2"],
+  "location_keywords_ar": ["keyword3", "keyword4"],
+  "recent_messages": []
+}
