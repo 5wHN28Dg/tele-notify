@@ -128,7 +128,7 @@ location_pattern = build_hybrid_regex(
 experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
-not_a_job_pattern = re.compile("محتاج|((ابحث|باحث) عن) (عمل|وظيفة|مهنة)", re.IGNORECASE)
+not_a_job_pattern = re.compile("محتاج|((ابحث|باحث) عن) (فرصة )?(عمل|وظيفة|مهنة)", re.IGNORECASE)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
