@@ -128,7 +128,7 @@ location_pattern = build_hybrid_regex(
 experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
-not_a_job_pattern = re.compile("محتاج|((ابحث|باحث) عن) (فرصة )?(عمل|وظيفة|مهنة)", re.IGNORECASE)
+is_job_seeker_pattern = re.compile("محتاج|((ابحث|باحث) عن) (فرصة )?(عمل|وظيفة|مهنة)", re.IGNORECASE)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -151,7 +151,7 @@ async def check_for_a_match(message):
     logging.info(f"checked message: {message.id}")
     entry_level = entry_level_role_pattern.search(full_message)
     mid_level = mid_level_role_pattern.search(full_message)
-    if all([(entry_level or mid_level), location_pattern.search(full_message), not not_a_job_pattern.search(full_message)]):
+    if all([(entry_level or mid_level), location_pattern.search(full_message), not is_job_seeker_pattern.search(full_message)]):
         if level_pattern.search(full_message):  # this is stage 1
             return True, full_message
 
