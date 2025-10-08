@@ -21,7 +21,10 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 
 ## 🎯 Version Guide
 
-This project offers two versions to suit different needs:
+On October 7th, 2025, the project reached a divergence point — a moment where I had to choose between two paths:
+specificity, at the expense of ease of repurposing, or generality, at the expense of reliability for my current use case.
+
+In the end, I chose both. I wanted the strengths of each approach, so now this project provides two distinct versions, each tailored to different needs:
 
 ### **v2 (Current)** - Specialized Job Filter
 **Best for:** Filtering job postings with intelligent level detection
@@ -31,7 +34,7 @@ This project offers two versions to suit different needs:
 - Optimized for English/Arabic job market terminology
 - **Trade-off:** Highly tailored; requires significant modification for other use cases
 
-### **v1 (Legacy)** - General Message Filter
+### **v1 (Legacy)** - General-ish Message Filter
 **Best for:** Simple keyword-based filtering for any content type
 - Straightforward AND logic (level + role + location)
 - Easy to repurpose for different domains (e.g., real estate, events, products)
