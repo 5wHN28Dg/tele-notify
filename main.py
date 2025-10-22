@@ -7,6 +7,8 @@ import json
 import pytesseract
 import tempfile
 import os
+import requests
+from bs4 import BeautifulSoup
 from PIL import Image
 from tenacity import (
     stop_after_attempt,
@@ -44,6 +46,7 @@ recent_lock = asyncio.Lock()
 # chats to monitor
 chats = data["chats"]
 target_chat = data["target_chat"]
+special_chat = data["special_chat"]
 
 # keywords
 level_keywords_en = data["level_keywords_en"]
@@ -120,6 +123,15 @@ def build_certifications_regex(certifications):
     return re.compile(combined_pattern, re.IGNORECASE)
 
 
+apply_anyway_patterns = [
+    r"(even\s+if\s+(?:you|they)(?:\s+)?(?:are|do|(?:'|’)re)(?:n'?t|\s+not)\s+(?:an\sexact\s)?(?:meet|match|fulfil|check)\s+(?:to\s)?(?:every|all)\s+(?:listed\s)?(?:requirement|criteria|qualification|statement|(?:bullet\s)?point))",
+    r"((?:encourage|welcome|invite)\s+(?:you|applicants?|applications)\s+(?:(?:(?:(?:(?:to\s+)?(?:take\sthe\sleap\sand\s)?apply)|(?:with varied backgrounds and experiences)))|(?:.{0,44} who (?:may|do) not meet (?:every|all) listed requirement)))",
+    r"(if\s+(?:you'?re|you\s+are)\s+(?:excited|interested|passionate|enthusiastic).{0,40}(?:apply|consider\s+applying))",
+    r"((?:no candidate will|don(?:'|’)?t)\s+(?:tick|check|meet)\s+(?:every|all)(?:\ssingle)?\s+(?:box|requirement|qualification))",
+]
+combined_apply_anyway_pattern = "|".join(apply_anyway_patterns)
+
+
 # Compile patterns
 level_pattern = build_hybrid_regex(level_keywords_en, level_keywords_ar)
 entry_level_role_pattern = build_hybrid_regex(entry_level_role_en, entry_level_role_ar)
@@ -137,10 +149,12 @@ experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
 is_job_seeker_pattern = re.compile(
-    "(?:محتاج(?:ه|ة)|(?:(?:ابحث|باحث) عن)) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
+    "(?:محتاج(?:ه|ة)?|(?:(?:ابحث|باحث) عن)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
     re.IGNORECASE,
 )
 is_tuition_pattern = re.compile(r"(?:ال)?قسط السنوي", re.IGNORECASE)
+is_trivial_pattern = re.compile(r"تطوير مهارات (?:الحاسوب|الكمبيوتر)", re.IGNORECASE)
+is_apply_anyway_pattern = re.compile(combined_apply_anyway_pattern)
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -157,7 +171,7 @@ retry_transient = retry(
 
 # -------- helpers --------
 # check if the message passes the filters
-async def check_for_a_match(message):
+async def check_for_a_match(message, chat_id):
     full_message = await message_processor(message)
 
     logging.info(f"checked message: {message.id}")
@@ -174,8 +188,15 @@ async def check_for_a_match(message):
         if level_pattern.search(full_message):  # this is stage 1
             return True, full_message
 
-        experience = experience_pattern.search(full_message)
-        certification = certification_pattern.search(full_message)
+        if chat_id == special_chat:
+            full_message = await scrape_full_job(full_message)
+
+        if is_apply_anyway_pattern.search(full_message):
+            experience, certification = False, False
+        else:
+            experience = experience_pattern.search(full_message)
+            certification = certification_pattern.search(full_message)
+
         responsibilities = responsibilities_pattern.search(full_message)
 
         if entry_level and not any([experience, certification]):
@@ -219,6 +240,18 @@ def callback(current, total):
     print(
         "Downloaded", current, "out of", total, "bytes: {:.2%}".format(current / total)
     )
+
+
+async def scrape_full_job(full_message):
+    link_pattern = re.compile(r"https:\S+jobs\S+")
+    link = link_pattern.search(full_message)
+    headers = {"user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"}
+    r = requests.get(link.group(), headers=headers)
+    soup_alpha = BeautifulSoup(r.text, "html.parser")
+    job_description = soup_alpha.find("div", class_="wprt-container").get_text()
+    full_description = job_description + full_message
+
+    return full_description
 
 
 # compares the message to be sent with the last 10 sent messages
@@ -276,7 +309,7 @@ async def unread_messages_retriever():
             if dialog.id in chats and dialog.unread_count > 0 and dialog.message:
                 last_read_id = dialog.message.id - dialog.unread_count
                 async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                    is_match, full_message = await check_for_a_match(msg)
+                    is_match, full_message = await check_for_a_match(msg, dialog.id)
                     logging.info(
                         f"message {msg.id} from chat: {dialog.id} is {is_match}"
                     )
