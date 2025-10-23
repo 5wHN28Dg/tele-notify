@@ -152,7 +152,7 @@ is_job_seeker_pattern = re.compile(
     "(?:محتاج(?:ه|ة)?|(?:(?:ابحث|باحث) عن)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
     re.IGNORECASE,
 )
-is_tuition_pattern = re.compile(r"(?:ال)?قسط السنوي", re.IGNORECASE)
+is_tuition_pattern = re.compile(r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", re.IGNORECASE)
 is_trivial_pattern = re.compile(r"تطوير مهارات (?:الحاسوب|الكمبيوتر)", re.IGNORECASE)
 is_apply_anyway_pattern = re.compile(combined_apply_anyway_pattern)
 
@@ -243,7 +243,7 @@ def callback(current, total):
 
 
 async def scrape_full_job(full_message):
-    link_pattern = re.compile(r"https:\S+jobs\S+")
+    link_pattern = re.compile(r"https:\/\/\S+jobs\/\S+")
     link = link_pattern.search(full_message)
     headers = {"user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"}
     r = requests.get(link.group(), headers=headers)
