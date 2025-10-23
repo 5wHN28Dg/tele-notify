@@ -6,6 +6,10 @@
 
 # tele-notify
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Telethon](https://img.shields.io/badge/Library-Telethon-green)](https://docs.telethon.dev/)
+
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
@@ -32,7 +36,7 @@ In the end, I chose both. I wanted the strengths of each approach, so now this p
 - Entry-level vs. mid-level classification
 - Experience, certification, and responsibility pattern matching
 - Optimized for English/Arabic job market terminology
-- **Trade-off:** Highly tailored; requires significant modification for other use cases
+- **Trade-off:** Highly tailored for my very specific application; requires significant modification for other use cases but only some adjustments to be used as a specialized job filtering
 
 ### **v1 (Legacy)** - General-ish Message Filter
 **Best for:** Simple keyword-based filtering for any content type
@@ -78,6 +82,8 @@ pytesseract
 scikit-learn
 cryptg
 tenacity
+Beautiful Soup
+lxml
 ```
 
 ## ⚙️ Installation
@@ -88,7 +94,7 @@ tenacity
    git clone https://github.com/5wHN28Dg/tele-notify.git
    cd tele-notify
    ```
-2. create a virutal environment:
+2. create a virtual environment:
 
    ```bash
    python3 -m venv venv
@@ -174,7 +180,7 @@ The script will:
 * [x] **Improve** regex matching to detect messages formatted like:
   `#Basrah www.example.com/electrical-engineering-intern/`.
 * [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
-* [x] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
+* [x] **Rethink & test** job level identification logic for posts without clear level markers.
   - ✅ Implemented two-stage filtering: explicit keywords (stage 1) + inference-based detection (stage 2)
   - ✅ Entry-level: Matches if no experience/certification requirements found
   - ✅ Mid-level: Matches if no experience/certification/responsibility requirements found
@@ -185,6 +191,9 @@ The script will:
 * [ ] **Review** and improve the retry mechanism.
 * [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.🔄
 * [ ] **Add** logging for pattern match stages (which stage matched, which patterns triggered) for debugging? Maybe, we will see.
+* [ ] switch from `requests` to `aiohttp` for a truly async operation
+* [ ] reduce false positives 🔄
+* [x] add web scraping for ambiguous job posts
 
 ### CLI & User Experience
 
