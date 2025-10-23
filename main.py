@@ -330,7 +330,7 @@ async def unread_messages_retriever():
 @retry_transient
 async def new_message_handler(event):
     msg = event.message
-    is_match, full_message = await check_for_a_match(msg)
+    is_match, full_message = await check_for_a_match(msg, msg.chat_id)
     logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {is_match}")
 
     if is_match and not await check_for_duplicates(full_message):
