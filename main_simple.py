@@ -1,5 +1,12 @@
 from telethon import TelegramClient, events, errors
-import logging, re, asyncio, io, json, pytesseract, tempfile, os
+import logging
+import re
+import asyncio
+import io
+import json
+import pytesseract
+import tempfile
+import os
 from PIL import Image
 from tenacity import (
     stop_after_attempt,

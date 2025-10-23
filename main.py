@@ -247,7 +247,7 @@ async def scrape_full_job(full_message):
     link = link_pattern.search(full_message)
     headers = {"user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"}
     r = requests.get(link.group(), headers=headers)
-    soup_alpha = BeautifulSoup(r.text, "html.parser")
+    soup_alpha = BeautifulSoup(r.text, "lxml")
     job_description = soup_alpha.find("div", class_="wprt-container").get_text()
     full_description = job_description + full_message
 
