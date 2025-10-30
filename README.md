@@ -121,7 +121,7 @@ lxml
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
-> 📱 **Android Users:** lost in dependency hell (WIP).
+> 📱 **Android Users:** ~lost in dependency hell~ (coming soon!).
 
 ## 🛠 Configuration
 
