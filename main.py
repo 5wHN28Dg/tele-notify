@@ -149,7 +149,7 @@ experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
 is_job_seeker_pattern = re.compile(
-    "(?:محتاج(?:ه|ة)?|(?:(?:ابحث|باحث) عن)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
+    "(?:محتاج(?:ه|ة)?|(?:(?:(?:ا|أ)بحث|باحث) عن)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
     re.IGNORECASE,
 )
 is_tuition_pattern = re.compile(r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", re.IGNORECASE)
