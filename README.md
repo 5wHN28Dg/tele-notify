@@ -185,6 +185,8 @@ The script will:
   - ✅ Entry-level: Matches if no experience/certification requirements found
   - ✅ Mid-level: Matches if no experience/certification/responsibility requirements found
   - ✅ Ambiguous messages forwarded to personal chat for manual review
+* [ ] **Ethically Monitor & Scrape** channels that have message forwarding disabled.
+  - share the message link with a brief summary (job title, location)
 
 ### Reliability & Error Handling
 
