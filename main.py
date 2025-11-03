@@ -152,7 +152,9 @@ is_job_seeker_pattern = re.compile(
     "(?:محتاج(?:ه|ة)?|(?:(?:(?:ا|أ)بحث|باحث) عن)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
     re.IGNORECASE,
 )
-is_tuition_pattern = re.compile(r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", re.IGNORECASE)
+is_tuition_pattern = re.compile(
+    r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", re.IGNORECASE
+)
 is_trivial_pattern = re.compile(r"تطوير مهارات (?:الحاسوب|الكمبيوتر)", re.IGNORECASE)
 is_apply_anyway_pattern = re.compile(combined_apply_anyway_pattern)
 
@@ -186,7 +188,7 @@ async def check_for_a_match(message, chat_id):
         ]
     ):
         if level_pattern.search(full_message):  # this is stage 1
-            return True, full_message
+            return True, full_message, entry_level, mid_level
 
         if chat_id == special_chat:
             full_message = await scrape_full_job(full_message)
@@ -200,14 +202,14 @@ async def check_for_a_match(message, chat_id):
         responsibilities = responsibilities_pattern.search(full_message)
 
         if entry_level and not any([experience, certification]):
-            return True, full_message
+            return True, full_message, entry_level, mid_level
 
         if mid_level and not any([experience, certification, responsibilities]):
-            return True, full_message
+            return True, full_message, entry_level, mid_level
 
         await message.forward_to("me")
         logging.info("forwarded the message to you, check it out!")
-    return False, full_message
+    return False, full_message, entry_level, mid_level
 
 
 # checks the message type then makes it ready for processing
@@ -269,8 +271,14 @@ async def check_for_duplicates(message_text):
 
 
 @retry_transient
-async def message_forwarder(msg, full_message):
-    await msg.forward_to(target_chat)
+async def message_forwarder(msg, full_message, entry_level, mid_level):
+    if not msg.noforwards:
+        await msg.forward_to(target_chat)
+    else:
+        await client.send_message(
+            target_chat,
+            f"match: {entry_level or mid_level}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
+        )
     await add_to_recent(full_message)
     await asyncio.sleep(1)
 
@@ -309,12 +317,19 @@ async def unread_messages_retriever():
             if dialog.id in chats and dialog.unread_count > 0 and dialog.message:
                 last_read_id = dialog.message.id - dialog.unread_count
                 async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                    is_match, full_message = await check_for_a_match(msg, dialog.id)
+                    (
+                        is_match,
+                        full_message,
+                        entry_level,
+                        mid_level,
+                    ) = await check_for_a_match(msg, dialog.id)
                     logging.info(
                         f"message {msg.id} from chat: {dialog.id} is {is_match}"
                     )
                     if is_match and not await check_for_duplicates(full_message):
-                        await message_forwarder(msg, full_message)
+                        await message_forwarder(
+                            msg, full_message, entry_level, mid_level
+                        )
                 await client.send_read_acknowledge(dialog.id)
                 logging.info(
                     f"completed processing unread messages for chat: {dialog.id} with name {dialog.title}"
@@ -330,11 +345,13 @@ async def unread_messages_retriever():
 @retry_transient
 async def new_message_handler(event):
     msg = event.message
-    is_match, full_message = await check_for_a_match(msg, msg.chat_id)
+    is_match, full_message, entry_level, mid_level = await check_for_a_match(
+        msg, msg.chat_id
+    )
     logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {is_match}")
 
     if is_match and not await check_for_duplicates(full_message):
-        await message_forwarder(msg, full_message)
+        await message_forwarder(msg, full_message, entry_level, mid_level)
     await msg.mark_read()
 
 
