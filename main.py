@@ -207,7 +207,13 @@ async def check_for_a_match(message, chat_id):
         if mid_level and not any([experience, certification, responsibilities]):
             return True, full_message, entry_level, mid_level
 
-        await message.forward_to("me")
+        if not message.chat.noforwards:
+            await message.forward_to("me")
+        else:
+            await client.send_message(
+                "me",
+                f"match: {entry_level.group() or mid_level.group()}\npost link: https://t.me/{message.chat.username}/{message.id}",
+            )
         logging.info("forwarded the message to you, check it out!")
     return False, full_message, entry_level, mid_level
 
@@ -244,6 +250,7 @@ def callback(current, total):
     )
 
 
+@retry_transient
 async def scrape_full_job(full_message):
     link_pattern = re.compile(r"https:\/\/\S+jobs\/\S+")
     link = link_pattern.search(full_message)
@@ -272,12 +279,12 @@ async def check_for_duplicates(message_text):
 
 @retry_transient
 async def message_forwarder(msg, full_message, entry_level, mid_level):
-    if not msg.noforwards:
+    if not msg.chat.noforwards:
         await msg.forward_to(target_chat)
     else:
         await client.send_message(
             target_chat,
-            f"match: {entry_level or mid_level}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
+            f"match: {entry_level.group() or mid_level.group()}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
         )
     await add_to_recent(full_message)
     await asyncio.sleep(1)
