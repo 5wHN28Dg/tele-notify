@@ -91,7 +91,7 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
 
 # Function to build experience regex pattern
 def build_experience_regex():
-    pattern = r"(\d+((-\d+)?|\+)? years(?:’)? (of )?(?:relevant |proven |related )?experience|experience required)|(خبرة(?: عملية)? لا ?تقل عن|(?:يشترط|يجب) تواجد خبرة|خبر(?:ه|ة) (?:سنة|سنتين|[\d٠-٩]+)|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
+    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?experience|experience required))|(?:خبرة(?: عملية)?(?:\sالمطلوبة:?\s?) لا ?تقل عن|(?:يشترط|يجب) تواجد خبرة|خبر(?:ه|ة) (≥ )?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+)|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
     return re.compile(pattern, re.IGNORECASE)
 
 
