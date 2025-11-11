@@ -168,49 +168,11 @@ The script will:
    * Skip if it’s a duplicate of one of your last 10 messages.
    * Forward it to your target chat.
 
-## 📝 To Do List:
-* [x] **Fix** race conditions when updating `recent_messages` and writing to `config.json`.
-
-### Documentation & Support
-
-* [ ] **Add** a FAQ section in the wiki with a table of contents.
-
-### Message Processing
-
-* [x] **Improve** regex matching to detect messages formatted like:
-  `#Basrah www.example.com/electrical-engineering-intern/`.
-* [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
-* [x] **Rethink & test** job level identification logic for posts without clear level markers.
-  - ✅ Implemented two-stage filtering: explicit keywords (stage 1) + inference-based detection (stage 2)
-  - ✅ Entry-level: Matches if no experience/certification requirements found
-  - ✅ Mid-level: Matches if no experience/certification/responsibility requirements found
-  - ✅ Ambiguous messages forwarded to personal chat for manual review
-* [x] **Fallback** to message link sharing for the channels that have message forwarding disabled.
-  - share the message link with a brief summary (job title, location)
-
-### Reliability & Error Handling
-
-* [ ] **Review** and improve the retry mechanism.
-* [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.🔄
-* [ ] **Add** logging for pattern match stages (which stage matched, which patterns triggered) for debugging? Maybe, we will see.
-* [ ] switch from `requests` to `aiohttp` for a truly async operation
-* [ ] reduce false positives 🔄
-* [x] add web scraping for ambiguous job posts
-
-### CLI & User Experience
-
-* [ ] **Create** a modern CLI with real-time statistics instead of plain logs:
-
-  * [ ] **Show** progress bar for unread message processing.
-  * [ ] **Display** processed message counts per chat and overall (over a time period).
-  * [ ] **Display** forwarded message counts per chat and overall (over a time period).
-  * [ ] **Show** breakdown of matches by stage (stage 1 vs. stage 2 inference)?
-  * [ ] **Display** count of ambiguous messages forwarded for manual review.
-  * [ ] **Highlight** important events (account bans, connection issues, etc.).
-
-### Code Quality
-
-* [ ] **Analyze** the codebase for a possible second refactoring.
+## 📈 Roadmap:
+* Reliability improvements (crash handling, smarter retries)
+* Modern CLI with real-time job stats
+* Enhanced web scraping and message context extraction
+* Documentation and onboarding improvements
 
 ## 📜 License
 
