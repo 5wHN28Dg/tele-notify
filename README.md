@@ -168,11 +168,13 @@ The script will:
    * Skip if it’s a duplicate of one of your last 10 messages.
    * Forward it to your target chat.
 
-## 📈 Roadmap:
-* Reliability improvements (crash handling, smarter retries)
-* Modern CLI with real-time job stats
-* Enhanced web scraping and message context extraction
-* Documentation and onboarding improvements
+## 🗺️ Roadmap
+
+Development is organized by milestones.
+
+See full progress → [GitHub Milestones](https://github.com/5wHN28Dg/tele-notify/milestones)
+
+See what's being worked on → [Project Board](https://github.com/users/5wHN28Dg/projects/1)
 
 ## 📜 License
 
