@@ -212,7 +212,7 @@ async def check_for_a_match(message, chat_id):
         else:
             await client.send_message(
                 "me",
-                f"match: {entry_level.group() or mid_level.group()}\npost link: https://t.me/{message.chat.username}/{message.id}",
+                f"match: {entry_level.group() if entry_level else mid_level.group()}\npost link: https://t.me/{message.chat.username}/{message.id}",
             )
         logging.info("forwarded the message to you, check it out!")
     return False, full_message, entry_level, mid_level
@@ -284,7 +284,7 @@ async def message_forwarder(msg, full_message, entry_level, mid_level):
     else:
         await client.send_message(
             target_chat,
-            f"match: {entry_level.group() or mid_level.group()}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
+            f"match: {entry_level.group() if entry_level else mid_level.group()}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
         )
     await add_to_recent(full_message)
     await asyncio.sleep(1)
