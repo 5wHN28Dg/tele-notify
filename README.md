@@ -123,7 +123,7 @@ lxml
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
-> 📱 **Android Users:** ~lost in dependency hell~ (coming soon!).
+> 📱 **Android Users:** check the [wiki](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions) for the detailed instructions.
 
 ## 🛠 Configuration
 
