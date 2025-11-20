@@ -169,6 +169,7 @@ The script will:
    * Check for required keywords.
    * Skip if it’s a duplicate of one of your last 10 messages.
    * Forward it to your target chat.
+* if you have any questions, you may want to check the [FAQ](https://github.com/5wHN28Dg/tele-notify/wiki/FAQ)
 
 ## 🗺️ Roadmap
 
