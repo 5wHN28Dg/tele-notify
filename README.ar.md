@@ -8,10 +8,16 @@
 
 # tele-notify
 
-برنامج مكتوب بلغة Python يقوم بمراقبة محادثات Telegram المحددة وتحويل الرسائل التي تطابق عوامل التصفية المخصصة الخاصة بك إلى محادثة أخرى.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Telethon](https://img.shields.io/badge/Library-Telethon-green)](https://docs.telethon.dev/)
+
+[![asciicast](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5.svg)](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5)
+
+سكربت مكتوب بلغة Python يقوم بمراقبة محادثات Telegram المحددة وتحويل الرسائل التي تطابق عوامل التصفية المخصصة الخاصة بك إلى محادثة أخرى.
 يدعم أيضًا خاصية OCR للتعرف على النصوص في الصور المرفقة ويتجنب إعادة إرسال الرسائل المكررة.
 
-**⚠️ تنويه**: هذا المشروع هو حل مخصص لمشكلة محددة واجهتها، تم تصميمه لتلبية احتياجاتي الشخصية فقط.
+**⚠️ تنويه**: هذا المشروع هو حل مخصص لمشكلة محددة واجهتها، تم تصميمه لتلبية احتياجاتي الشخصية فقط (اقرأ المقالة التي قمت بنشرها [هنا](https://medium.com/@TogataMirio/a-needle-in-a-haystack-and-the-deadly-pursuit-to-prove-your-worth-88c34f1df79f)).
 لم يُؤخذ بعين الاعتبار استخدامه في المهام ذات الحجم الكبير أو الحالات التي قد تصل إلى حدود معدلات استخدام API.
 لم يتم اضافة اي ميزات لا احتاجها او استعملها شخصياً، لذا قد تحتاج إلى تعديل الكود ليتناسب مع احتياجك.
 
@@ -89,6 +95,8 @@ pytesseract
 scikit-learn
 cryptg
 tenacity
+Beautiful Soup
+lxml
 ````
 
 <div dir="rtl">
@@ -152,7 +160,7 @@ brew install tesseract tesseract-lang
 
 * **ملاحظة**: إذا واجهت مشاكل في تثبيت Tesseract، راجع [الوثائق الرسمية](https://tesseract-ocr.github.io/tessdoc/Installation.html).
 
-> 📱 **مستخدمي الاندرويد**: ضائع بال dependency hell يعني WIP
+> 📱 **مستخدمي الاندرويد**: لكافة التفاصيل تحقق من [الويكي](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions)
 
 ## 🛠 الإعداد
 
@@ -216,6 +224,7 @@ python main.py
    * التحقق من الكلمات المفتاحية المطلوبة.
    * تجاهل الرسالة في حال مطابقتها لواحدة من اخر ١٠ رسائل مرسلة.
    * إعادة توجيهها إلى المحادثة الهدف في حال استوفائها للشروط اعلاه
+* اذا كان لديك اي سؤال يمكنك اخذ نظرة على قسم [الاسئلة الشائعة](https://github.com/5wHN28Dg/tele-notify/wiki/FAQ)
 
 </div>
 
