@@ -27,7 +27,7 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 
 On Oct 7th, 2025, this project split into two paths:
 
-| Feature | v1 (Simple) | v2 (Specialized) |
+| Feature | v1 (Simple) `main_simple.py` | v2 (Specialized) `main.py` |
 |---------|-------------|------------------|
 | Best For | 📢 General Monitoring | 💼 Job Hunting |
 | Logic | Simple Keywords (A + B + C) | Smart Inference (Experience, Role, Level) |
@@ -79,21 +79,10 @@ On Oct 7th, 2025, this project split into two paths:
 
 ## 🛠 Configuration
 
-1. Run this code (after you fill in your API ID and API Hash) to get a list of your chat list with their names and **IDs**:
-   ```python
-   from telethon import TelegramClient
+1. Run `get_chat_ids.py` to get a list of your chat list with their names and **IDs** (after you fill in your API ID and API Hash):
 
-   api_id = YOUR_API_ID
-   api_hash = 'YOUR_API_HASH'
-
-   client = TelegramClient('session_name', api_id, api_hash)
-
-   async def main():
-       async for dialog in client.iter_dialogs():
-           print('{:>14}: {}'.format(dialog.id, dialog.title))
-
-   with client:
-    client.loop.run_until_complete(main())
+   ```bash
+   python3 get_chat_ids.py
    ```
 2. Open `config.json` file in the project directory and fill it with the necessary information:
 
