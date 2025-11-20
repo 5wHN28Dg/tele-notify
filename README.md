@@ -15,8 +15,6 @@
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
-**⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs, read the full article [here](https://medium.com/@TogataMirio/a-needle-in-a-haystack-and-the-deadly-pursuit-to-prove-your-worth-88c34f1df79f). It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
-
 ## ✨ Features
 
 * **Keyword-based filtering**: Matches at least one keyword from each of three keyword categories.
@@ -27,66 +25,20 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 
 ## 🎯 Version Guide
 
-On October 7th, 2025, the project reached a divergence point — a moment where I had to choose between two paths:
-specificity, at the expense of ease of repurposing, or generality, at the expense of reliability for my current use case.
-
-In the end, I chose both. I wanted the strengths of each approach, so now this project provides two distinct versions, each tailored to different needs:
-
-### **v2 (Current)** - Specialized Job Filter
-**Best for:** Filtering job postings with intelligent level detection
-- Two-stage filtering with inference logic
-- Entry-level vs. mid-level classification
-- Experience, certification, and responsibility pattern matching
-- Optimized for English/Arabic job market terminology
-- **Trade-off:** Highly tailored for my very specific application; requires significant modification for other use cases but only some adjustments to be used as a specialized job filtering
-
-### **v1 (Legacy)** - General-ish Message Filter
-**Best for:** Simple keyword-based filtering for any content type
-- Straightforward AND logic (level + role + location)
-- Easy to repurpose for different domains (e.g., real estate, events, products)
-- Minimal configuration required
-- **Trade-off:** Less intelligent; may miss nuanced matches
-
-📁 **Files:**
-- `main.py` - Current specialized version (v2)
-- `main_simple.py` - Original general-purpose version (v1)
-
-💡 **Which should you use?**
-- Filtering job postings specifically? → Use v2
-- Need a simple keyword filter for other content? → Use v1
-- Want to build something custom? → Start with v1 as a template
-
----
-
-## 🔧 Customization Difficulty
+On Oct 7th, 2025, this project split into two paths:
 
 | Feature | v1 (Simple) | v2 (Specialized) |
 |---------|-------------|------------------|
-| Add new keywords | Easy | Easy |
-| Change filter logic | Moderate | Complex |
-| Repurpose for different domain | Moderate | Very Complex |
-| Add new languages | Moderate | Challenging |
+| Best For | 📢 General Monitoring | 💼 Job Hunting |
+| Logic | Simple Keywords (A + B + C) | Smart Inference (Experience, Role, Level) |
+| Complexity | Low (Easy to customize) | High (Harder to customize) |
+| Use Case | "Find me any message with 'Apartment' and 'Rent'" | "Find me a Mid-Level Python job" |
 
 ## 📦 Requirements
 
 * Python 3.8+
 * Telegram API credentials (API ID & API Hash, check [Telethon documentation](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) for detailed instructions)
 * `tesseract-ocr` for OCR functionality
-
-## 📚 Dependencies
-
-Python libraries used:
-
-```txt
-telethon
-pillow
-pytesseract
-scikit-learn
-cryptg
-tenacity
-Beautiful Soup
-lxml
-```
 
 ## ⚙️ Installation
 
@@ -178,6 +130,8 @@ Development is organized by milestones.
 See full progress → [GitHub Milestones](https://github.com/5wHN28Dg/tele-notify/milestones)
 
 See what's being worked on → [Project Board](https://github.com/users/5wHN28Dg/projects/1)
+
+**⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs, read the full article [here](https://medium.com/@TogataMirio/a-needle-in-a-haystack-and-the-deadly-pursuit-to-prove-your-worth-88c34f1df79f). It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
 
 ## 📜 License
 
