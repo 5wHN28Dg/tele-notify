@@ -15,6 +15,14 @@
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
+> ### The elevator pitch:
+> 
+> **Me**: "Here is my phone. You see these 31 Telegram channels? I want you to find me a job. It must be for fresh grads, in my city, specifically for a B.Sc. in Control & Computer Engineering. Oh, and check every single one of them every day."
+> 
+> **Friend**: "Bro, are you serious?!"
+> 
+> **Me**: "Exactly. That is why I wrote this code."
+
 ## ✨ Features
 
 * **Keyword-based filtering**: Matches at least one keyword from each of three keyword categories.
@@ -82,7 +90,7 @@ On Oct 7th, 2025, this project split into two paths:
 1. Run `get_chat_ids.py` to get a list of your chat list with their names and **IDs** (after you fill in your API ID and API Hash):
 
    ```bash
-   python3 get_chat_ids.py
+   python get_chat_ids.py
    ```
 2. Open `config.json` file in the project directory and fill it with the necessary information:
 
