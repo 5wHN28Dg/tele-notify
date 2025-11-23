@@ -15,7 +15,7 @@
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
-> ### The elevator pitch:
+> ### Elevator pitch:
 > 
 > **Me**: "Here is my phone. You see these 31 Telegram channels? I want you to find me a job. It must be for fresh grads, in my city, specifically for a B.Sc. in Control & Computer Engineering. Oh, and check every single one of them every day."
 > 
