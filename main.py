@@ -1,6 +1,7 @@
 from telethon import TelegramClient, events, errors
 import logging
 import re
+from urlextract import URLExtract
 import asyncio
 import io
 import json
@@ -157,6 +158,7 @@ is_tuition_pattern = re.compile(
 )
 is_trivial_pattern = re.compile(r"تطوير مهارات (?:الحاسوب|الكمبيوتر)", re.IGNORECASE)
 is_apply_anyway_pattern = re.compile(combined_apply_anyway_pattern)
+extractor = URLExtract()
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -269,11 +271,18 @@ async def check_for_duplicates(message_text):
     vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
     vectors = vectorizer.fit_transform(text)
 
+    link_in_message = extractor.find_urls(message_text)
     # Compare new message with each recent message
     for i in range(len(recent_messages)):
         similarity = cosine_similarity(vectors[i : i + 1], vectors[-1:])[0, 0]
         if similarity > 0.8:
             return True  # Duplicate found
+
+        link_in_recent = extractor.find_urls(recent_messages[i])
+
+        if link_in_message and link_in_recent:
+            if any(link in link_in_message for link in link_in_recent):
+                return True  # Duplicate found
     return False
 
 
