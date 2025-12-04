@@ -15,17 +15,11 @@
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
 
-> ### Elevator pitch:
-> 
-> **Me**: "Here is my phone. You see these 31 Telegram channels? I want you to find me a job. It must be for fresh grads, in my city, specifically for a B.Sc. in Control & Computer Engineering. Oh, and check every single one of them every day."
-> 
-> **Friend**: "Bro, are you serious?!"
-> 
-> **Me**: "Exactly. That is why I wrote this code."
-
 ## ✨ Features
 
-* **Keyword-based filtering**: Matches at least one keyword from each of three keyword categories.
+* **2 filtering systems**: 
+    * v1: Matches at least one keyword from each of three keyword categories.
+    * v2+: **Evolved filtering system**: Started as simple keyword matching, now handles role-level detection, experience patterns, certification requirements, and all the edge cases you discover when filtering real job posts in the wild.
 * **Image text recognition**: Downloads attached images and extracts text using OCR (`pytesseract`).
 * **Duplicate prevention**: Checks your last 10 forwarded messages before sending a new one.
 * **Customizable filters**: Store your keywords and Telegram API keys in a JSON file.
