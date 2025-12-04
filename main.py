@@ -1,24 +1,25 @@
-from telethon import TelegramClient, events, errors
-import logging
-import re
-from urlextract import URLExtract
 import asyncio
 import io
 import json
-import pytesseract
-import tempfile
+import logging
 import os
-import requests
+import re
+import tempfile
+
+import aiohttp
+import pytesseract
 from bs4 import BeautifulSoup
 from PIL import Image
-from tenacity import (
-    stop_after_attempt,
-    wait_random_exponential,
-    retry_if_exception_type,
-    retry,
-)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from telethon import TelegramClient, errors, events
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
+from urlextract import URLExtract
 
 # logging for easier debugging
 logging.basicConfig(
@@ -175,7 +176,7 @@ retry_transient = retry(
 
 # -------- helpers --------
 # check if the message passes the filters
-async def check_for_a_match(message, chat_id):
+async def check_for_a_match(message):
     full_message = await message_processor(message)
 
     logging.info(f"checked message: {message.id}")
@@ -191,9 +192,6 @@ async def check_for_a_match(message, chat_id):
     ):
         if level_pattern.search(full_message):  # this is stage 1
             return True, full_message, entry_level, mid_level
-
-        if chat_id == special_chat:
-            full_message = await scrape_full_job(full_message)
 
         if is_apply_anyway_pattern.search(full_message):
             experience, certification = False, False
@@ -216,7 +214,7 @@ async def check_for_a_match(message, chat_id):
                 "me",
                 f"match: {entry_level.group() if entry_level else mid_level.group()}\npost link: https://t.me/{message.chat.username}/{message.id}",
             )
-        logging.info("forwarded the message to you, check it out!")
+        logging.info("forwarded the message to you, check it out 🤔")
     return False, full_message, entry_level, mid_level
 
 
@@ -229,9 +227,13 @@ async def message_processor(msg):
         except Exception as e:
             logging.error(f"OCR failed: {e}")
 
+    link_text = (
+        await scrape_full_job(msg.raw_text, image_text) or "" if msg.raw_text else ""
+    )
+
     text_content = msg.raw_text or ""
-    full_message = image_text + " " + text_content
-    logging.info(f"Processed message: {msg.id}")
+    full_message = image_text + " " + text_content + " " + link_text
+    logging.info(f"extracted the full text of message: {msg.id}")
     return full_message
 
 
@@ -253,16 +255,69 @@ def callback(current, total):
 
 
 @retry_transient
-async def scrape_full_job(full_message):
-    link_pattern = re.compile(r"https:\/\/\S+jobs\/\S+")
-    link = link_pattern.search(full_message)
-    headers = {"user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"}
-    r = requests.get(link.group(), headers=headers)
-    soup_alpha = BeautifulSoup(r.text, "lxml")
-    job_description = soup_alpha.find("div", class_="wprt-container").get_text()
-    full_description = job_description + full_message
+async def scrape_full_job(msg, image_text):
+    links_in_msg: list = extractor.find_urls(msg)
+    job_description = ""
+    link_pattern = re.compile(
+        r"(?:https:\/\/)?(?:www\.)?(?:(iqjscout\.com/jobs\/\S+\/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs\S+/))"
+    )
+    if links_in_msg:
+        fullish_msg = msg + " " + image_text
+        filler_pattern = re.compile(
+            r"(?:(check\sout\sthis\sjob\sat\s\S+)|(ألقِ نظرة على هذه الوظيفة.{0,})|التقديم عبر رابط LinkedIn):",
+            re.IGNORECASE,
+        )
+        ambiguous_pattern = re.compile(r"مهندس(?:ين)? (?:فريش|تحت التدريب)")
+        entry_level = entry_level_role_pattern.search(fullish_msg)
+        mid_level = mid_level_role_pattern.search(fullish_msg)
+        location = location_pattern.search(fullish_msg)
+        subtractor = [
+            entry_level.group() if entry_level else "",
+            mid_level.group() if mid_level else "",
+            location.group() if location else "",
+            filler_pattern.search(fullish_msg).group()
+            if filler_pattern.search(fullish_msg)
+            else "",
+            ambiguous_pattern.search(fullish_msg).group()
+            if ambiguous_pattern.search(fullish_msg)
+            else "",
+        ]
+        remaining = fullish_msg
+        for sub in subtractor:
+            if sub:
+                remaining = remaining.replace(sub, "")
+        for link in links_in_msg:
+            remaining = remaining.replace(link, "")
+            match = link_pattern.search(link)
+            if match and len(remaining) <= 10:
+                headers = {
+                    "user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(link, headers=headers) as response:
+                        soup_alpha = BeautifulSoup(await response.text(), "lxml")
+                # iraq job scout
+                if match.group(1) and all([(entry_level or mid_level), location]):
+                    job_description = soup_alpha.find(
+                        "div", class_="job-desc"
+                    ).get_text()
+                    logging.info("link scraped successfully 🌐")
+                # LinkedIn post
+                elif match.group(2):
+                    job_description = soup_alpha.find(
+                        "div",
+                        class_="attributed-text-segment-list__container relative mt-1 mb-1.5 babybear:mt-0 babybear:mb-0.5",
+                    ).get_text()
+                    logging.info("link scraped successfully 🌐")
+                # LinkedIn job post
+                elif match.group(3):
+                    job_description = soup_alpha.find(
+                        "div",
+                        class_="show-more-less-html__markup show-more-less-html__markup--clamp-after-5 relative overflow-hidden",
+                    ).get_text()
+                    logging.info("link scraped successfully 🌐")
 
-    return full_description
+    return job_description or None
 
 
 # compares the message to be sent with the last 10 sent messages
@@ -276,12 +331,14 @@ async def check_for_duplicates(message_text):
     for i in range(len(recent_messages)):
         similarity = cosine_similarity(vectors[i : i + 1], vectors[-1:])[0, 0]
         if similarity > 0.8:
+            logging.info(f"sorry this is a fluke, similarity is at {similarity}")
             return True  # Duplicate found
 
         link_in_recent = extractor.find_urls(recent_messages[i])
 
         if link_in_message and link_in_recent:
             if any(link in link_in_message for link in link_in_recent):
+                logging.info("another fluke, matching URL")
                 return True  # Duplicate found
     return False
 
@@ -295,6 +352,7 @@ async def message_forwarder(msg, full_message, entry_level, mid_level):
             target_chat,
             f"match: {entry_level.group() if entry_level else mid_level.group()}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
         )
+    logging.info("Message forwarded 🎉")
     await add_to_recent(full_message)
     await asyncio.sleep(1)
 
@@ -338,10 +396,9 @@ async def unread_messages_retriever():
                         full_message,
                         entry_level,
                         mid_level,
-                    ) = await check_for_a_match(msg, dialog.id)
-                    logging.info(
-                        f"message {msg.id} from chat: {dialog.id} is {is_match}"
-                    )
+                    ) = await check_for_a_match(msg)
+                    mark = "✅" if is_match else "❌"
+                    logging.info(f"message {msg.id} from chat: {dialog.id} is {mark}")
                     if is_match and not await check_for_duplicates(full_message):
                         await message_forwarder(
                             msg, full_message, entry_level, mid_level
@@ -361,10 +418,9 @@ async def unread_messages_retriever():
 @retry_transient
 async def new_message_handler(event):
     msg = event.message
-    is_match, full_message, entry_level, mid_level = await check_for_a_match(
-        msg, msg.chat_id
-    )
-    logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {is_match}")
+    is_match, full_message, entry_level, mid_level = await check_for_a_match(msg)
+    mark = "✅" if is_match else "❌"
+    logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {mark}")
 
     if is_match and not await check_for_duplicates(full_message):
         await message_forwarder(msg, full_message, entry_level, mid_level)
