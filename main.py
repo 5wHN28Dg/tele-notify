@@ -79,8 +79,8 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
         parts.append(en_pattern)
     if ar_list:
         parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
-        if special_patterns:
-            parts.append(r"(?:" + "|".join(special_patterns) + r")")
+    if special_patterns:
+        parts.append(r"(?:" + "|".join(special_patterns) + r")")
     return (
         re.compile(
             r"(?<!senior[\s_-])" + "|".join(parts) if mid_level else "|".join(parts),
@@ -93,7 +93,7 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
 
 # Function to build experience regex pattern
 def build_experience_regex():
-    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?experience|experience required))|(?:خبرة(?: عملية)?(?:\sالمطلوبة:?\s?)? (?:لا تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|خبر(?:ه|ة) (≥ )?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+)|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
+    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?experience|experience required))|(?:خبرة(?: عملية)?(?:\sالمطلوبة:?\s?)? (?:لا تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|خبر(?:ه|ة) (≥ )?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
     return re.compile(pattern, re.IGNORECASE)
 
 
@@ -157,7 +157,10 @@ is_job_seeker_pattern = re.compile(
 is_tuition_pattern = re.compile(
     r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", re.IGNORECASE
 )
-is_trivial_pattern = re.compile(r"تطوير مهارات (?:الحاسوب|الكمبيوتر)", re.IGNORECASE)
+is_trivial_pattern = re.compile(
+    r"تطوير مهارات (?:الحاسوب|الكمبيوتر)|عروض نهاية السنة|تخفيضات حصرية|اسئلة اختبار شركة",
+    re.IGNORECASE,
+)
 is_apply_anyway_pattern = re.compile(combined_apply_anyway_pattern)
 extractor = URLExtract()
 
@@ -188,6 +191,7 @@ async def check_for_a_match(message):
             location_pattern.search(full_message),
             not is_job_seeker_pattern.search(full_message),
             not is_tuition_pattern.search(full_message),
+            not is_trivial_pattern.search(full_message),
         ]
     ):
         if level_pattern.search(full_message):  # this is stage 1
@@ -301,21 +305,21 @@ async def scrape_full_job(msg, image_text):
                     job_description = soup_alpha.find(
                         "div", class_="job-desc"
                     ).get_text()
-                    logging.info("link scraped successfully 🌐")
+                    logging.info("IJS link scraped successfully 🌐")
                 # LinkedIn post
                 elif match.group(2):
                     job_description = soup_alpha.find(
                         "div",
                         class_="attributed-text-segment-list__container relative mt-1 mb-1.5 babybear:mt-0 babybear:mb-0.5",
                     ).get_text()
-                    logging.info("link scraped successfully 🌐")
+                    logging.info("LinkedIn post scraped successfully 🌐")
                 # LinkedIn job post
                 elif match.group(3):
                     job_description = soup_alpha.find(
                         "div",
                         class_="show-more-less-html__markup show-more-less-html__markup--clamp-after-5 relative overflow-hidden",
                     ).get_text()
-                    logging.info("link scraped successfully 🌐")
+                    logging.info("LinkedIn job post scraped successfully 🌐")
 
     return job_description or None
 
