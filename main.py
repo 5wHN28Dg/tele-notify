@@ -93,7 +93,7 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
 
 # Function to build experience regex pattern
 def build_experience_regex():
-    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?experience|experience required))|(?:خبرة(?: عملية)?(?:\sالمطلوبة:?\s?)? (?:لا تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|خبر(?:ه|ة) (≥ )?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
+    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?experience|experience required))|(?:خبرة(?: عملية)?(?:\sالمطلوبة:?\s?)? (?:لا تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|(?:لا(?:\s)?تقل\s)?خبر(?:ه|ة|تهم)  ?(?:≥\s|الفعلية\sعن\s)?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
     return re.compile(pattern, re.IGNORECASE)
 
 
@@ -112,7 +112,7 @@ def build_certifications_regex(certifications):
         "Must possess one or more of the following",
         f"degree and {cert_options} or equivalent combination",
         f"The successful candidate will hold {cert_options}",
-        f"Any relevant certifications .{{0,20}}{cert_options}?(?!.{{0,30}}are a plus)",
+        f"(?:Any\\s)?relevant certifications.{{0,20}}{cert_options}?(?!.{{0,30}}are a plus)",
         f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
         f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
         f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
@@ -263,7 +263,7 @@ async def scrape_full_job(msg, image_text):
     links_in_msg: list = extractor.find_urls(msg)
     job_description = ""
     link_pattern = re.compile(
-        r"(?:https:\/\/)?(?:www\.)?(?:(iqjscout\.com/jobs\/\S+\/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs\S+/))"
+        r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+))"
     )
     if links_in_msg:
         fullish_msg = msg + " " + image_text
@@ -320,6 +320,13 @@ async def scrape_full_job(msg, image_text):
                         class_="show-more-less-html__markup show-more-less-html__markup--clamp-after-5 relative overflow-hidden",
                     ).get_text()
                     logging.info("LinkedIn job post scraped successfully 🌐")
+                # mselect
+                elif match.group(4):
+                    job_description = soup_alpha.find(
+                        "div",
+                        class_="wrapper body",
+                    ).get_text()
+                    logging.info("mselect job post scraped successfully 🌐")
 
     return job_description or None
 
