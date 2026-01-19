@@ -3,7 +3,6 @@
   "api_hash": "YOUR_API_HASH",
   "target_chat": chat_id,
   "chats": [chat_id, chat_id],
-  "special_chat": 0,
   "level_keywords_en": ["keyword1", "keyword2"],
   "level_keywords_ar": ["keyword3", "keyword4"],
   "certifications": [],

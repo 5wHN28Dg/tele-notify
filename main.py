@@ -8,6 +8,7 @@ import tempfile
 
 import aiohttp
 import pytesseract
+import regex
 from bs4 import BeautifulSoup
 from PIL import Image
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -48,7 +49,6 @@ recent_lock = asyncio.Lock()
 # chats to monitor
 chats = data["chats"]
 target_chat = data["target_chat"]
-special_chat = data["special_chat"]
 
 # keywords
 level_keywords_en = data["level_keywords_en"]
@@ -82,8 +82,10 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
     if special_patterns:
         parts.append(r"(?:" + "|".join(special_patterns) + r")")
     return (
-        re.compile(
-            r"(?<!senior[\s_-])" + "|".join(parts) if mid_level else "|".join(parts),
+        regex.compile(
+            r"(?<!(lead|senior|Sr).{0,30})" + "|".join(parts)
+            if mid_level
+            else "|".join(parts),
             re.IGNORECASE,
         )
         if parts
@@ -93,7 +95,7 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
 
 # Function to build experience regex pattern
 def build_experience_regex():
-    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?experience|experience required))|(?:خبرة(?: عملية)?(?:\sالمطلوبة:?\s?)? (?:لا تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|(?:لا(?:\s)?تقل\s)?خبر(?:ه|ة|تهم)  ?(?:≥\s|الفعلية\sعن\s)?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+)))"
+    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?.{0,20}experience|experience required))|(?:خبرة(?: عملية)?(?:\s(?:المطلوبة|موثقة):?\s?)? (?:لا ?تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|(?:لا(?:\s)?تقل\s)?خبر(?:ه|ة|تهم)  ?(?:≥\s|الفعلية\sعن\s)?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+))|\d+\+\sسنوات خبرة)"
     return re.compile(pattern, re.IGNORECASE)
 
 
@@ -151,7 +153,7 @@ experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
 is_job_seeker_pattern = re.compile(
-    "(?:محتاج(?:ه|ة)?|(?:(?:(?:ا|أ)بحث|باحث) عن)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
+    "(?:محتاج(?:ه|ة)?|(?:(?:(?:ا|أ)بحث|باحث)(?: عن)?)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
     re.IGNORECASE,
 )
 is_tuition_pattern = re.compile(
@@ -275,6 +277,7 @@ async def scrape_full_job(msg, image_text):
         entry_level = entry_level_role_pattern.search(fullish_msg)
         mid_level = mid_level_role_pattern.search(fullish_msg)
         location = location_pattern.search(fullish_msg)
+        filler_links = re.compile(r"https://t\.me/\S+")
         subtractor = [
             entry_level.group() if entry_level else "",
             mid_level.group() if mid_level else "",
@@ -285,6 +288,11 @@ async def scrape_full_job(msg, image_text):
             ambiguous_pattern.search(fullish_msg).group()
             if ambiguous_pattern.search(fullish_msg)
             else "",
+            filler_links.search(fullish_msg).group()
+            if filler_links.search(fullish_msg)
+            else "",
+            " يرجى منكم مشاركة رابط القناة والمنشور ليصل الى اكبر عدد من المهتمين",
+            "شارك رابط القناة للاستفادة",
         ]
         remaining = fullish_msg
         for sub in subtractor:
