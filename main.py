@@ -3,7 +3,6 @@ import io
 import json
 import logging
 import os
-import re
 import tempfile
 
 import aiohttp
@@ -59,26 +58,26 @@ mid_level_role_en = data["mid_level_general_role_en"]
 mid_level_role_ar = data["mid_level_general_role_ar"]
 location_keywords_en = data["location_keywords_en"]
 location_keywords_ar = data["location_keywords_ar"]
-certifications = [re.escape(x) for x in data["certifications"]]
+certifications = [regex.escape(x) for x in data["certifications"]]
 responsibility_keywords = data["responsibility_keywords"]
 
 # last 10 forwarded messages
 recent_messages = data["recent_messages"]
 
 
-# Function to build hybrid regex: \b for Latin, no \b for Arabic
+# Function to build hybrid regex
 def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
     parts = []
     if en_list:
         processed_en_list = [
-            r"[\s_-]+".join(re.escape(p) for p in k.split(" ")) for k in en_list
+            r"[\s_-]+".join(regex.escape(p) for p in k.split(" ")) for k in en_list
         ]
         en_pattern = (
             r"(?<![a-zA-Z0-9])(?:" + "|".join(processed_en_list) + r")(?![a-zA-Z0-9])"
         )
         parts.append(en_pattern)
     if ar_list:
-        parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
+        parts.append(r"(?:" + "|".join(regex.escape(k) for k in ar_list) + r")")
     if special_patterns:
         parts.append(r"(?:" + "|".join(special_patterns) + r")")
     return (
@@ -86,23 +85,23 @@ def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
             r"(?<!(lead|senior|Sr).{0,30})" + "|".join(parts)
             if mid_level
             else "|".join(parts),
-            re.IGNORECASE,
+            regex.IGNORECASE,
         )
         if parts
-        else re.compile(r"$.")
+        else regex.compile(r"$.")
     )
 
 
 # Function to build experience regex pattern
 def build_experience_regex():
     pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?.{0,20}experience|experience required))|(?:خبرة(?: عملية)?(?:\s(?:المطلوبة|موثقة):?\s?)? (?:لا ?تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|(?:لا(?:\s)?تقل\s)?خبر(?:ه|ة|تهم)  ?(?:≥\s|الفعلية\sعن\s)?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+))|\d+\+\sسنوات خبرة)"
-    return re.compile(pattern, re.IGNORECASE)
+    return regex.compile(pattern, regex.IGNORECASE)
 
 
 def build_responsibilities_regex(responsibility_keywords):
     keywords = "|".join(responsibility_keywords)
     pattern = f"(?:\\d+\\. |- |\\d+- |• |\n)({keywords})\\b"
-    return re.compile(pattern, re.IGNORECASE)
+    return regex.compile(pattern, regex.IGNORECASE)
 
 
 def build_certifications_regex(certifications):
@@ -124,7 +123,7 @@ def build_certifications_regex(certifications):
     ]
 
     combined_pattern = "|".join(patterns)
-    return re.compile(combined_pattern, re.IGNORECASE)
+    return regex.compile(combined_pattern, regex.IGNORECASE)
 
 
 apply_anyway_patterns = [
@@ -152,18 +151,18 @@ location_pattern = build_hybrid_regex(
 experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
-is_job_seeker_pattern = re.compile(
+is_job_seeker_pattern = regex.compile(
     "(?:محتاج(?:ه|ة)?|(?:(?:(?:ا|أ)بحث|باحث)(?: عن)?)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
-    re.IGNORECASE,
+    regex.IGNORECASE,
 )
-is_tuition_pattern = re.compile(
-    r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", re.IGNORECASE
+is_tuition_pattern = regex.compile(
+    r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", regex.IGNORECASE
 )
-is_trivial_pattern = re.compile(
+is_trivial_pattern = regex.compile(
     r"تطوير مهارات (?:الحاسوب|الكمبيوتر)|عروض نهاية السنة|تخفيضات حصرية|اسئلة اختبار شركة",
-    re.IGNORECASE,
+    regex.IGNORECASE,
 )
-is_apply_anyway_pattern = re.compile(combined_apply_anyway_pattern)
+is_apply_anyway_pattern = regex.compile(combined_apply_anyway_pattern)
 extractor = URLExtract()
 
 # retry policy in case something goes wrong
@@ -264,20 +263,20 @@ def callback(current, total):
 async def scrape_full_job(msg, image_text):
     links_in_msg: list = extractor.find_urls(msg)
     job_description = ""
-    link_pattern = re.compile(
+    link_pattern = regex.compile(
         r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+))"
     )
     if links_in_msg:
         fullish_msg = msg + " " + image_text
-        filler_pattern = re.compile(
+        filler_pattern = regex.compile(
             r"(?:(check\sout\sthis\sjob\sat\s\S+)|(ألقِ نظرة على هذه الوظيفة.{0,})|التقديم عبر رابط LinkedIn):",
-            re.IGNORECASE,
+            regex.IGNORECASE,
         )
-        ambiguous_pattern = re.compile(r"مهندس(?:ين)? (?:فريش|تحت التدريب)")
+        ambiguous_pattern = regex.compile(r"مهندس(?:ين)? (?:فريش|تحت التدريب)")
         entry_level = entry_level_role_pattern.search(fullish_msg)
         mid_level = mid_level_role_pattern.search(fullish_msg)
         location = location_pattern.search(fullish_msg)
-        filler_links = re.compile(r"https://t\.me/\S+")
+        filler_links = regex.compile(r"https://t\.me/\S+")
         subtractor = [
             entry_level.group() if entry_level else "",
             mid_level.group() if mid_level else "",
