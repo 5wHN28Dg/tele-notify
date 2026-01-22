@@ -274,12 +274,18 @@ async def scrape_full_job(msg, image_text):
         )
         ambiguous_pattern = regex.compile(r"مهندس(?:ين)? (?:فريش|تحت التدريب)")
         entry_level = entry_level_role_pattern.search(fullish_msg)
+        is_entry_level_in_link = regex.compile(
+            r"(?<!(iqjscout|mselect)\.com.{0,30})" + entry_level_role_pattern.pattern
+        ).search(fullish_msg)
         mid_level = mid_level_role_pattern.search(fullish_msg)
+        is_mid_level_in_link = regex.compile(
+            r"(?<!(iqjscout|mselect)\.com.{0,30})" + mid_level_role_pattern.pattern
+        ).search(fullish_msg)
         location = location_pattern.search(fullish_msg)
         filler_links = regex.compile(r"https://t\.me/\S+")
         subtractor = [
-            entry_level.group() if entry_level else "",
-            mid_level.group() if mid_level else "",
+            entry_level.group() if all([entry_level, is_entry_level_in_link]) else "",
+            mid_level.group() if all([mid_level, is_mid_level_in_link]) else "",
             location.group() if location else "",
             filler_pattern.search(fullish_msg).group()
             if filler_pattern.search(fullish_msg)
