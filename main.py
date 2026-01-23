@@ -264,7 +264,7 @@ async def scrape_full_job(msg, image_text):
     links_in_msg: list = extractor.find_urls(msg)
     job_description = ""
     link_pattern = regex.compile(
-        r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+))"
+        r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+)|(khana.jobs/dashboard/jobs/\d+)|(taeen.iq/ar/jobs/\S+)|(apply.workable.com/\S+))"
     )
     if links_in_msg:
         fullish_msg = msg + " " + image_text
@@ -311,8 +311,33 @@ async def scrape_full_job(msg, image_text):
                     "user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"
                 }
                 async with aiohttp.ClientSession() as session:
+                    # Khana
+                    if match.group(5):
+                        link = (
+                            "https://prodclient.up.railway.app/api/v1/jobs/"
+                            + regex.compile(r"(?<=/jobs/)\S+").search(link).group()
+                        )
+                    # Taeen
+                    elif match.group(6):
+                        link = (
+                            "https://api.taeen.iq/jobs/"
+                            + regex.compile(r"(?<=/jobs/)\S+").search(link).group()
+                        )
+                    # Workable
+                    elif match.group(7):
+                        link = (
+                            "https://apply.workable.com/api/v2/accounts/"
+                            + regex.compile(r"(?<=workable\.com/)\S+(?=/j/)")
+                            .search(link)
+                            .group()
+                            + "/jobs"
+                            + regex.compile(r"(?<=/j/)\S+(?=/)").search(link).group()
+                        )
                     async with session.get(link, headers=headers) as response:
-                        soup_alpha = BeautifulSoup(await response.text(), "lxml")
+                        if any([match.group(5), match.group(6), match.group(7)]):
+                            json_data = json.loads(await response.text())
+                        else:
+                            soup_alpha = BeautifulSoup(await response.text(), "lxml")
                 # iraq job scout
                 if match.group(1) and all([(entry_level or mid_level), location]):
                     job_description = soup_alpha.find(
@@ -340,6 +365,20 @@ async def scrape_full_job(msg, image_text):
                         class_="wrapper body",
                     ).get_text()
                     logging.info("mselect job post scraped successfully 🌐")
+                # Khana
+                elif match.group(5):
+                    job_description = json_data["data"]["description"]
+                # Taeen
+                elif match.group(6):
+                    job_description = json_data["description"]
+                # workable
+                elif match.group(7):
+                    job_description = (
+                        json_data["title"]
+                        + json_data["location"]["city"]
+                        + json_data["description"]
+                        + json_data["requirements"]
+                    )
 
     return job_description or None
 
