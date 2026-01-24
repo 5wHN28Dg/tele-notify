@@ -1,15 +1,9 @@
 test.session
 function.md
-*.jpg
-*.jpeg
-myFile.txt
 test.py
 job.txt
 config copy.json
 template.txt
-IJS.html
-test.txt
-testo.py
 test1.py
-temp.json
-web_scraping.py
+web_scraping_p.py
+retreive_specifc_msg_p.py

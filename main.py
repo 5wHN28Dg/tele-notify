@@ -232,8 +232,13 @@ async def message_processor(msg):
         except Exception as e:
             logging.error(f"OCR failed: {e}")
 
+    url_in_button = ""
+    if hasattr(msg, "buttons") and msg.buttons:
+        url_in_button = msg.buttons[0][0].url
     link_text = (
-        await scrape_full_job(msg.raw_text, image_text) or "" if msg.raw_text else ""
+        await scrape_full_job(msg.raw_text, image_text, url_in_button) or ""
+        if msg.raw_text
+        else ""
     )
 
     text_content = msg.raw_text or ""
@@ -260,7 +265,8 @@ def callback(current, total):
 
 
 @retry_transient
-async def scrape_full_job(msg, image_text):
+async def scrape_full_job(msg, image_text, url_in_button):
+    msg = msg + " " + url_in_button
     links_in_msg: list = extractor.find_urls(msg)
     job_description = ""
     link_pattern = regex.compile(
@@ -298,6 +304,8 @@ async def scrape_full_job(msg, image_text):
             else "",
             " يرجى منكم مشاركة رابط القناة والمنشور ليصل الى اكبر عدد من المهتمين",
             "شارك رابط القناة للاستفادة",
+            "فرصة وظيفية جديدة على منصة تعيين!",
+            'للتقديم: اضغط على زر "التقديم على الوظيفة" أدناه',
         ]
         remaining = fullish_msg
         for sub in subtractor:
@@ -368,10 +376,12 @@ async def scrape_full_job(msg, image_text):
                 # Khana
                 elif match.group(5):
                     job_description = json_data["data"]["description"]
+                    logging.info("khana job post scraped successfully 🌐")
                 # Taeen
                 elif match.group(6):
                     job_description = json_data["description"]
-                # workable
+                    logging.info("taeen job post scraped successfully 🌐")
+                # Workable
                 elif match.group(7):
                     job_description = (
                         json_data["title"]
@@ -379,6 +389,7 @@ async def scrape_full_job(msg, image_text):
                         + json_data["description"]
                         + json_data["requirements"]
                     )
+                    logging.info("workable job post scraped successfully 🌐")
 
     return job_description or None
 
