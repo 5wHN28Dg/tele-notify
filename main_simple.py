@@ -58,7 +58,6 @@ location_keywords_ar = data["location_keywords_ar"]
 recent_messages = data["recent_messages"]
 
 
-# Function to build hybrid regex: \b for Latin, no \b for Arabic
 def build_hybrid_regex(en_list, ar_list):
     parts = []
     if en_list:
