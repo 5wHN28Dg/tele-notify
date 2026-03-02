@@ -1,21 +1,22 @@
-from telethon import TelegramClient, events, errors
-import logging
-import re
 import asyncio
 import io
 import json
-import pytesseract
-import tempfile
+import logging
 import os
+import re
+import tempfile
+
+import pytesseract
 from PIL import Image
-from tenacity import (
-    stop_after_attempt,
-    wait_random_exponential,
-    retry_if_exception_type,
-    retry,
-)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from telethon import TelegramClient, errors, events
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 # logging for easier debugging
 logging.basicConfig(
