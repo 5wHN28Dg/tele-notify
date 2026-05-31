@@ -270,7 +270,7 @@ async def scrape_full_job(msg, image_text, url_in_button):
     links_in_msg: list = extractor.find_urls(msg)
     job_description = ""
     link_pattern = regex.compile(
-        r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+)|(khana.jobs/dashboard/jobs/\d+)|(taeen.iq/ar/jobs/\S+)|(apply.workable.com/\S+))"
+        r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+)|(khana.jobs/jobs/\d+)|(taeen.iq/ar/jobs/\S+)|(apply.workable.com/\S+))"
     )
     if links_in_msg:
         fullish_msg = msg + " " + image_text
