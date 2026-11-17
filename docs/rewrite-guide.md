@@ -317,12 +317,16 @@ It returns that text plus `notes` saying what happened ("read Khana (2952 charac
 
 ### Why it's built this way
 
-- **OCR doesn't freeze the bot (#30).** `ocr.nim` starts the `tesseract` program and *awaits* it, checking every 50 ms, so other work continues meanwhile. tesseract writes its result to a temporary file rather than a pipe: a pipe's small buffer could make both programs wait for each other forever on a big result. The test `issue #30: the bot keeps working while OCR runs` proves a ticker keeps ticking during OCR.
+- **OCR doesn't freeze the bot (#30).** `ocr.nim` starts the `tesseract` program and *awaits* it, checking every 50 ms, so other work continues meanwhile.
+  - tesseract writes its result to a file and its messages to `/dev/null`, so nothing piles up in a pipe that nobody reads.
+  - Every run gets a fresh private temp folder, so two OCRs of the same picture at once can't collide.
+  - On timeout, the process is killed *and waited for*, so no zombie process is left behind. The test `issue #30: the bot keeps working while OCR runs` proves a ticker keeps ticking during OCR.
 - **A single job link is always followed (#34).** The old code only scraped when almost nothing else was in the post, and OCR text from a picture counted as "something else". That's why the LinkedIn post in #34 was never read. Now any post with exactly one supported link gets its job page read; the page usually has the experience requirement the post leaves out.
 - **Several links: none followed.** A post with several job links is almost always several jobs, and reading all their pages would mix them together.
 - **Downloads have rules** (`fetch.nim`):
-  - 20-second time limit;
-  - pages capped at 3 MB;
+  - 20-second time limit, after which the connection is *closed* (an abandoned connection leaked a socket);
+  - pages capped at 3 MB, checked against the announced size and while reading;
+  - only `http`/`https`, and never local or private addresses (127.0.0.1, 10.x, 192.168.x…), so a short link in a post can't make the bot poke at your home network;
   - redirects followed by hand, so the final URL is known (needed for `lnkd.in`);
   - a polite User-Agent naming the project;
   - errors returned, never raised.
@@ -347,6 +351,8 @@ The scraped text starts with `Job title: …` and `Location: …` lines, which t
 - **Workable and mselect**: zero links in the 3,834 recent posts, so there was no real page to test against. Adding a board back means a `BoardKind`, a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`.
 
 **Why "JSON-LD only" for Yadanoo-style sites.** A Yadanoo job page also contains a city picker listing *every* city, Basra included. Reading the whole page would make every job look like a Basra job. A test checks that a Duhok job's text never contains "Basrah".
+
+**Hostile pages.** Pages with more than 15,000 tags are refused before parsing. The HTML parser is recursive, and a page of 50,000 nested tags crashed the whole process; real job pages have about 3,000 tags.
 
 **When a site changes its layout**, the reader returns empty text and `gather` notes "page had no job text (expired, login wall or new layout)". To fix it:
 1. save the new page into `tests/fixtures/`;

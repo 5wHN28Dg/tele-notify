@@ -40,7 +40,7 @@ Every post gets one of three verdicts, **with the reasons**:
 Before deciding, it gathers everything there is to read:
 - the post text;
 - text in its pictures (OCR, Arabic and English);
-- the job page when the post links to a known job board: Khana, Taeen, Yadanoo, LinkedIn, Shift.
+- the job page when the post links to exactly one job on a known job board: Khana, Taeen, Yadanoo, LinkedIn, Shift. With several links it's usually several jobs, so none is followed.
 
 Posts listing several jobs are split, and each job is judged on its own.
 

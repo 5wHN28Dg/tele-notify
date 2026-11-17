@@ -81,13 +81,23 @@ proc toText*(n: XmlNode): string =
       lastBlank = false
   result = result.strip
 
+const maxTags* = 15_000
+  ## Real job pages have at most ~3,000 tags. The parser is recursive, and a
+  ## hostile page of 50,000 nested tags crashed the whole process (a stack
+  ## overflow can't be caught), so pages with more tags are refused.
+
+proc tooManyTags(s: string): bool = s.count('<') > maxTags
+
 proc htmlFragmentToText*(fragment: string): string =
   ## For JSON APIs that return the description as an HTML string.
   if '<' notin fragment: return fragment.strip
+  if fragment.tooManyTags: return ""
   parseHtml("<div>" & fragment & "</div>").toText
 
 proc pageTitle*(doc: XmlNode): string =
   let t = doc.findTag("title")
   if t != nil: t.innerText.strip else: ""
 
-proc parsePage*(body: string): XmlNode = parseHtml(body)
+proc parsePage*(body: string): XmlNode =
+  ## The parsed page, or an empty `<html>` when it has too many tags.
+  if body.tooManyTags: newElement("html") else: parseHtml(body)

@@ -84,3 +84,19 @@ suite "scraped text helps the filter":
     let post = "#Basrah\nمطلوب IT support\nhttps://yadanoo.com/job/4505e77354fb9161\n\n" &
                extract(bkJobPosting, page("yadanoo_job.html"))
     check classify(post, cfg).verdict == vReject
+
+suite "review pass 1 (stage 2) findings":
+  test "JSON-LD blocks that are not objects don't crash":
+    for ld in ["\"hello\"", "42", "[1, \"x\", null]", "null", "{\"@graph\": 5}"]:
+      check extract(bkJobPosting, "<script type=\"application/ld+json\">" & ld & "</script>") == ""
+
+  test "absurdly nested HTML is refused instead of overflowing the stack":
+    var deep = ""
+    for i in 0 ..< 50_000: deep.add "<div>"
+    check extract(bkLinkedInPost, deep) == ""
+    check extract(bkLinkedInJob, "<title>x</title>" & deep) == ""
+
+  test "uppercase links are found":
+    check findJobLinks("https://Yadanoo.com/job/5ab").len == 1
+    check findJobLinks("TAEEN.IQ/ar/jobs/6C8A084D-1363-457E-BD73-5F03A2400423").len == 1
+    check findJobLinks("https://WWW.LinkedIn.com/jobs/view/4490426414/").len == 1

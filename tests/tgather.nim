@@ -10,7 +10,10 @@ proc fakeFetcher(pages: Table[string, string], calls: ref seq[string]): Fetcher 
     {.cast(gcsafe).}:
       calls[].add url
       var f = newFuture[Fetched]("fake")
-      if url in pages:
+      if url == "https://lnkd.in/toJob":     # a short link that redirects straight to a job
+        f.complete Fetched(ok: true, status: 200, finalUrl: "https://www.linkedin.com/jobs/view/4490426414/",
+                           body: readFile(fx / "linkedin_job.html"))
+      elif url in pages:
         f.complete Fetched(ok: true, status: 200, finalUrl: url, body: readFile(fx / pages[url]))
       else:
         f.complete Fetched(ok: false, status: 404, finalUrl: url, error: "HTTP 404")
@@ -72,3 +75,10 @@ suite "gather":
     let calls = new seq[string]
     discard waitFor gather(Post(text: "https://khana.jobs/jobs/9915"), fakeFetcher(pages, calls), fakeOcr(""), scrape = false)
     check calls[].len == 0
+
+  test "a short link that lands on a LinkedIn job is read without a second download":
+    let calls = new seq[string]
+    let g = waitFor gather(Post(text: "https://lnkd.in/toJob"), fakeFetcher(pages, calls), fakeOcr(""))
+    check calls[] == @["https://lnkd.in/toJob"]
+    check "read LinkedIn job via short link" in g.notes
+    check "Job title:" in g.text

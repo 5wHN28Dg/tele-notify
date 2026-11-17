@@ -50,12 +50,13 @@ const defaultJobPostingSites* = ["yadanoo.com", "shift-iraq.com"]
 let
   # URL characters: stop at spaces, quotes, brackets and the invisible
   # marks Telegram glues to links (U+200E/F, U+2060).
-  khana = re2(r"khana\.jobs/(?:dashboard/)?jobs/(\d+)")
-  taeen = re2(r"taeen\.iq/(?:[a-z]{2}/)?jobs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
-  liJob = re2(r"linkedin\.com/(?:comm/)?jobs/view/(?:[A-Za-z0-9%_-]*-)?(\d{6,})")
-  liPost = re2(r"linkedin\.com/posts/([A-Za-z0-9%_-]+)")
-  shortLink = re2(r"lnkd\.in/([A-Za-z0-9_-]+)")
-  anyUrl = re2(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s""'<>()\[\]\x{200E}\x{200F}\x{2060}]*)?")
+  # All patterns ignore case: people paste "Yadanoo.com", "WWW.LinkedIn.com".
+  khana = re2(r"(?i)khana\.jobs/(?:dashboard/)?jobs/(\d+)")
+  taeen = re2(r"(?i)taeen\.iq/(?:[a-z]{2}/)?jobs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+  liJob = re2(r"(?i)linkedin\.com/(?:comm/)?jobs/view/(?:[A-Za-z0-9%_-]*-)?(\d{6,})")
+  liPost = re2(r"(?i)linkedin\.com/posts/([A-Za-z0-9%_-]+)")
+  shortLink = re2(r"(?i)lnkd\.in/([A-Za-z0-9_-]+)")
+  anyUrl = re2(r"(?i)(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s""'<>()\[\]\x{200E}\x{200F}\x{2060}]*)?")
   ldJson = re2(r"(?s)<script[^>]*application/ld\+json[^>]*>(.*?)</script>")
 
 proc addUnique(list: var seq[JobLink], l: JobLink) =
@@ -69,7 +70,7 @@ proc findJobLinks*(text: string, jobSites: openArray[string] = defaultJobPosting
   for m in text.findAll(khana):
     result.addUnique JobLink(kind: bkKhana, url: "https://prodclient.up.railway.app/api/v1/jobs/" & text[m.group(0)])
   for m in text.findAll(taeen):
-    result.addUnique JobLink(kind: bkTaeen, url: "https://api.taeen.iq/jobs/" & text[m.group(0)])
+    result.addUnique JobLink(kind: bkTaeen, url: "https://api.taeen.iq/jobs/" & text[m.group(0)].toLowerAscii)
   for m in text.findAll(liJob):
     result.addUnique JobLink(kind: bkLinkedInJob, url: "https://www.linkedin.com/jobs/view/" & text[m.group(0)] & "/")
   for m in text.findAll(liPost):
@@ -133,7 +134,8 @@ proc jobPostingFromLd(body: string): string =
     except CatchableError: continue
     var candidates = @[j]
     if j.kind == JArray: candidates = j.getElems
-    elif j.hasKey("@graph"): candidates = j["@graph"].getElems
+    elif j.kind == JObject and j{"@graph"} != nil and j["@graph"].kind == JArray:
+      candidates = j["@graph"].getElems
     for c in candidates:
       if c.kind != JObject or c.str("@type") != "JobPosting": continue
       var places: seq[string]
