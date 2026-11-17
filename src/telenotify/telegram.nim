@@ -21,11 +21,15 @@ type
     photoFileId*: int    ## TDLib file id of the largest photo size; 0 = none
     chatTitle*: string
 
+  Unread* = object
+    messages*: seq[TgMessage]  ## oldest first
+    cut*: bool                 ## more unread messages, older than these, were left out
+
   Telegram* = ref object
     ## Every operation the listener uses. All of them may raise (network,
     ## TDLib errors); the listener catches per message.
-    unread*: proc (chat: int64): Future[seq[TgMessage]] {.closure, gcsafe.}
-      ## unread messages of `chat`, oldest first
+    unread*: proc (chat: int64): Future[Unread] {.closure, gcsafe.}
+      ## unread messages of `chat` (at most `maxBacklog`)
     markRead*: proc (chat: int64, ids: seq[int64]): Future[void] {.closure, gcsafe.}
     downloadPhoto*: proc (fileId: int): Future[string] {.closure, gcsafe.}
       ## the photo's bytes
@@ -75,23 +79,28 @@ proc parseMessage*(m: JsonNode): TgMessage =
 
 # ------------------------------------------------------------ TDLib
 
+const maxBacklog* = 10_000   ## per chat; job posts older than that are stale anyway
+
 proc tdTelegram*(c: TdClient): Telegram =
   result = Telegram()
 
-  result.unread = proc (chat: int64): Future[seq[TgMessage]] {.async, closure, gcsafe.} =
+  result.unread = proc (chat: int64): Future[Unread] {.async, closure, gcsafe.} =
     let info = await c.call(%*{"@type": "getChat", "chat_id": chat})
     # The real read marker (the old bot computed "last id - unread count",
     # which skips messages whenever a channel deletes posts).
     let lastRead = info{"last_read_inbox_message_id"}.getBiggestInt
-    if info{"unread_count"}.getInt == 0: return @[]
+    if info{"unread_count"}.getInt == 0: return Unread()
     let title = info{"title"}.getStr
     var collected: seq[TgMessage]
     var fromId = 0'i64
-    for page in 0 ..< 50:   # at most 50 × 100 messages
+    var complete = false
+    while collected.len < maxBacklog:
       let batch = await c.call(%*{"@type": "getChatHistory", "chat_id": chat,
         "from_message_id": fromId, "offset": 0, "limit": 100, "only_local": false})
       let msgs = batch{"messages"}.getElems
-      if msgs.len == 0: break
+      if msgs.len == 0:
+        complete = true
+        break
       var reachedRead = false
       for m in msgs:                # newest first
         let id = m{"id"}.getBiggestInt
@@ -105,10 +114,12 @@ proc tdTelegram*(c: TdClient): Telegram =
         tm.chatTitle = title
         collected.add tm
       let oldest = msgs[^1]{"id"}.getBiggestInt
-      if reachedRead or oldest == fromId: break   # read marker or start of the chat
+      if reachedRead or oldest == fromId:   # read marker or start of the chat
+        complete = true
+        break
       fromId = oldest
     collected.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))   # oldest first
-    return collected
+    return Unread(messages: collected, cut: not complete)
 
   result.markRead = proc (chat: int64, ids: seq[int64]): Future[void] {.async, closure, gcsafe.} =
     if ids.len == 0: return

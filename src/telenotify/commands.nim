@@ -1,11 +1,25 @@
 ## The commands that talk to Telegram: login, chats, run, review, stats.
 
-import std/[asyncdispatch, json, os, strutils, strformat, tables, times, posix]
+import std/[asyncdispatch, json, os, strutils, strformat, tables, times, posix, unicode]
 import config, td, session, telegram, state, listener, fetch, gather
 
 var stopRequested = new bool   # set by Ctrl-C or `systemctl stop` (SIGTERM)
 
 proc onSignal(sig: cint) {.noconv.} = stopRequested[] = true
+
+proc sessionEnded*(authState: string, stopping: bool): bool =
+  ## Does this authorization update mean the login is gone? Not when we
+  ## are closing TDLib ourselves (a normal stop goes through Closing and
+  ## Closed too).
+  authState != "" and authState != "authorizationStateReady" and not stopping
+
+proc printable*(s: string): string =
+  ## Post text without control characters, so a post (or a scraped job
+  ## page) can't clear or rewrite your terminal in `review`.
+  for r in s.runes:
+    let c = r.int
+    if c == 0x0A or c == 0x09 or (c >= 0x20 and c != 0x7F and (c < 0x80 or c > 0x9F)):
+      result.add r
 
 proc statePath*(cfg: Config, dryRun: bool): string =
   ## Dry runs keep their own state, so switching to the real bot later
@@ -43,9 +57,15 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
         # logged out from another device, or TDLib closing: stop (and let
         # systemd restart us) instead of hanging while looking alive
         let a = u.authState
-        if a != "authorizationStateReady" and sessionLost == "":
+        if sessionLost == "" and sessionEnded(a, stopping = l.stop[]):
           sessionLost = a
           l.stop[] = true      # l.stop is stopRequested (set below)
+      of "updateMessageSendFailed":
+        # TDLib accepted a forward/send but Telegram refused it later
+        # (no right to post any more, slow mode, flood limit...)
+        let err = u{"error", "message"}.getStr(u{"error_message"}.getStr("unknown error"))
+        asyncCheck l.alert("a message to chat " & $u{"message", "chat_id"}.getBiggestInt &
+                           " could not be sent: " & err)
       else: discard)
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
@@ -86,12 +106,12 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
   var quitting = false
   for i, r in pending:
     echo "\n", "═".repeat(70)
-    echo &"[{i + 1}/{pending.len}]  {r.chatTitle}  ·  {fromUnix(r.at).local.format(\"yyyy-MM-dd HH:mm\")}"
-    if r.link != "": echo r.link
-    echo "role: ", r.role
-    echo "why review: ", r.reasons
+    echo &"[{i + 1}/{pending.len}]  {r.chatTitle.printable}  ·  {fromUnix(r.at).local.format(\"yyyy-MM-dd HH:mm\")}"
+    if r.link != "": echo r.link.printable
+    echo "role: ", r.role.printable
+    echo "why review: ", r.reasons.printable
     echo "─".repeat(70)
-    let lines = r.text.splitLines
+    let lines = r.text.printable.splitLines
     echo lines[0 ..< min(lines.len, 40)].join("\n")
     if lines.len > 40: echo &"… ({lines.len - 40} more lines)"
     echo "─".repeat(70)
@@ -103,13 +123,13 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
       if not stdin.readLine(answer): answer = "q"    # end of input
       case answer.strip.toLowerAscii
       of "s":
-        st.decideReview(r.id, "to_send")
-        inc approved
-        echo "approved ✅"
+        if st.decideReview(r.id, "to_send"):
+          inc approved
+          echo "approved ✅"
+        else: echo "already decided elsewhere"
         done = true
       of "d":
-        st.decideReview(r.id, "discarded")
-        echo "discarded"
+        echo (if st.decideReview(r.id, "discarded"): "discarded" else: "already decided elsewhere")
         done = true
       of "n", "": done = true
       of "q":

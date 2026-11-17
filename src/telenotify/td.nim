@@ -42,9 +42,17 @@ proc newTdClient*(lib: TdLib): TdClient =
   # TDLib only starts talking once it has received a first request.
   lib.send(result.id, cstring($(%*{"@type": "getOption", "name": "version", "@extra": "wake-up"})))
 
-proc call*(c: TdClient, request: JsonNode): Future[JsonNode] =
+proc expire(c: TdClient, extra: string, ms: int) {.async.} =
+  await sleepAsync(ms)
+  var fut: Future[JsonNode]
+  if c.pending.pop(extra, fut) and not fut.finished:
+    fut.fail(newException(TdError, "no answer from TDLib after " & $(ms div 1000) & " s"))
+
+proc call*(c: TdClient, request: JsonNode, timeoutMs = 300_000): Future[JsonNode] =
   ## Send `request`; the future completes with TDLib's answer, or fails
-  ## with TdError when TDLib answers with an "error" object or has closed.
+  ## with TdError when TDLib answers with an "error" object, has closed,
+  ## or doesn't answer within `timeoutMs` (one stuck request must not
+  ## stall the bot forever).
   if c.stopped:
     let fut = newFuture[JsonNode]("td.call")
     fut.fail(newException(TdError, "TDLib closed"))
@@ -56,6 +64,7 @@ proc call*(c: TdClient, request: JsonNode): Future[JsonNode] =
   let fut = newFuture[JsonNode]("td.call " & request{"@type"}.getStr)
   c.pending[extra] = fut
   c.lib.send(c.id, cstring($req))
+  if timeoutMs > 0: asyncCheck c.expire(extra, timeoutMs)
   fut
 
 proc dispatch(c: TdClient, msg: JsonNode) =

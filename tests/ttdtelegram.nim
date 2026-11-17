@@ -54,13 +54,19 @@ suite "tdTelegram":
   test "unread: every unread message once, oldest first, across pages":
     history = toSeq(1 .. 250).mapIt(it.int64)
     lastRead = 20
-    let ids = (waitFor tg.unread(-1)).mapIt(it.id)
-    check ids == toSeq(21 .. 250).mapIt(it.int64)
+    let u = waitFor tg.unread(-1)
+    check u.messages.mapIt(it.id) == toSeq(21 .. 250).mapIt(it.int64) and not u.cut
 
   test "unread: a chat that is all unread ends at its first message":
     history = toSeq(1 .. 150).mapIt(it.int64)
     lastRead = 0
-    check (waitFor tg.unread(-1)).mapIt(it.id) == toSeq(1 .. 150).mapIt(it.int64)
+    check (waitFor tg.unread(-1)).messages.mapIt(it.id) == toSeq(1 .. 150).mapIt(it.int64)
+
+  test "unread: a huge backlog is cut, and says so":
+    history = toSeq(1 .. maxBacklog + 500).mapIt(it.int64)
+    lastRead = 0
+    let u = waitFor tg.unread(-1)
+    check u.cut and u.messages.len == maxBacklog and u.messages[^1].id == int64(maxBacklog + 500)
 
   test "forward: a null result (could not forward) counts as not forwarded":
     forwardWorks = true

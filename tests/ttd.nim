@@ -63,6 +63,14 @@ suite "TdClient":
     expect TdError:
       discard waitFor c.call(%*{"@type": "getChat", "chat_id": 1})   # later calls fail at once
 
+  test "a request TDLib never answers times out":
+    let c = newTdClient(lib)
+    asyncCheck c.pump()
+    let f = c.call(%*{"@type": "silent"}, timeoutMs = 100)
+    expect TdError:
+      discard waitFor f
+    c.stopped = true
+
   test "helpers":
     check authState(%*{"@type": "updateAuthorizationState",
                        "authorization_state": {"@type": "authorizationStateReady"}}) == "authorizationStateReady"

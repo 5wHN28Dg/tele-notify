@@ -51,6 +51,9 @@ proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: O
                   dryRun: bool): Listener =
   Listener(cfg: cfg, tg: tg, state: st, fetcher: fetcher, ocr: ocr, dryRun: dryRun,
            queue: initDeque[TgMessage](), stop: new bool,
+           # live messages wait from the very start until the backlog is done
+           # (they can arrive while chats are still being opened)
+           bootstrapping: true,
            log: proc (line: string) {.closure, gcsafe.} =
              echo now().format("yyyy-MM-dd HH:mm:ss"), "  ", line)
 
@@ -78,11 +81,20 @@ proc handle*(l: Listener, m: TgMessage) {.async.} =
   var action = "error"
   try:
     var post = Post(text: m.text, buttons: m.buttons)
+    var photoProblem = ""
     if m.photoFileId != 0:
       try: post.images.add await l.tg.downloadPhoto(m.photoFileId)
-      except CatchableError as e: l.say &"   photo download failed: {e.msg}"
+      except CatchableError as e:
+        photoProblem = "photo download failed: " & e.msg
+        l.say "   " & photoProblem
     let g = await gather(post, l.fetcher, l.ocr, @defaultJobPostingSites & l.cfg.extraJobSites)
-    let d = classify(g.text, l.cfg)
+    for n in g.notes:
+      if n.startsWith("OCR failed"): photoProblem = n
+    var d = classify(g.text, l.cfg)
+    if d.verdict == vReject and photoProblem != "":
+      # The picture is often the whole ad: unread, it's unknown, not bad.
+      d.verdict = vReview
+      d.reasons.add "the picture could not be read, so this is a guess"
     verdict = $d.verdict
     role = d.role
     reasons = (g.notes & d.reasons).join("; ")
@@ -160,10 +172,13 @@ proc bootstrap*(l: Listener) {.async.} =
     for chat in l.cfg.chats:
       if l.stop[]: break
       try:
-        let msgs = await l.tg.unread(chat)
-        if msgs.len > 0:
-          l.say &"{msgs.len} unread in {msgs[0].chatTitle}"
-        for m in msgs: l.queue.addLast m
+        let u = await l.tg.unread(chat)
+        if u.messages.len > 0:
+          l.say &"{u.messages.len} unread in {u.messages[0].chatTitle}"
+        if u.cut:
+          await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
+                        "messages; only the newest were checked.")
+        for m in u.messages: l.queue.addLast m
       except CatchableError as e:
         l.say &"   could not read chat {chat}: {e.msg}"
     await l.processQueue()
@@ -185,7 +200,7 @@ proc sendApproved*(l: Listener) {.async.} =
         if link == "": raise newException(ValueError, "no link to the post")
         await l.tg.sendText(l.cfg.targetChat, "match: " & r.role & "\npost link: " & link)
       l.state.addPublished(r.chatId, r.msgId, r.text)
-      l.state.decideReview(r.id, "sent")
+      discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
     except CatchableError as e:
       l.say &"   could not send reviewed {r.chatTitle} #{r.msgId}: {e.msg}"

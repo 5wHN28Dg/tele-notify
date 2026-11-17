@@ -14,13 +14,14 @@ type FakeTg = ref object
   duringUnread: proc () {.closure, gcsafe.}     # e.g. a live message arriving
   afterForward: proc () {.closure, gcsafe.}
   forwardFails, linkFails: bool
+  cutChats: HashSet[int64]
 
 proc toTelegram(f: FakeTg): Telegram =
   result = Telegram()
-  result.unread = proc (chat: int64): Future[seq[TgMessage]] {.async, closure, gcsafe.} =
+  result.unread = proc (chat: int64): Future[Unread] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
       if f.duringUnread != nil: f.duringUnread()
-      return f.chats.getOrDefault(chat)
+      return Unread(messages: f.chats.getOrDefault(chat), cut: chat in f.cutChats)
   result.markRead = proc (chat: int64, ids: seq[int64]): Future[void] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
       for id in ids: f.read.add (chat, id)
@@ -185,7 +186,7 @@ suite "listener":
     let (l, st) = setup(f)
     st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "")
     st.addReview(-2, 8, "chat2", unclear, "no level", "مهندس كهرباء", "")
-    for r in st.pendingReviews(): st.decideReview(r.id, "to_send")
+    for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
     waitFor l.sendApproved()
     check f.forwarded == @[(-1'i64, 7'i64)]
     check f.texts.len == 1 and "post link: https://t.me/c/2/8" in f.texts[0][1]   # link fetched now
@@ -198,7 +199,34 @@ suite "listener":
     f.linkFails = true
     let (l, st) = setup(f)
     st.addReview(-2, 8, "chat2", unclear, "no level", "role", "")
-    st.decideReview(st.pendingReviews()[0].id, "to_send")
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
     waitFor l.sendApproved()
     let r = st.pendingReviews()
     check r.len == 1 and "could not send: no link" in r[0].reasons
+
+  test "messages arriving before the backlog starts also wait for it":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear)]
+    let (l, _) = setup(f)
+    l.enqueue msg(-1, 12, bad)            # arrived while chats were being opened
+    f.afterForward = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}: l.stop[] = true
+    waitFor l.bootstrap()
+    check f.read == @[(-1'i64, 10'i64)]   # nothing marked read past 11
+
+  test "an image-only post whose picture can't be read goes to review, not reject":
+    let f = FakeTg()
+    f.brokenPhotos.incl 9
+    f.chats[-1] = @[msg(-1, 1, "", photo = 9)]
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    let r = st.pendingReviews()
+    check r.len == 1 and "could not be read" in r[0].reasons
+
+  test "a backlog too big to read in full is reported":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 1, bad)]
+    f.cutChats.incl -1
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()
+    check f.texts.len == 1 and "only the newest were checked" in f.texts[0][1]

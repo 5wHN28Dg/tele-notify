@@ -30,7 +30,10 @@ type
 proc now(): int64 = getTime().toUnix
 
 proc openState*(path: string): State =
-  createDir(path.parentDir)
+  if not dirExists(path.parentDir):
+    createDir(path.parentDir)
+    # the same folder holds your Telegram login (session.nim)
+    setFilePermissions(path.parentDir, {fpUserRead, fpUserWrite, fpUserExec})
   result = State(db: open(path, "", "", ""))
   let db = result.db
   db.exec(sql"PRAGMA journal_mode=WAL")
@@ -62,7 +65,7 @@ proc addPublished*(s: State, chat, msg: int64, text: string) =
   s.db.exec(sql"INSERT INTO published (chat_id, msg_id, text, at) VALUES (?,?,?,?)",
             chat, msg, text, now())
 
-proc recentPublished*(s: State, days = 14, limit = 200): seq[string] =
+proc recentPublished*(s: State, days = 14, limit = 2000): seq[string] =
   ## Texts published in the last `days` days, newest first.
   for row in s.db.fastRows(sql"SELECT text FROM published WHERE at > ? ORDER BY at DESC LIMIT ?",
                            now() - days * 86400, limit):
@@ -88,15 +91,20 @@ proc approvedReviews*(s: State): seq[Review] =
   ## Posts you chose to send; the running bot sends them (`sendApproved`).
   s.reviewsWithStatus("to_send")
 
-proc decideReview*(s: State, id: int64, status: string) =
-  ## status: "to_send" (you approved it; the bot will send it), "sent"
-  ## (published) or "discarded".
-  s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ?", status, now(), id)
+proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"): bool =
+  ## Move a review from `fromStatus` to `status`: "to_send" (you approved
+  ## it; the bot will send it), "sent" (published) or "discarded". Does
+  ## nothing and returns false if it's no longer in `fromStatus` (e.g.
+  ## another `review` window already decided it), so a post is never
+  ## approved, and sent, twice.
+  s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
+            status, now(), id, fromStatus)
+  s.db.getValue(sql"SELECT changes()") == "1"
 
 proc reopenReview*(s: State, id: int64, problem: string) =
   ## Sending failed: put it back in the queue, with the reason.
   s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = reasons || '; could not send: ' || ?
-                   WHERE id = ?""", problem, id)
+                   WHERE id = ? AND status = 'to_send'""", problem, id)
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)

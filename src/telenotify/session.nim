@@ -95,19 +95,23 @@ proc connect*(cfg: Config, interactive: bool,
   return await connectWith(loadTdLib(cfg.tdlibPath), cfg, interactive, onUpdate)
 
 proc loadAllChats*(s: Session) {.async.} =
-  ## TDLib only knows chats it has loaded; ask for the whole main list.
-  while true:
-    try:
-      discard await s.client.call(%*{"@type": "loadChats",
-        "chat_list": {"@type": "chatListMain"}, "limit": 100})
-    except TdError as e:
-      if e.code == 404: break   # all chats loaded
-      raise
+  ## TDLib only knows chats it has loaded; ask for the main list and the
+  ## Archive (job channels are often archived or muted).
+  for list in ["chatListMain", "chatListArchive"]:
+    while true:
+      try:
+        discard await s.client.call(%*{"@type": "loadChats",
+          "chat_list": {"@type": list}, "limit": 100})
+      except TdError as e:
+        if e.code == 404: break   # all chats of this list loaded
+        raise
 
 proc listChats*(s: Session): Future[seq[(int64, string)]] {.async.} =
   await s.loadAllChats()
-  let r = await s.client.call(%*{"@type": "getChats",
-    "chat_list": {"@type": "chatListMain"}, "limit": 1000})
-  for id in r{"chat_ids"}.getElems:
-    let chat = await s.client.call(%*{"@type": "getChat", "chat_id": id.getBiggestInt})
-    result.add (id.getBiggestInt, chat{"title"}.getStr)
+  for list in ["chatListMain", "chatListArchive"]:
+    let r = await s.client.call(%*{"@type": "getChats",
+      "chat_list": {"@type": list}, "limit": 1000})
+    for id in r{"chat_ids"}.getElems:
+      let chat = await s.client.call(%*{"@type": "getChat", "chat_id": id.getBiggestInt})
+      result.add (id.getBiggestInt, chat{"title"}.getStr &
+                  (if list == "chatListArchive": "  (archived)" else: ""))

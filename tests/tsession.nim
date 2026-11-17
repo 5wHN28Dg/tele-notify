@@ -37,6 +37,16 @@ suite "session":
       poll(50)
     check fut.finished and fut.failed and "unsupported login step" in fut.readError.msg
 
+  test "our own shutdown is not a lost session; a logout is":
+    check not sessionEnded("authorizationStateClosing", stopping = true)
+    check not sessionEnded("authorizationStateClosed", stopping = true)
+    check sessionEnded("authorizationStateLoggingOut", stopping = false)
+    check sessionEnded("authorizationStateClosed", stopping = false)
+    check not sessionEnded("authorizationStateReady", stopping = false)
+
+  test "control characters are removed before printing a post":
+    check printable("a\e]0;pwned\a\e[2Jb\nc\td\u009bé ع") == "a]0;pwned[2Jb\nc\tdé ع"
+
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"
     check statePath(cfg, true).endsWith "state-dryrun.sqlite3"

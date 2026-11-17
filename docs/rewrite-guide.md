@@ -430,13 +430,15 @@ telenotify run
    - **reject**: nothing.
 4. Record the verdict, reasons and action in `processed`, then mark the message read.
 
-There is one queue, and messages are handled **one at a time**. First the startup backlog (every watched chat's unread messages, oldest first, found with the chat's real read marker), then live messages. Live messages that arrive while the backlog is still being read wait until it's done. Otherwise a new message could be marked read first, and since Telegram's read marker is a single position per chat, the backlog behind it would count as read: if the bot then died, those messages would never be handled. One queue alone removes the old duplicate race and the "deleted posts make us skip unread messages" bug.
+There is one queue, and messages are handled **one at a time**. First the startup backlog (every watched chat's unread messages, oldest first, found with the chat's real read marker; at most 10,000 per chat, and you get an alert if a chat had more), then live messages. Live messages that arrive before the backlog is done (including while the chats are still being opened at start-up) wait for it. Otherwise a new message could be marked read first, and since Telegram's read marker is a single position per chat, the backlog behind it would count as read: if the bot then died, those messages would never be handled. One queue alone removes the old duplicate race and the "deleted posts make us skip unread messages" bug.
 
-A failure (a download, OCR, a Telegram error such as a flood limit) affects only its own message, and the message isn't lost: it goes to the review queue with the error, so you decide.
+A failure (a download, OCR, a Telegram error such as a flood limit) affects only its own message, and the message isn't lost: it goes to the review queue with the error, so you decide. The same goes for a picture that couldn't be read: if the post would otherwise be rejected, it goes to review instead, because the picture is often the whole ad. A TDLib request that gets no answer for 5 minutes fails instead of stalling the bot. If Telegram refuses a forward after TDLib accepted it (you lost the right to post, slow mode...), you get an alert.
+
+Chats in your Archive are loaded too; job channels are often archived.
 
 A stop request (Ctrl-C, `systemctl stop`) is honoured after the current message, not after the whole backlog. Whatever is left stays unread and is handled at the next start.
 
-If the Telegram session ends while the bot runs (you logged it out from your phone, for example), the bot stops with an error, so systemd restarts it and the log says why. Before, it would have hung while looking alive. Any request still waiting for TDLib then fails instead of waiting forever (`td.nim`).
+If the Telegram session ends while the bot runs (you logged it out from your phone, for example), the bot stops with an error (a normal stop doesn't count), so systemd restarts it and the log says why. Before, it would have hung while looking alive. Any request still waiting for TDLib then fails instead of waiting forever (`td.nim`).
 
 Photos are deleted from TDLib's file folder once read, so a bot that runs for months doesn't fill the disk.
 
@@ -449,7 +451,7 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 | `telenotify review [--dry-run]` | Goes through the review queue: shows the post, its link and why it's unclear; `s` approves it, `d` discards it, `n` skips it, `q` quits |
 | `telenotify stats [--days:N] [--dry-run]` | Per chat: how many messages got each verdict, how many were forwarded, and how many reviews are waiting |
 
-**Why `review` doesn't send anything itself.** TDLib locks its database, so only one program can use your login at a time. If `review` opened Telegram, you'd have to stop the bot first. So `review` only writes your decision (status `to_send`) to SQLite, and the running bot sends approved posts within about five seconds (`sendApproved`). If one can't be sent, it goes back to the queue with the reason. `login` still needs the bot stopped, but you only run it once.
+**Why `review` doesn't send anything itself.** TDLib locks its database, so only one program can use your login at a time. If `review` opened Telegram, you'd have to stop the bot first. So `review` only writes your decision (status `to_send`) to SQLite, and the running bot sends approved posts within about five seconds (`sendApproved`). If one can't be sent, it goes back to the queue with the reason. A post can only be approved while it's pending, so two `review` windows can't send it twice. Text is shown without control characters, so a post or a scraped job page can't clear or fake your terminal screen. `login` still needs the bot stopped, but you only run it once.
 
 **Dry runs have their own state** (`state-dryrun.sqlite3`). Otherwise every message the dry run judged would be skipped as "already seen" once you switch to the real bot. Add `--dry-run` to `review` and `stats` to look at it.
 
@@ -480,3 +482,5 @@ Every minute the bot saves a heartbeat. At start-up, a heartbeat older than `ale
 - **The nice dashboard (#10).** `review` and `stats` are plain text for now. The data the dashboard needs is all in SQLite already.
 - **`telenotify export`.** It will export review decisions and Saved Messages as corpus labels, replacing the Python scripts in the corpus folder.
 - **First run on your account.** That needs your login.
+- **Albums and edits.** An album (several pictures, one ad) is judged picture by picture, and only the first has the caption. A post edited into a job ad after it appeared is not looked at again. Both are on the list for stage 4.
+- **Duplicates after a crash.** If the bot dies between forwarding a post and recording it, the post is forwarded again at the next start. That window is a few milliseconds.
