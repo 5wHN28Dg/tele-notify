@@ -1,2 +1,19 @@
 test.session
 /Private
+# local environments and caches
+myenv/
+.venv/
+.ropeproject/
+.ruff_cache/
+__pycache__/
+# Nim build output
+/telenotify
+tests/*
+!tests/*.nim
+!tests/*.nims
+!tests/*.json
+nimcache/
+# never commit sessions or private corpora
+*.session
+*.session-journal
+corpus/

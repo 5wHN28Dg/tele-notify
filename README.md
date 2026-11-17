@@ -11,6 +11,24 @@ It also supports OCR on attached images and avoids forwarding duplicate messages
 
 **⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs. It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
 
+## 🚧 Rewrite in progress (v4, Nim)
+
+tele-notify is being rewritten in [Nim](https://nim-lang.org), in stages, while the Python version below keeps working:
+
+1. ✅ **Filter core**: `telenotify check` / `telenotify eval`, with evidence-based verdicts (publish / review / reject) and a reason for each.
+2. ⏳ OCR and job-board scrapers.
+3. ⏳ Telegram listener (TDLib).
+4. ⏳ Side-by-side run, then switch over.
+
+Try the new filter on a post:
+
+```bash
+nimble build -d:release
+./telenotify check --config:config.json post.txt
+```
+
+Read [`docs/rewrite-guide.md`](docs/rewrite-guide.md) for how it works, and [`docs/problems-report.md`](docs/problems-report.md) for why it is being rewritten.
+
 ## ✨ Features
 
 * **Keyword-based filtering**: Matches at least one keyword from each of three keyword categories.
