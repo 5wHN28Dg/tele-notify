@@ -14,8 +14,9 @@
 ##    private (127.x, 10.x, 192.168.x, ::1, ::ffff:127.0.0.1, ...);
 ## 2. connect to that checked address (so a second DNS answer can't swap
 ##    it for a local one);
-## 3. for https, check the certificate really belongs to the host name
-##    (the async TLS layer in Nim doesn't);
+## 3. for https, make the TLS handshake itself check that the certificate
+##    belongs to the host name (Nim's async TLS layer doesn't), so nothing
+##    is sent to an impostor;
 ## 4. send one GET with `Connection: close`, read at most 3 MB, close.
 ## Each redirect is a new connection (up to 5). When the time limit fires
 ## we close the socket, which cancels whatever was in progress.
@@ -53,25 +54,35 @@ type
 
 # ------------------------------------------------------------ addresses
 
+proc isPrivateV4(a: array[4, uint8]): bool =
+  a[0] in [0'u8, 10, 127] or (a[0] == 172 and a[1] in 16'u8 .. 31'u8) or
+    (a[0] == 192 and a[1] == 168) or (a[0] == 169 and a[1] == 254) or
+    (a[0] == 100 and a[1] in 64'u8 .. 127'u8) or a[0] >= 224 or
+    (a[0] == 198 and a[1] in 18'u8 .. 19'u8) or (a[0] == 192 and a[1] == 0 and a[2] == 0)
+
 proc isPrivateIp*(ip: IpAddress): bool =
-  ## Loopback, private, link-local, carrier-grade NAT, "this host" and
-  ## unspecified addresses, including IPv4 addresses written as IPv6.
+  ## Loopback, private, link-local, carrier-grade NAT, benchmarking,
+  ## multicast, "this host" and unspecified addresses, including IPv4
+  ## addresses wrapped in IPv6 (mapped, translated, NAT64, 6to4).
   case ip.family
   of IpAddressFamily.IPv4:
-    let a = ip.address_v4
-    a[0] in [0'u8, 10, 127] or (a[0] == 172 and a[1] in 16'u8 .. 31'u8) or
-      (a[0] == 192 and a[1] == 168) or (a[0] == 169 and a[1] == 254) or
-      (a[0] == 100 and a[1] in 64'u8 .. 127'u8) or a[0] >= 224
+    isPrivateV4(ip.address_v4)
   of IpAddressFamily.IPv6:
     let a = ip.address_v6
-    var zeroUpTo10 = true
-    for i in 0 .. 9:
-      if a[i] != 0: zeroUpTo10 = false
-    if zeroUpTo10 and ((a[10] == 0xFF and a[11] == 0xFF) or (a[10] == 0 and a[11] == 0)):
-      # ::ffff:a.b.c.d (mapped), ::a.b.c.d (compatible), :: and ::1
-      return isPrivateIp(IpAddress(family: IpAddressFamily.IPv4,
-                                   address_v4: [a[12], a[13], a[14], a[15]]))
-    (a[0] and 0xFE) == 0xFC or (a[0] == 0xFE and (a[1] and 0xC0) == 0x80) or a[0] == 0xFF
+    let at12 = [a[12], a[13], a[14], a[15]]
+    var zeroUpTo8 = true
+    for i in 0 .. 7:
+      if a[i] != 0: zeroUpTo8 = false
+    if zeroUpTo8 and a[8] == 0 and a[9] == 0 and
+        ((a[10] == 0xFF and a[11] == 0xFF) or (a[10] == 0 and a[11] == 0)):
+      return isPrivateV4(at12)   # ::ffff:a.b.c.d (mapped), ::a.b.c.d, :: and ::1
+    if zeroUpTo8 and a[8] == 0xFF and a[9] == 0xFF and a[10] == 0 and a[11] == 0:
+      return isPrivateV4(at12)   # ::ffff:0:a.b.c.d (translated)
+    if a[0] == 0x00 and a[1] == 0x64 and a[2] == 0xFF and a[3] == 0x9B:
+      return isPrivateV4(at12)   # 64:ff9b::a.b.c.d (NAT64)
+    if a[0] == 0x20 and a[1] == 0x02:
+      return isPrivateV4([a[2], a[3], a[4], a[5]])   # 2002:aabb:ccdd:: (6to4)
+    (a[0] and 0xFE) == 0xFC or (a[0] == 0xFE and (a[1] and 0x80) == 0x80) or a[0] == 0xFF
 
 proc resolve(host: string, port: Port, allowPrivate: bool): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
@@ -105,6 +116,14 @@ proc closeQuietly(live: Live) =
     try: live.sock.close()
     except CatchableError: discard
     live.sock = nil
+
+when defined(ssl):
+  # Two OpenSSL calls the standard wrapper doesn't declare. They make the
+  # TLS handshake itself fail when the certificate isn't for `host`, so
+  # nothing (not even the path we ask for) is sent to an impostor.
+  proc SSL_get0_param(ssl: SslPtr): pointer {.cdecl, dynlib: DLLSSLName, importc.}
+  proc X509_VERIFY_PARAM_set1_host(param: pointer, name: cstring, namelen: csize_t): cint
+    {.cdecl, dynlib: DLLSSLName, importc.}
 
 proc checkCertificate(sock: AsyncSocket, host: string) =
   when defined(ssl):
@@ -142,6 +161,8 @@ proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, 
     when defined(ssl):
       let ctx = newContext(verifyMode = CVerifyPeer)
       wrapConnectedSocket(ctx, sock, handshakeAsClient, host)
+      if X509_VERIFY_PARAM_set1_host(SSL_get0_param(sock.sslHandle), host.cstring, host.len.csize_t) != 1:
+        raise newException(FetchError, "cannot set TLS host name check")
     else:
       raise newException(FetchError, "built without -d:ssl")
   var path = (if u.path == "": "/" else: u.path)
@@ -151,7 +172,7 @@ proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, 
   await sock.send("GET " & path & " HTTP/1.1\r\nHost: " & hostHeader &
                   "\r\nUser-Agent: " & userAgent &
                   "\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n")
-  if scheme == "https": checkCertificate(sock, host)
+  if scheme == "https": checkCertificate(sock, host)   # second, belt-and-braces check
 
   # status line and headers
   let statusLine = await sock.recvLine(maxLength = maxHeaderBytes)
@@ -187,12 +208,14 @@ proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, 
   var body = ""
   if "chunked" in transfer:
     while true:
-      let sizeLine = (await sock.recvLine(maxLength = 100)).strip.split(';')[0]
-      var size = 0
-      try: size = parseHexInt(sizeLine)
-      except ValueError: raise newException(FetchError, "bad chunk size")
+      let sizeLine = (await sock.recvLine(maxLength = 100)).strip.split(';')[0].strip
+      # At most 8 hex digits (plenty for 3 MB): parseHexInt silently wraps
+      # around on longer input, which crashed us or broke the framing.
+      if sizeLine.len == 0 or sizeLine.len > 8 or not sizeLine.allCharsInSet(HexDigits):
+        raise newException(FetchError, "bad chunk size")
+      let size = parseHexInt(sizeLine)
       if size == 0: break
-      if body.len + size > maxBytes: raise newException(FetchError, "page too large")
+      if size > maxBytes - body.len: raise newException(FetchError, "page too large")
       body.add await sock.recvExactly(size)
       discard await sock.recvLine(maxLength = 10)
   elif length >= 0:
@@ -230,7 +253,7 @@ proc fetch*(url: string, timeoutMs = 20_000, allowPrivate = false): Future[Fetch
   if await withTimeout(fut, timeoutMs):
     return fut.read
   live.closeQuietly()   # cancels a connect or read in progress
-  let limit = if timeoutMs < 1000: $timeoutMs & " ms" else: $(timeoutMs div 1000) & " s"
+  let limit = if timeoutMs mod 1000 != 0: $timeoutMs & " ms" else: $(timeoutMs div 1000) & " s"
   return Fetched(ok: false, finalUrl: live.current, error: "timed out after " & limit)
 
 proc defaultFetcher*(): Fetcher =

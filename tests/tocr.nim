@@ -72,6 +72,27 @@ suite "ocr: review pass 2 (stage 2) findings":
   test "image dimensions are read from PNG and JPEG headers":
     check imageSize(readFile(fx / "ocr_english.png")) == (900, 220)
     check imageSize(readFile(fx / "ocr_english.jpg")) == (900, 220)
-    check imageSize("GIF89a\x10\x00\x20\x00") == (16, 32)
+    check imageSize("GIF89a\x10\x00\x20\x00\x00\x00\x00" &
+                    "\x2c\x00\x00\x00\x00\x10\x00\x20\x00\x00") == (16, 32)
+    check imageSize("GIF89a\x10\x00") == (-1, -1)   # truncated
     check imageSize("hello") == (-1, -1)
     check (waitFor ocrFile(fx / "ocr_english.jpg")).ok
+
+suite "ocr: review pass 3 (stage 2) findings":
+  test "a GIF whose header lies about its size is still measured correctly":
+    # screen size says 10x10, the first image descriptor says 20000x20000
+    var gif = "GIF89a\x0a\x00\x0a\x00\x00\x00\x00"
+    gif.add "\x21\xf9\x04\x00\x00\x00\x00\x00"          # a graphic-control extension
+    gif.add "\x2c\x00\x00\x00\x00\x20\x4e\x20\x4e\x00"  # image descriptor 20000x20000
+    check imageSize(gif) == (20000, 20000)
+
+  test "a file called '-' is read as a file, not as standard input":
+    let dir = getTempDir() / "tn-dash"
+    createDir(dir)
+    copyFile(fx / "ocr_english.png", dir / "-")
+    let old = getCurrentDir()
+    setCurrentDir(dir)
+    let r = waitFor ocrFile("-", timeoutMs = 20_000)
+    setCurrentDir(old)
+    removeDir(dir)
+    check r.ok and "Electrical" in r.text

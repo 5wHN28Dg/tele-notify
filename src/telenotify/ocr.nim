@@ -51,8 +51,23 @@ proc imageSize*(data: string): (int, int) =
   let n = data.len
   if n >= 24 and data.startsWith("\x89PNG\r\n\x1a\n") and data[12 .. 15] == "IHDR":
     return (u32be(data, 16), u32be(data, 20))
-  if n >= 10 and (data.startsWith("GIF87a") or data.startsWith("GIF89a")):
-    return (u16le(data, 6), u16le(data, 8))
+  if n >= 13 and (data.startsWith("GIF87a") or data.startsWith("GIF89a")):
+    # The header's "screen" size can lie; the first image's own size is
+    # what gets decoded, so report the larger of the two.
+    var (w, h) = (u16le(data, 6), u16le(data, 8))
+    var i = 13
+    if (data[10].ord and 0x80) != 0: i += 3 * (1 shl ((data[10].ord and 7) + 1))  # colour table
+    while i < n:
+      case data[i].ord
+      of 0x21:                       # extension: skip its sub-blocks
+        i += 2
+        while i < n and data[i].ord != 0: i += data[i].ord + 1
+        inc i
+      of 0x2C:                       # image descriptor
+        if i + 9 <= n: return (max(w, u16le(data, i + 5)), max(h, u16le(data, i + 7)))
+        return (-1, -1)
+      else: return (-1, -1)
+    return (w, h)
   if n >= 30 and data.startsWith("RIFF") and data[8 .. 11] == "WEBP":
     case data[12 .. 15]
     of "VP8 ": return (u16le(data, 26) and 0x3FFF, u16le(data, 28) and 0x3FFF)
@@ -84,6 +99,7 @@ proc checkImage(data: string): string =
 
 proc runTesseract(imagePath, dir, langs: string, timeoutMs: int): Future[OcrResult] {.async.} =
   let base = dir / "out"
+  let imagePath = absolutePath(imagePath)   # "-" would mean "read standard input"
   var data = ""
   try:
     if getFileSize(imagePath) > 30_000_000:
@@ -97,7 +113,9 @@ proc runTesseract(imagePath, dir, langs: string, timeoutMs: int): Future[OcrResu
   try:
     # sh is only used for the "2>/dev/null"; the file names are passed as
     # separate arguments ($1, $2...), never pasted into the command text.
-    p = startProcess("/bin/sh", args = ["-c", "exec tesseract \"$1\" \"$2\" -l \"$3\" -c debug_file=/dev/null >/dev/null 2>&1",
+    # `ulimit -v` caps tesseract's memory at ~2 GB, a backstop in case an
+    # image header lies about the picture's size.
+    p = startProcess("/bin/sh", args = ["-c", "ulimit -v 2000000; exec tesseract \"$1\" \"$2\" -l \"$3\" -c debug_file=/dev/null >/dev/null 2>&1",
                                         "sh", imagePath, base, langs],
                      options = {poParentStreams})
   except OSError as e:
