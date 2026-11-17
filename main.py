@@ -3,10 +3,12 @@ import io
 import json
 import logging
 import os
-import re
 import tempfile
 
+import aiohttp
 import pytesseract
+import regex
+from bs4 import BeautifulSoup
 from PIL import Image
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -17,6 +19,7 @@ from tenacity import (
     stop_after_attempt,
     wait_random_exponential,
 )
+from urlextract import URLExtract
 
 # logging for easier debugging
 logging.basicConfig(
@@ -55,48 +58,50 @@ mid_level_role_en = data["mid_level_general_role_en"]
 mid_level_role_ar = data["mid_level_general_role_ar"]
 location_keywords_en = data["location_keywords_en"]
 location_keywords_ar = data["location_keywords_ar"]
-certifications = [re.escape(x) for x in data["certifications"]]
+certifications = [regex.escape(x) for x in data["certifications"]]
 responsibility_keywords = data["responsibility_keywords"]
 
 # last 10 forwarded messages
 recent_messages = data["recent_messages"]
 
 
-# Function to build hybrid regex: \b for Latin, no \b for Arabic
+# Function to build hybrid regex
 def build_hybrid_regex(en_list, ar_list, special_patterns=None, mid_level=None):
     parts = []
     if en_list:
         processed_en_list = [
-            r"[\s_-]+".join(re.escape(p) for p in k.split(" ")) for k in en_list
+            r"[\s_-]+".join(regex.escape(p) for p in k.split(" ")) for k in en_list
         ]
         en_pattern = (
             r"(?<![a-zA-Z0-9])(?:" + "|".join(processed_en_list) + r")(?![a-zA-Z0-9])"
         )
         parts.append(en_pattern)
     if ar_list:
-        parts.append(r"(?:" + "|".join(re.escape(k) for k in ar_list) + r")")
-        if special_patterns:
-            parts.append(r"(?:" + "|".join(special_patterns) + r")")
+        parts.append(r"(?:" + "|".join(regex.escape(k) for k in ar_list) + r")")
+    if special_patterns:
+        parts.append(r"(?:" + "|".join(special_patterns) + r")")
     return (
-        re.compile(
-            r"(?<!senior[\s_-])" + "|".join(parts) if mid_level else "|".join(parts),
-            re.IGNORECASE,
+        regex.compile(
+            r"(?<!(lead|senior|Sr).{0,30})" + "|".join(parts)
+            if mid_level
+            else "|".join(parts),
+            regex.IGNORECASE,
         )
         if parts
-        else re.compile(r"$.")
+        else regex.compile(r"$.")
     )
 
 
 # Function to build experience regex pattern
 def build_experience_regex():
-    pattern = r"(\d+((-\d+)?|\+)? years (of )?(relevant )?experience|experience required)|(خبرة( عملية)? لا ?تقل عن|(يشترط|يجب) تواجد خبرة|خبرة (سنة|سنتين|\d+))"
-    return re.compile(pattern, re.IGNORECASE)
+    pattern = r"((?:experience:?\s?minimum\s\d+(?:(-\d+)?|\+|\.\d)? years(?:’)?)|(?:minimum\s\d+(?:(-\d+)?|\+)? years(?:’)?\sin)|(\d+(?:(-\d+)?|\+)? years(?:’)? (?:of )?(?:relevant |proven |related |total )?(?:professional )?.{0,20}experience|experience required))|(?:خبرة(?: عملية)?(?:\s(?:المطلوبة|موثقة):?\s?)? (?:لا ?تقل عن|من)|(?:يشترط|يجب) تواجد خبرة|(?:لا(?:\s)?تقل\s)?خبر(?:ه|ة|تهم)  ?(?:≥\s|الفعلية\sعن\s)?(?:سنة|سنتين|(?:(?:ثلاث|اربع|خمس|ست|سبع|ثمان|تسع|عشر)\sسنوات)|[\d٠-٩]+|\(\d-\d\))|(?:خبرة في مجال العمل|بالعمل (?:لا تقل (?:عن )?)?(?:سن(?:ه|ة)|سنتين|[\d٠-٩]+))|\d+\+\sسنوات خبرة)"
+    return regex.compile(pattern, regex.IGNORECASE)
 
 
 def build_responsibilities_regex(responsibility_keywords):
     keywords = "|".join(responsibility_keywords)
     pattern = f"(?:\\d+\\. |- |\\d+- |• |\n)({keywords})\\b"
-    return re.compile(pattern, re.IGNORECASE)
+    return regex.compile(pattern, regex.IGNORECASE)
 
 
 def build_certifications_regex(certifications):
@@ -108,16 +113,26 @@ def build_certifications_regex(certifications):
         "Must possess one or more of the following",
         f"degree and {cert_options} or equivalent combination",
         f"The successful candidate will hold {cert_options}",
-        f"Any relevant certifications .{{0,20}}{cert_options}?(?!.{{0,30}}are a plus)",
+        f"(?:Any\\s)?relevant certifications.{{0,20}}{cert_options}?(?!.{{0,30}}are a plus)",
         f"(ينبغي ان يكون المرشح الناجح (حاصلا على|يمتلك) {cert_options})",
         f"(درجة (علمية)? و{cert_options} او ما يعادلها)",
         f"({cert_options}).{{0,20}}((مطلوب|إلزامي|ضروري)(?! أو يجب الحصول عليه))",
         "(على الأقل واحدة من الشهادات التالية مطلوبة)|(أي من الشهادات التالية مقبولة)",
         "(يجب أن يمتلك واحدة أو أكثر من الشهادات التالية)",
+        f"حاصل على شهادة {cert_options}",
     ]
 
     combined_pattern = "|".join(patterns)
-    return re.compile(combined_pattern, re.IGNORECASE)
+    return regex.compile(combined_pattern, regex.IGNORECASE)
+
+
+apply_anyway_patterns = [
+    r"(even\s+if\s+(?:you|they)(?:\s+)?(?:are|do|(?:'|’)re)(?:n'?t|\s+not)\s+(?:an\sexact\s)?(?:meet|match|fulfil|check)\s+(?:to\s)?(?:every|all)\s+(?:listed\s)?(?:requirement|criteria|qualification|statement|(?:bullet\s)?point))",
+    r"((?:encourage|welcome|invite)\s+(?:you|applicants?|applications)\s+(?:(?:(?:(?:(?:to\s+)?(?:take\sthe\sleap\sand\s)?apply)|(?:with varied backgrounds and experiences)))|(?:.{0,44} who (?:may|do) not meet (?:every|all) listed requirement)))",
+    r"(if\s+(?:you'?re|you\s+are)\s+(?:excited|interested|passionate|enthusiastic).{0,40}(?:apply|consider\s+applying))",
+    r"((?:no candidate will|don(?:'|’)?t)\s+(?:tick|check|meet)\s+(?:every|all)(?:\ssingle)?\s+(?:box|requirement|qualification))",
+]
+combined_apply_anyway_pattern = "|".join(apply_anyway_patterns)
 
 
 # Compile patterns
@@ -136,9 +151,19 @@ location_pattern = build_hybrid_regex(
 experience_pattern = build_experience_regex()
 certification_pattern = build_certifications_regex(certifications)
 responsibilities_pattern = build_responsibilities_regex(responsibility_keywords)
-is_job_seeker_pattern = re.compile(
-    "محتاج|((ابحث|باحث) عن) (فرصة )?(عمل|وظيفة|مهنة)", re.IGNORECASE
+is_job_seeker_pattern = regex.compile(
+    "(?:محتاج(?:ه|ة)?|(?:(?:(?:ا|أ)بحث|باحث)(?: عن)?)|ادور(?: على)?) (?:فرصة )?(?:عمل|وظيفة|مهنة|شغل)",
+    regex.IGNORECASE,
 )
+is_tuition_pattern = regex.compile(
+    r"(?:ال)?قسط السنوي|(?:ال)?كادر (?:ال)?تدريسي", regex.IGNORECASE
+)
+is_trivial_pattern = regex.compile(
+    r"تطوير مهارات (?:الحاسوب|الكمبيوتر)|عروض نهاية السنة|تخفيضات حصرية|اسئلة اختبار شركة",
+    regex.IGNORECASE,
+)
+is_apply_anyway_pattern = regex.compile(combined_apply_anyway_pattern)
+extractor = URLExtract()
 
 # retry policy in case something goes wrong
 retry_transient = retry(
@@ -166,24 +191,36 @@ async def check_for_a_match(message):
             (entry_level or mid_level),
             location_pattern.search(full_message),
             not is_job_seeker_pattern.search(full_message),
+            not is_tuition_pattern.search(full_message),
+            not is_trivial_pattern.search(full_message),
         ]
     ):
         if level_pattern.search(full_message):  # this is stage 1
-            return True, full_message
+            return True, full_message, entry_level, mid_level
 
-        experience = experience_pattern.search(full_message)
-        certification = certification_pattern.search(full_message)
+        if is_apply_anyway_pattern.search(full_message):
+            experience, certification = False, False
+        else:
+            experience = experience_pattern.search(full_message)
+            certification = certification_pattern.search(full_message)
+
         responsibilities = responsibilities_pattern.search(full_message)
 
         if entry_level and not any([experience, certification]):
-            return True, full_message
+            return True, full_message, entry_level, mid_level
 
         if mid_level and not any([experience, certification, responsibilities]):
-            return True, full_message
+            return True, full_message, entry_level, mid_level
 
-        await message.forward_to("me")
-        logging.info("forwarded the message to you, check it out!")
-    return False, full_message
+        if not message.chat.noforwards:
+            await message.forward_to("me")
+        else:
+            await client.send_message(
+                "me",
+                f"match: {entry_level.group() if entry_level else mid_level.group()}\npost link: https://t.me/{message.chat.username}/{message.id}",
+            )
+        logging.info("forwarded the message to you, check it out 🤔")
+    return False, full_message, entry_level, mid_level
 
 
 # checks the message type then makes it ready for processing
@@ -195,9 +232,18 @@ async def message_processor(msg):
         except Exception as e:
             logging.error(f"OCR failed: {e}")
 
+    url_in_button = ""
+    if hasattr(msg, "buttons") and msg.buttons:
+        url_in_button = msg.buttons[0][0].url
+    link_text = (
+        await scrape_full_job(msg.raw_text, image_text, url_in_button) or ""
+        if msg.raw_text
+        else ""
+    )
+
     text_content = msg.raw_text or ""
-    full_message = image_text + " " + text_content
-    logging.info(f"Processed message: {msg.id}")
+    full_message = image_text + " " + text_content + " " + link_text
+    logging.info(f"extracted the full text of message: {msg.id}")
     return full_message
 
 
@@ -218,23 +264,169 @@ def callback(current, total):
     )
 
 
+@retry_transient
+async def scrape_full_job(msg, image_text, url_in_button):
+    msg = msg + " " + url_in_button
+    links_in_msg: list = extractor.find_urls(msg)
+    job_description = ""
+    link_pattern = regex.compile(
+        r"(?:https://)?(?:www\.)?(?:(iqjscout\.com/jobs/\S+/)|(linkedin\.com/posts\S+)|(linkedin.com/jobs/view/\d+)|(mselect\.com/job/\S+)|(khana.jobs/jobs/\d+)|(taeen.iq/ar/jobs/\S+)|(apply.workable.com/\S+))"
+    )
+    if links_in_msg:
+        fullish_msg = msg + " " + image_text
+        filler_pattern = regex.compile(
+            r"(?:(check\sout\sthis\sjob\sat\s\S+)|(ألقِ نظرة على هذه الوظيفة.{0,})|التقديم عبر رابط LinkedIn):",
+            regex.IGNORECASE,
+        )
+        ambiguous_pattern = regex.compile(r"مهندس(?:ين)? (?:فريش|تحت التدريب)")
+        entry_level = entry_level_role_pattern.search(fullish_msg)
+        is_entry_level_in_link = regex.compile(
+            r"(?<!(iqjscout|mselect)\.com.{0,30})" + entry_level_role_pattern.pattern
+        ).search(fullish_msg)
+        mid_level = mid_level_role_pattern.search(fullish_msg)
+        is_mid_level_in_link = regex.compile(
+            r"(?<!(iqjscout|mselect)\.com.{0,30})" + mid_level_role_pattern.pattern
+        ).search(fullish_msg)
+        location = location_pattern.search(fullish_msg)
+        filler_links = regex.compile(r"https://t\.me/\S+")
+        subtractor = [
+            entry_level.group() if all([entry_level, is_entry_level_in_link]) else "",
+            mid_level.group() if all([mid_level, is_mid_level_in_link]) else "",
+            location.group() if location else "",
+            filler_pattern.search(fullish_msg).group()
+            if filler_pattern.search(fullish_msg)
+            else "",
+            ambiguous_pattern.search(fullish_msg).group()
+            if ambiguous_pattern.search(fullish_msg)
+            else "",
+            filler_links.search(fullish_msg).group()
+            if filler_links.search(fullish_msg)
+            else "",
+            " يرجى منكم مشاركة رابط القناة والمنشور ليصل الى اكبر عدد من المهتمين",
+            "شارك رابط القناة للاستفادة",
+            "فرصة وظيفية جديدة على منصة تعيين!",
+            'للتقديم: اضغط على زر "التقديم على الوظيفة" أدناه',
+        ]
+        remaining = fullish_msg
+        for sub in subtractor:
+            if sub:
+                remaining = remaining.replace(sub, "")
+        for link in links_in_msg:
+            remaining = remaining.replace(link, "")
+            match = link_pattern.search(link)
+            if match and len(remaining) <= 10:
+                headers = {
+                    "user-agent": "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"
+                }
+                async with aiohttp.ClientSession() as session:
+                    # Khana
+                    if match.group(5):
+                        link = (
+                            "https://prodclient.up.railway.app/api/v1/jobs/"
+                            + regex.compile(r"(?<=/jobs/)\S+").search(link).group()
+                        )
+                    # Taeen
+                    elif match.group(6):
+                        link = (
+                            "https://api.taeen.iq/jobs/"
+                            + regex.compile(r"(?<=/jobs/)\S+").search(link).group()
+                        )
+                    # Workable
+                    elif match.group(7):
+                        link = (
+                            "https://apply.workable.com/api/v2/accounts/"
+                            + regex.compile(r"(?<=workable\.com/)\S+(?=/j/)")
+                            .search(link)
+                            .group()
+                            + "/jobs"
+                            + regex.compile(r"(?<=/j/)\S+(?=/)").search(link).group()
+                        )
+                    async with session.get(link, headers=headers) as response:
+                        if any([match.group(5), match.group(6), match.group(7)]):
+                            json_data = json.loads(await response.text())
+                        else:
+                            soup_alpha = BeautifulSoup(await response.text(), "lxml")
+                # iraq job scout
+                if match.group(1) and all([(entry_level or mid_level), location]):
+                    job_description = soup_alpha.find(
+                        "div", class_="job-desc"
+                    ).get_text()
+                    logging.info("IJS link scraped successfully 🌐")
+                # LinkedIn post
+                elif match.group(2):
+                    job_description = soup_alpha.find(
+                        "div",
+                        class_="attributed-text-segment-list__container relative mt-1 mb-1.5 babybear:mt-0 babybear:mb-0.5",
+                    ).get_text()
+                    logging.info("LinkedIn post scraped successfully 🌐")
+                # LinkedIn job post
+                elif match.group(3):
+                    job_description = soup_alpha.find(
+                        "div",
+                        class_="show-more-less-html__markup show-more-less-html__markup--clamp-after-5 relative overflow-hidden",
+                    ).get_text()
+                    logging.info("LinkedIn job post scraped successfully 🌐")
+                # mselect
+                elif match.group(4):
+                    job_description = soup_alpha.find(
+                        "div",
+                        class_="wrapper body",
+                    ).get_text()
+                    logging.info("mselect job post scraped successfully 🌐")
+                # Khana
+                elif match.group(5):
+                    job_description = json_data["data"]["description"]
+                    logging.info("khana job post scraped successfully 🌐")
+                # Taeen
+                elif match.group(6):
+                    job_description = json_data["description"]
+                    logging.info("taeen job post scraped successfully 🌐")
+                # Workable
+                elif match.group(7):
+                    job_description = (
+                        json_data["title"]
+                        + json_data["location"]["city"]
+                        + json_data["description"]
+                        + json_data["requirements"]
+                    )
+                    logging.info("workable job post scraped successfully 🌐")
+
+    return job_description or None
+
+
 # compares the message to be sent with the last 10 sent messages
 async def check_for_duplicates(message_text):
     text = recent_messages + [message_text]
     vectorizer = TfidfVectorizer(stop_words=None, token_pattern=r"(?u)\b\w+\b")
     vectors = vectorizer.fit_transform(text)
 
+    link_in_message = extractor.find_urls(message_text)
     # Compare new message with each recent message
     for i in range(len(recent_messages)):
         similarity = cosine_similarity(vectors[i : i + 1], vectors[-1:])[0, 0]
         if similarity > 0.8:
+            logging.info(f"sorry this is a fluke, similarity is at {similarity}")
             return True  # Duplicate found
+
+        link_in_recent = extractor.find_urls(recent_messages[i])
+
+        if link_in_message and link_in_recent:
+            if any(link in link_in_message for link in link_in_recent):
+                logging.info("another fluke, matching URL")
+                return True  # Duplicate found
     return False
 
 
 @retry_transient
-async def message_forwarder(msg, full_message):
-    await msg.forward_to(target_chat)
+async def message_forwarder(msg, full_message, entry_level, mid_level):
+    if not msg.chat.noforwards:
+        await msg.forward_to(target_chat)
+    else:
+        await client.send_message(
+            target_chat,
+            f"match: {entry_level.group() if entry_level else mid_level.group()}\npost link: https://t.me/{msg.chat.username}/{msg.id}",
+        )
+    logging.info("Message forwarded 🎉")
     await add_to_recent(full_message)
     await asyncio.sleep(1)
 
@@ -273,12 +465,18 @@ async def unread_messages_retriever():
             if dialog.id in chats and dialog.unread_count > 0 and dialog.message:
                 last_read_id = dialog.message.id - dialog.unread_count
                 async for msg in client.iter_messages(dialog.id, min_id=last_read_id):
-                    is_match, full_message = await check_for_a_match(msg)
-                    logging.info(
-                        f"message {msg.id} from chat: {dialog.id} is {is_match}"
-                    )
+                    (
+                        is_match,
+                        full_message,
+                        entry_level,
+                        mid_level,
+                    ) = await check_for_a_match(msg)
+                    mark = "✅" if is_match else "❌"
+                    logging.info(f"message {msg.id} from chat: {dialog.id} is {mark}")
                     if is_match and not await check_for_duplicates(full_message):
-                        await message_forwarder(msg, full_message)
+                        await message_forwarder(
+                            msg, full_message, entry_level, mid_level
+                        )
                 await client.send_read_acknowledge(dialog.id)
                 logging.info(
                     f"completed processing unread messages for chat: {dialog.id} with name {dialog.title}"
@@ -294,11 +492,12 @@ async def unread_messages_retriever():
 @retry_transient
 async def new_message_handler(event):
     msg = event.message
-    is_match, full_message = await check_for_a_match(msg)
-    logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {is_match}")
+    is_match, full_message, entry_level, mid_level = await check_for_a_match(msg)
+    mark = "✅" if is_match else "❌"
+    logging.info(f"new message {msg.id} from chat: {msg.chat_id} is {mark}")
 
     if is_match and not await check_for_duplicates(full_message):
-        await message_forwarder(msg, full_message)
+        await message_forwarder(msg, full_message, entry_level, mid_level)
     await msg.mark_read()
 
 
