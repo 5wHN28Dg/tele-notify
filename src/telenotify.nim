@@ -10,7 +10,7 @@
 ## The Telegram listener will be added as `telenotify run` in a later stage.
 
 import std/[parseopt, json, strutils, strformat, tables, os, math]
-import telenotify/[config, classify]
+import telenotify/[config, classify, normalize]
 
 const usage = """
 usage:
@@ -47,7 +47,7 @@ proc cmdEval(cfg: Config, path, show: string) =
       else: false
     if pick:
       echo "=== id ", j{"id"}.getInt, "  label ", label, "  ", j{"note"}.getStr
-      echo j["text"].getStr.substr(0, 600)
+      echo j["text"].getStr.runeSafe(0, 600)
       printDecision(d)
       echo ""
   echo &"{total} posts"

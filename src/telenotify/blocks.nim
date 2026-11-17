@@ -18,9 +18,14 @@
 ##    that one job and the list is its requirements: keep the whole post as
 ##    one block.
 ## 3. Otherwise every list piece that names a job title starts a job block.
-##    Pieces without a title that come *after* a job are glued onto it (they
-##    are its requirements or the footer with the address). Pieces without a
-##    title that come *before* the first job are other jobs: dropped.
+##    A *numbered* piece without one of your titles is another job: dropped.
+##    An un-numbered piece after a job (cut off by a separator line) is glued
+##    onto that job. If a job block has no location of its own or in the
+##    header, the whole post is searched (the address may be in a footer
+##    that ended up attached to a dropped job).
+## 4. When the list is compact (every item one line), whatever follows the
+##    last item is a shared footer ("المتطلبات: خبرة 5 سنوات", the address)
+##    and is treated like the header: it applies to every job.
 ##
 ## Each job block can see the header (company location, common
 ## requirements) but never the other jobs.
@@ -35,7 +40,7 @@ type
     isHeader*: bool       ## true when the block is the header/whole post
 
 let
-  listItem = re2(r"^\s*(?:\(?\d{1,2}\s*[-.)ـ:]|\d\x{FE0F}?\x{20E3}|[\x{2776}-\x{277F}\x{2460}-\x{2473}]|[•▪◾◽🔹🔸]\s*\d)")
+  listItem = re2(r"^\s*(?:\(?\d{1,2}\s*[-.)ـ:](?:\s|$)|\d\x{FE0F}?\x{20E3}|[\x{2776}-\x{277F}\x{2460}-\x{2473}]|[•▪◾◽🔹🔸]\s*\d)")
   separator = re2(r"^\s*[━─—_=\-*~•.·]{3,}\s*$")
 
 proc mentionsTitle(lines: seq[string], titles: KeywordList): bool =
@@ -47,23 +52,44 @@ proc splitJobs*(normText: string, titles: KeywordList): seq[Block] =
   ## header block followed by one block per job.
   let lines = normText.splitLines
   var pieces: seq[seq[string]] = @[@[]]
+  var numbered = @[false]   # does piece i start with a list number?
   for l in lines:
     if l.contains(separator):
       pieces.add @[]
+      numbered.add false
       continue
     if l.contains(listItem) and pieces[^1].len > 0:
       pieces.add @[]
+      numbered.add true
     pieces[^1].add l
 
   let whole = @[Block(lines: lines, isHeader: true)]
   if pieces.len < 2 or pieces[0].mentionsTitle(titles):
     return whole
 
-  result.add Block(lines: pieces[0], isHeader: true)
-  for p in pieces[1 .. ^1]:
+  # A compact title list ("1- مهندس كهرباء\n2- مهندس ميكانيك\n3- ...") is
+  # usually followed by requirements that apply to *every* job. If every
+  # numbered item but the last is a single line, whatever follows the last
+  # item's first line is such a shared footer: it joins the header.
+  var footer: seq[string]
+  var lastNumbered = -1
+  for i in 1 ..< pieces.len:
+    if numbered[i]: lastNumbered = i
+  var compact = lastNumbered > 0
+  for i in 1 ..< lastNumbered:
+    if numbered[i] and pieces[i].len != 1: compact = false
+  if compact:
+    footer = pieces[lastNumbered][1 .. ^1]
+    pieces[lastNumbered] = pieces[lastNumbered][0 .. 0]
+    for i in lastNumbered + 1 ..< pieces.len: footer.add pieces[i]
+    pieces.setLen(lastNumbered + 1)
+
+  result.add Block(lines: pieces[0] & footer, isHeader: true)
+  for i in 1 ..< pieces.len:
+    let p = pieces[i]
     if p.mentionsTitle(titles):
       result.add Block(lines: p)
-    elif result.len > 1:
-      result[^1].lines.add p
+    elif result.len > 1 and not numbered[i]:
+      result[^1].lines.add p   # a footer or continuation of the job above
   if result.len == 1:
     return whole

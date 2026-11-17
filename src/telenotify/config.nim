@@ -36,6 +36,7 @@ type
     titleMarkers*, seniority*, mentoring*, jobSignals*, otherPlaces*, roleExclusions*: KeywordList
     streetBefore*, streetAfter*, locationMarkers*: KeywordList
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
+    seekerPhrases*, employerPhrases*: KeywordList
     maxExperienceYears*: int
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
     # Telegram side, used by the listener (not by the filter itself)
@@ -72,12 +73,12 @@ proc isFieldPhrase*(keyword: string): bool =
 proc splitRoles(words: seq[string], explicitFields: HashSet[string]): (seq[string], seq[string]) =
   for w in words:
     if w.strip.len == 0: continue
-    if w.normalizeText.strip in explicitFields or w.isFieldPhrase: result[1].add w
+    if w.normalizeText.flatten.strip in explicitFields or w.isFieldPhrase: result[1].add w
     else: result[0].add w
 
 proc parseConfig*(j: JsonNode): Config =
   var explicitFields: HashSet[string]
-  for f in j.both("field_keywords"): explicitFields.incl f.normalizeText.strip
+  for f in j.both("field_keywords"): explicitFields.incl f.normalizeText.flatten.strip
   let (entryTitles, entryFields) = splitRoles(j.both("entry_level_role"), explicitFields)
   let (midTitles, midFields) = splitRoles(j.both("mid_level_general_role"), explicitFields)
 
@@ -90,9 +91,11 @@ proc parseConfig*(j: JsonNode): Config =
   result.seniority = toKeywords(@seniorityWords & j.strings("extra_seniority"), strict = true)
   result.mentoring = toKeywords(@mentoringWords)
   result.titleMarkers = toKeywords(titleMarkers)
+  result.seekerPhrases = toKeywords(seekerPhrases)
+  result.employerPhrases = toKeywords(employerPhrases)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))
   result.jobSignals = toKeywords(@jobSignals & j.strings("extra_job_signals"))
-  result.otherPlaces = toKeywords(@otherPlaces & j.strings("extra_other_places"))
+  result.otherPlaces = toKeywords(@otherPlaces & j.strings("extra_other_places"), strict = true)
   result.streetBefore = toKeywords(streetBefore)
   result.streetAfter = toKeywords(streetAfter)
   result.locationMarkers = toKeywords(@locationMarkers & j.strings("extra_location_markers"))

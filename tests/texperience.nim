@@ -47,3 +47,20 @@ suite "experience: entry friendly and optional":
   test "durations that are not experience":
     check years("Program Duration: 3.5 Years\nGraduated within the last 12 months") == -1
     check years("Age: 25 years old, experience in sales") == -1
+
+suite "review pass 1 findings":
+  test "a list number is not the low end of a range":
+    check years("Requirements:\n1- 5+ years of experience in substations") == 5
+    check years("1. 3 years of experience") == 3
+
+  test "'not experience' words need whole words":
+    check years("5 years of programming experience") == 5
+    check years("BSc holder with 6 years experience") == 6
+    check years("experience with contractors for 4 years") == 4
+
+  test "عامل (worker) is not عام (year)":
+    check years("خبرة في ادارة 20 عامل") == -1
+
+  test "less than N years is entry friendly, not a requirement":
+    check friendly("less than 2 years of experience")
+    check years("less than 2 years of experience") == -1

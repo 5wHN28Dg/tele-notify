@@ -105,11 +105,6 @@ const
   ## Posts that are clearly not job adverts, even when they mention roles
   ## and places. (Kept from the old version's three blacklist patterns.)
   notAJob* = [
-    # someone *looking for* a job
-    "محتاج عمل", "محتاجه عمل", "محتاج وظيفه", "محتاجه وظيفه", "ابحث عن عمل",
-    "ابحث عن وظيفه", "ابحث عن فرصه عمل", "باحث عن عمل", "باحث عن وظيفه",
-    "ادور على شغل", "ادور شغل", "ادور عمل", "looking for a job",
-    "seeking employment", "i am looking for",
     # schools/universities advertising themselves, sales, misc
     "القسط السنوي", "الكادر التدريسي", "تطوير مهارات الحاسوب",
     "تطوير مهارات الكمبيوتر", "عروض نهايه السنه", "تخفيضات حصريه",
@@ -151,4 +146,21 @@ const
   titleMarkers* = [
     "position", "job title", "role", "vacancy", "we are hiring", "is hiring",
     "hiring", "المسمى الوظيفي", "الوظيفه", "العنوان الوظيفي", "مطلوب",
+  ]
+
+  ## Phrases of someone looking for a job. They only count when the post
+  ## does *not* also sound like an employer ("Looking for a job? We are
+  ## hiring..." is an advert).
+  seekerPhrases* = [
+    "محتاج عمل", "محتاجه عمل", "محتاج وظيفه", "محتاجه وظيفه", "ابحث عن عمل",
+    "ابحث عن وظيفه", "ابحث عن فرصه عمل", "باحث عن عمل", "باحث عن وظيفه",
+    "ادور على شغل", "ادور شغل", "ادور عمل", "looking for a job",
+    "seeking employment", "i am looking for",
+  ]
+
+  ## Phrases only an employer writes.
+  employerPhrases* = [
+    "we are hiring", "is hiring", "hiring", "we are looking for", "join our team",
+    "تعلن", "حاجتها الى", "حاجتنا الى", "نبحث عن", "تبحث شركه", "مطلوب",
+    "نعلن", "يعلن",
   ]

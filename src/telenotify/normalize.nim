@@ -83,8 +83,9 @@ proc isWordRune*(r: Rune): bool =
 
 proc runeSafe*(s: string, a, b: int): string =
   ## s[a ..< b] widened/narrowed so it never cuts a UTF-8 character in half.
-  var a = max(0, a)
-  var b = min(s.len, b)
+  var a = clamp(a, 0, s.len)
+  var b = clamp(b, 0, s.len)
+  if a >= b: return ""
   while a > 0 and (s[a].uint8 and 0xC0) == 0x80: dec a
   while b < s.len and (s[b].uint8 and 0xC0) == 0x80: inc b
   s[a ..< b]

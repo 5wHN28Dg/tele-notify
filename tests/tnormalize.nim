@@ -24,6 +24,11 @@ suite "normalizeText":
     let s = "مهندس"
     check runeSafe(s, 1, 3) == "مه"
 
+  test "runeSafe accepts ranges at or past the end":
+    check runeSafe("abc", 3, 10) == ""
+    check runeSafe("abc", 5, 10) == ""
+    check runeSafe("abc", -4, 2) == "ab"
+
 suite "keyword matching":
   let en = toKeywords(["intern", "electrical engineer"])
   let ar = toKeywords(["البصرة", "مبرمج"])

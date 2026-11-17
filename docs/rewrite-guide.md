@@ -90,7 +90,8 @@ There is also `flatten`, used only for keyword search. It turns `-`, `_`, `/`, `
 
 ### Step 1: is it a job advert at all?
 
-- If it matches a phrase from `notAJob` in `defaults.nim` (job seekers, school fees, course ads), or the job-seeker regex ("ابحث عن عمل", "محتاج وظيفه"…): **reject**.
+- If it matches a phrase from `notAJob` in `defaults.nim` (school fees, course ads…): **reject**.
+- If it sounds like someone *looking for* a job ("ابحث عن عمل", "محتاج وظيفه", "looking for a job"), **and** has no employer phrase (hiring, تعلن، حاجتها الى، مطلوب…): **reject**. The employer check keeps adverts that open with "Looking for a job? We are hiring…".
 - If it has no job-advert wording at all (`jobSignals`: مطلوب، تعلن، hiring, vacancy, CV…): **reject**.
 
 Our example has "تعلن" and "فرص عمل", so it continues.
@@ -100,9 +101,11 @@ Our example has "تعلن" and "فرص عمل", so it continues.
 Lines that start a list item ("1-", "2.", "3)", "1️⃣") or are separators ("━━━━") cut the post into pieces. The first piece is the *header*.
 
 - If the header itself names one of your job titles, it's a single-job post with a requirements list, so the whole post stays one block.
-- Otherwise each list piece that names a job title becomes a job. Pieces after it are glued onto it (its requirements, the footer with the address). Pieces before the first job are *other* jobs and are dropped.
+- Otherwise each list piece that names one of your job titles becomes a job. A *numbered* piece without one of your titles is another job, and is dropped. An un-numbered piece (cut off by a "━━━" separator) is glued onto the job above it.
+- **Compact lists.** If every list item is a single line ("1- مهندس كهرباء / 2- مهندس ميكانيك / 3- …"), whatever follows the last item is a *shared footer* ("المتطلبات: خبرة 5 سنوات", the address). It joins the header and applies to every job.
+- If a job has no location of its own or in the header, the whole post is searched.
 
-In the example: the header has no title, piece 3 ("مبرمج تطبيقات") does, and the footer "عنوان الشركة البصرة" is glued onto it. Piece 2, with its "3 years", is dropped, which fixes the multi-job mix-up from issue #29.
+In the example every item is one line, so it's a compact list. Piece 3 ("مبرمج تطبيقات") is our job, and the footer "عنوان الشركة البصرة" is shared. Piece 2, with its "3 years", belongs to another job and is dropped. That fixes the multi-job mix-up from issue #29.
 
 Each job block is then judged with the header as context (`judgeBlock`). The post gets the best verdict of its blocks.
 
@@ -113,17 +116,17 @@ Each job block is then judged with the header as context (`judgeBlock`). The pos
    - `title`: real job titles (electrical engineer, مهندس كهرباء);
    - `field`: degrees and fields (electrical engineering, علوم حاسبات).
 
-   A role is ignored if a seniority word (senior, lead, مشرف، اول…) is within a few words of it on the same line, or if it is part of an exclusion like "cost control engineer". No role left: **reject**.
+   A role is ignored if a seniority word (senior, lead, مشرف، اول…) is in the few words *before* it, or *right after* it ("مهندس كهرباء اول", "IT Support Lead"). It is also ignored if it is part of an exclusion like "cost control engineer". Seniority further away on the line is usually about someone else ("reports to the site manager") or an alternative ("fresh graduates or experienced"), so it doesn't count. No role left: **reject**.
 2. **Location** (`locate`).
    - A line that says where the job is or where you must live ("📍", "Location:", "موقع العمل", "من سكنه…") decides first.
    - Otherwise: Basra mentioned and no other city means Basra; Basra and another city with no location line means *mixed* (**review**).
    - "شارع البصرة" (a street) doesn't count as Basra.
 3. **Experience** (`experience.nim`). The *number* of years required is extracted (see section 4). More than `max_experience_years` (default 1): **reject**.
-4. **Certification.** One of your `certifications` on a line with "required/must/مطلوب/يجب" (and not "a plus/preferred/يفضل") is mandatory: **reject**. If the post also says "apply even if you don't meet every requirement", it's **review** instead (issue #25: that phrase can excuse a cert, never years).
+4. **Certification** (job block and header). One of your `certifications` on a line with "required/must/مطلوب/يجب" (and not "a plus/preferred/يفضل") is mandatory: **reject**. If the post also says "apply even if you don't meet every requirement", it's **review** instead (issue #25: that phrase can excuse a cert, never years).
 5. **Positive evidence**: one of your level keywords (not in a "mentor junior engineers" sentence), "0–1 years"/"no experience", or an `entry` role.
    - Found, and the title lines don't look senior: **publish**.
-   - Found, but the title line says "Lead"/"Senior": **review**.
-   - Nothing either way: **review** (or publish with `publish_when_unsure`).
+   - Found, but the role on a title line (first two lines, or a "Position:"/"المسمى الوظيفي" line) is marked senior: **review**.
+   - Nothing either way: **review**. With `publish_when_unsure` it's **publish**, unless the role is only a field or *any* seniority word appears on a title line.
 
 Every step appends to `reasons`, so you can always see *why*:
 
@@ -150,7 +153,7 @@ type Experience = object
   evidence: seq[string]
 ```
 
-For each line that mentions experience (experience/exp/خبره/خبرات):
+For each line that mentions experience (experience/exp/خبره/خبرات, or "N years in/of X", "سنوات في"):
 
 1. **Find quantities.**
    - Digits with a unit ("3 years", "3+ yrs", "3-5 years", "من 5 الي 12 سنه").
@@ -158,7 +161,7 @@ For each line that mentions experience (experience/exp/خبره/خبرات):
    - Arabic number words ("خمس سنوات").
    - Duals ("سنتين").
    - A lone "سنه" after خبره/عن/من/تتجاوز.
-2. **Keep only quantities that are about experience.** They must be within about 10 words of the experience word, and not an age, contract length or program duration ("Program Duration: 3.5 Years").
+2. **Keep only quantities that are about experience.** They must overlap the experience phrase or be within 90 bytes of it: about 15 English words, but only about 8 Arabic ones, since Arabic letters take 2 bytes each. They must not be an age, contract length or program duration ("Program Duration: 3.5 Years"; English words are matched as whole words, so "programming" doesn't count). A list number is not a range: in "1- 5+ years" the answer is 5.
 3. **Ranges use the lower end.** "1-3 years" and "سنة – خمس سنوات" both mean 1.
 4. **Decimals round up.** "1.5 years" counts as 2.
 5. **Upper bounds** ("less than", "لا تتجاوز") mark the post entry-friendly instead.
@@ -233,11 +236,16 @@ Same 196 labelled posts, your deployed keywords:
 
 | | Old Python | Nim, default | Nim, `publish_when_unsure` |
 |---|---|---|---|
-| Published, labelled FALSE | **96** | **2** | 5 |
-| Published, labelled TRUE | 9 | 4 | 8 |
-| TRUE sent to review | 5 | 10 | 6 |
+| Published, labelled FALSE | **96** | **4** | 7 |
+| Published, labelled TRUE | 9 | 5 | 9 |
+| TRUE sent to review | 5 | 9 | 5 |
 | TRUE lost (rejected) | 0 | 0 | 0 |
-| Total sent to review | 57 | 68 | 58 |
+| Total sent to review | 57 | 60 | 50 |
+
+The 4 wrong publishes in the default mode:
+- 2 summer trainings for *current* students. Arguably fine for your channel; it's a label question.
+- A teenager's CV that offers volunteering.
+- An "HSE Lead" post whose only role match is "degree in Engineering".
 
 The rules were tuned while looking at this same corpus, so expect real-life numbers to be somewhat worse. The way to keep them honest is to keep adding newly saved posts to the corpus.
 

@@ -58,10 +58,23 @@ type
     kind: RoleKind
     keyword: string
     senior: bool
+    titleLine: bool   ## found on a line that names the job (see isTitleLine)
     context: string
 
-proc findRoles(lines: seq[string], cfg: Config): seq[RoleHit] =
+proc titleLines(lines: seq[string], cfg: Config): seq[bool] =
+  ## Which lines name the job: the first two non-empty lines, and lines
+  ## like "Position: ..." / "المسمى الوظيفي: ...".
+  var seen = 0
   for line in lines:
+    var t = false
+    if line.strip.len > 0:
+      inc seen
+      t = seen <= 2 or line.flatten.contains(cfg.titleMarkers)
+    result.add t
+
+proc findRoles(lines: seq[string], cfg: Config): seq[RoleHit] =
+  let isTitle = titleLines(lines, cfg)
+  for li, line in lines:
     let flat = line.flatten
     var excluded: seq[Hit]
     for x in flat.hits(cfg.roleExclusions): excluded.add x
@@ -71,16 +84,15 @@ proc findRoles(lines: seq[string], cfg: Config): seq[RoleHit] =
         for x in excluded:
           if h.start >= x.start and h.stop <= x.stop: inside = true
         if inside: continue # "cost control engineer" is not a control engineer
-        # Seniority must be close to the role: "Senior Electrical Engineer",
-        # "مهندس كهرباء اول", "Lead – ICSS Engineer".
-        let ctx = flat.around(h, 45, 30)
-        let near = ctx.flatten
-        var senior = false
-        for s in near.hits(cfg.seniority):
-          senior = true
-          break
+        # Seniority must be close to the role: up to a few words before it
+        # ("Senior Electrical Engineer", "Lead – ICSS Engineer") or right
+        # after it ("مهندس كهرباء اول", "IT Support Lead"). Further away it is
+        # usually about someone else ("reports to the site manager") or an
+        # alternative ("fresh graduates or experienced").
+        let near = flat.runeSafe(h.start - 45, h.start) & " " & flat.runeSafe(h.stop, h.stop + 12)
+        let senior = near.contains(cfg.seniority)
         result.add RoleHit(kind: kind, keyword: h.keyword, senior: senior,
-                           context: flat.around(h, 30, 30))
+                           titleLine: isTitle[li], context: flat.around(h, 30, 30))
 
 # ------------------------------------------------------------- location
 
@@ -150,23 +162,18 @@ proc mandatoryCert(lines: seq[string], cfg: Config): string =
       return h.keyword
   ""
 
-proc titleSeniority(lines: seq[string], cfg: Config): string =
-  ## A seniority word on a line that names the job: the first two non-empty
-  ## lines, or a line like "Position: ..." / "المسمى الوظيفي: ...".
-  var seen = 0
-  for line in lines:
-    if line.strip.len == 0: continue
-    inc seen
-    let flat = line.flatten
-    if seen <= 2 or flat.contains(cfg.titleMarkers):
-      let (s, h) = flat.firstHit(cfg.seniority)
-      if s: return h.keyword & " in '" & line.short(50) & "'"
-    if seen > 12: break
-  ""
+proc anySeniorityOnTitleLines(lines: seq[string], cfg: Config): bool =
+  ## Stricter check used only by `publish_when_unsure`: with no positive
+  ## evidence at all, any seniority word on a title line ("Project Lead",
+  ## "Cybersecurity Specialist – experienced") is enough to hold the post back.
+  let isTitle = titleLines(lines, cfg)
+  for i, line in lines:
+    if isTitle[i] and line.flatten.contains(cfg.seniority): return true
+  false
 
 # --------------------------------------------------------------- blocks
 
-proc judgeBlock(b: Block, header: Block, cfg: Config): Decision =
+proc judgeBlock(b: Block, header: Block, cfg: Config, wholePost: seq[string] = @[]): Decision =
   let roles = b.lines.findRoles(cfg)
   var best: RoleHit
   var found = false
@@ -183,7 +190,10 @@ proc judgeBlock(b: Block, header: Block, cfg: Config): Decision =
   result.reasons.add "role (" & $best.kind & "): " & best.keyword
 
   var why = ""
-  let place = locate(b.lines & header.lines, cfg, why)
+  var place = locate(b.lines & header.lines, cfg, why)
+  if place == plNone and wholePost.len > 0:
+    # The address may sit in a footer that was glued to another job.
+    place = locate(wholePost, cfg, why)
   result.reasons.add why
   case place
   of plNone, plElsewhere:
@@ -200,8 +210,8 @@ proc judgeBlock(b: Block, header: Block, cfg: Config): Decision =
     result.reasons.add "needs " & $exp.requiredYears & " years"
     return
 
-  let cert = b.lines.mandatoryCert(cfg)
-  let flatAll = b.lines.join("\n").flatten
+  let cert = (b.lines & header.lines).mandatoryCert(cfg)
+  let flatAll = (b.lines & header.lines).join("\n").flatten
   if cert != "":
     result.reasons.add "mandatory certification: " & cert
     if flatAll.contains(cfg.applyAnyway):
@@ -218,14 +228,18 @@ proc judgeBlock(b: Block, header: Block, cfg: Config): Decision =
   if place == plMixed:
     result.verdict = vReview
     return
+  var senior = ""
+  for r in roles:
+    if r.senior and r.titleLine: senior = r.context.short(50)
   if positive:
-    let senior = titleSeniority(b.lines, cfg)
     if senior != "":
-      result.reasons.add "but title looks senior: " & senior
+      # "KBR is hiring an IT Support Lead" + "IT support" again lower down
+      result.reasons.add "but the title line looks senior: '" & senior & "'"
       result.verdict = vReview
     else:
       result.verdict = vPublish
-  elif cfg.publishWhenUnsure and best.kind != rkField and titleSeniority(b.lines, cfg) == "":
+  elif cfg.publishWhenUnsure and best.kind != rkField and senior == "" and
+      not anySeniorityOnTitleLines(b.lines, cfg):
     result.verdict = vPublish
     result.reasons.add "no sign of level either way (publish_when_unsure)"
   else:
@@ -243,7 +257,8 @@ proc classify*(text: string, cfg: Config): Decision =
   let (nj, njHit) = flat.firstHit(cfg.notAJob)
   if nj:
     return Decision(verdict: vReject, reasons: @["not a job advert: '" & njHit.keyword & "'"])
-  if norm.contains(jobSeeker):
+  if (norm.contains(jobSeeker) or flat.contains(cfg.seekerPhrases)) and
+      not flat.contains(cfg.employerPhrases):
     return Decision(verdict: vReject, reasons: @["someone looking for a job, not offering one"])
   if not flat.contains(cfg.jobSignals):
     return Decision(verdict: vReject, reasons: @["no job-advert wording"])
@@ -256,7 +271,7 @@ proc classify*(text: string, cfg: Config): Decision =
   var first = true
   for i, b in blocks:
     if b.isHeader: continue
-    var d = judgeBlock(b, blocks[0], cfg)
+    var d = judgeBlock(b, blocks[0], cfg, norm.splitLines)
     d.reasons.insert("job " & $i & " of " & $(blocks.len - 1), 0)
     if first or d.verdict > result.verdict:
       result = d

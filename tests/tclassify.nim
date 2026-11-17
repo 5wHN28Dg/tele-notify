@@ -123,3 +123,34 @@ suite "reasons are always given":
     let d = classify("مطلوب مهندس كهرباء حديث التخرج في البصرة", cfg)
     check d.reasons.len > 0
     check d.role == "مهندس كهرباء"
+
+suite "review pass 1 findings":
+  test "place names do not match inside other words (واسط/بواسطة, مصر/مصرف)":
+    # (Not tested: "بقطر" really is ambiguous, "in Qatar" or "with diameter",
+    # so review is a fair answer for it.)
+    for tail in ["ارسال السيرة الذاتية بواسطة البريد", "راتب عبر مصرف الرافدين"]:
+      check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة\n" & tail) == vPublish
+
+  test "a later numbered job without our role is not glued onto ours":
+    check verdict("شركة في البصرة تعلن عن حاجتها الى:\n1- مهندس كهرباء حديث التخرج\n2- محاسب خبرة 5 سنوات") == vPublish
+
+  test "employers opening with 'looking for a job?' are still jobs":
+    check verdict("Looking for a job? We are hiring a fresh graduate electrical engineer in Basra!") == vPublish
+    check verdict("هل انت باحث عن عمل؟ تعلن شركة في البصرة عن حاجتها الى مهندس كهرباء حديث التخرج") == vPublish
+
+  test "'experienced' or 'manager' elsewhere on the title line is not seniority":
+    check verdict("Hiring Electrical Engineer in Basra (fresh graduates or experienced)") == vPublish
+    check verdict("Hiring a junior Electrical Engineer in Basra who reports to the site manager") == vPublish
+
+  test "mandatory certification in the header applies to every job":
+    check verdict("شركة في البصرة تعلن عن حاجتها الى، يشترط CCNA لجميع الوظائف:\n1- فني شبكات حديث التخرج\n2- مهندس كهرباء حديث التخرج") == vReject
+
+  test "times and decimals are not list items":
+    check verdict("شركة في البصرة تعلن عن حاجتها الى مهندس كهرباء حديث التخرج\n8:00 - 4:00 دوام\n2.5 مليون راتب") == vPublish
+
+  test "requirements after a compact title list apply to every job":
+    check verdict("تعلن شركة في البصرة عن حاجتها الى\n1- مهندس كهرباء\n2- مهندس ميكانيك\n\nالمتطلبات:\nخبرة لا تقل عن 5 سنوات") == vReject
+    check verdict("تعلن شركة في البصرة عن حاجتها الى\n1 - مهندس كهرباء\n2- مهندس LOTO\nبخبرة لاتقل عن 4 سنوات") == vReject
+
+  test "years in a field count as experience":
+    check verdict("Hiring: Cybersecurity Specialist, fresh graduates welcome\nLocation: Basra\n3–7 years in cybersecurity") == vReject
