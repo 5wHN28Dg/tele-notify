@@ -1,7 +1,7 @@
 ## One test per problem from docs/problems-report.md, using invented posts
 ## (your real Saved Messages stay private and are used by `telenotify eval`).
 
-import std/[unittest, os, json]
+import std/[unittest, os, json, times]
 import telenotify/[config, classify]
 
 let cfg = loadConfig(currentSourcePath.parentDir / "keywords.json")
@@ -154,3 +154,66 @@ suite "review pass 1 findings":
 
   test "years in a field count as experience":
     check verdict("Hiring: Cybersecurity Specialist, fresh graduates welcome\nLocation: Basra\n3–7 years in cybersecurity") == vReject
+
+suite "review pass 2 (adversarial) findings":
+  test "'not less than' is a minimum, not an upper bound":
+    check verdict("Hiring: Electrical Engineer, Basra\nExperience not less than 5 years in power distribution") == vReject
+    check verdict("مطلوب مهندس كهرباء في البصرة\nالخبرة: ليس اقل من 5 سنوات") == vReject
+    check verdict("مطلوب مهندس كهرباء في البصرة\nخبرة من 3 حتى 5 سنوات") == vReject
+
+  test "more experience phrasings":
+    check verdict("مطلوب مهندس كهرباء في البصرة\nخبرة لا تقل عن خمس (5) سنوات") == vReject
+    check verdict("Hiring: Network Engineer, Basra\nYears of Experience: 5+") == vReject
+    check verdict("مطلوب مهندس شبكات في البصرة\nعدد سنوات الخبرة: 6") == vReject
+    check verdict("Hiring IT support in Basra\n5+ yrs in enterprise IT support") == vReject
+    check verdict("Hiring: Network Engineer, Basra\nMinimum 36 months of hands-on experience") == vReject
+    check verdict("مطلوب مهندس كهرباء في البصرة\nممارسة فعلية في المجال لا تقل عن 4 سنوات") == vReject
+    check verdict("مطلوب مهندس كهرباء في البصرة\nخبرة عملية واسعة في مجال تصميم وتنفيذ وصيانة أنظمة التوزيع والمحطات الكهربائية لا تقل عن سبع سنوات") == vReject
+
+  test "certifications listed under a 'required' heading are mandatory":
+    check verdict("Hiring: Junior Network Technician, Basra\nRequired certifications:\n- CCNA\n- CCNP") == vReject
+
+  test "numbered requirement lines are not other jobs":
+    check verdict("📢 فرصة عمل في البصرة\n1- فني دعم تقني\n2- خبرة لا تقل عن 4 سنوات\n3- اجادة الانكليزي") == vReject
+
+  test "a header naming the role still lets each listed job be judged alone":
+    check verdict("تعلن شركة في البصرة عن حاجتها الى مبرمجين:\n1- مبرمج جافا خبرة 5 سنوات\n2- مبرمج تطبيقات حديث التخرج") == vPublish
+
+  test "job seekers in other words":
+    check verdict("Fresh graduate computer engineer from Basra 🎓\nSeeking a position as IT Support\nCV available") == vReject
+    check verdict("اني مهندس شبكات حديث التخرج ساكن بالبصرة\nاريد اشتغل باي شركة، اذا اكو شاغر راسلوني") == vReject
+
+  test "intensive course adverts":
+    check verdict("📢 اعلان دورة IT Support المكثفة\n🎓 للخريجين الجدد\n📍 البصرة\n💰 رسوم التسجيل: 150 الف دينار") == vReject
+
+  test "places that only look like Basra":
+    check verdict("Hiring: junior Control Engineer\nLocation: Zakho\nWork on remote terminal units") == vReject
+    check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في المدينة المنورة") == vReject
+    check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في كربلا، الشركة فرعها الرئيسي في البصرة") != vPublish
+
+  test "more seniority wording":
+    check verdict("مطلوب مهندس كهرباء ذو خبرة للعمل في البصرة مع فترة تجربة") != vPublish
+    check verdict("مطلوب مهندس شبكات أقدم للعمل في البصرة مع فترة تجربة") != vPublish
+
+  test "Unicode bold and Arabic presentation forms are normal text":
+    check verdict("𝗦𝗲𝗻𝗶𝗼𝗿 𝗡𝗲𝘁𝘄𝗼𝗿𝗸 𝗘𝗻𝗴𝗶𝗻𝗲𝗲𝗿 𝟴+ 𝘆𝗲𝗮𝗿𝘀 𝗼𝗳 𝗲𝘅𝗽𝗲𝗿𝗶𝗲𝗻𝗰𝗲\nBachelor graduate\nBasra\nSend CV") == vReject
+    check verdict("We are hiring: 𝗜𝗧 𝗦𝘂𝗽𝗽𝗼𝗿𝘁 (𝗙𝗿𝗲𝘀𝗵 𝗚𝗿𝗮𝗱𝘂𝗮𝘁𝗲) 📍 𝗕𝗮𝘀𝗿𝗮") == vPublish
+    check verdict("ﻣﻄﻠﻮﺏ ﻣﻬﻨﺪﺱ ﻛﻬﺮﺑﺎﺀ ﺣﺪﻳﺚ ﺍﻟﺘﺨﺮﺝ\nﻣﻮﻗﻊ ﺍﻟﻌﻤﻞ: ﺍﻟﺒﺼﺮﺓ") == vPublish
+
+  test "short certificates do not match longer words":
+    check verdict("We are hiring: IT Support (fresh graduates), Basra\nMust be capable of working in shifts") == vPublish
+
+  test "fresh-graduate wording is not years of experience":
+    check verdict("We are hiring: IT Support in Basra\nOpen to fresh graduates (graduated within the last 2 years), no experience required.") == vPublish
+    check verdict("تعلن شركة في البصرة عن برنامج تدريبي لمدة عامين لاكتساب الخبرة\nمطلوب مهندس كهرباء حديث التخرج") == vPublish
+
+  test "large posts stay fast":
+    var post = "مطلوب:\n"
+    for i in 0 ..< 3500: post.add $(i mod 99 + 1) & "- it support\n"
+    var line = ""
+    for i in 0 ..< 2800: line.add "خبرة 1 سنة "
+    let t0 = epochTime()
+    discard verdict(post)
+    discard verdict("مطلوب it support في البصرة\n" & line)
+    # was 68 s before the fix; ~3 s in a debug build, ~0.2 s in release
+    check epochTime() - t0 < 10.0

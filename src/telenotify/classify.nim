@@ -89,7 +89,7 @@ proc findRoles(lines: seq[string], cfg: Config): seq[RoleHit] =
         # after it ("مهندس كهرباء اول", "IT Support Lead"). Further away it is
         # usually about someone else ("reports to the site manager") or an
         # alternative ("fresh graduates or experienced").
-        let near = flat.runeSafe(h.start - 45, h.start) & " " & flat.runeSafe(h.stop, h.stop + 12)
+        let near = flat.runeSafe(h.start - 45, h.start) & " " & flat.runeSafe(h.stop, h.stop + 20)
         let senior = near.contains(cfg.seniority)
         result.add RoleHit(kind: kind, keyword: h.keyword, senior: senior,
                            titleLine: isTitle[li], context: flat.around(h, 30, 30))
@@ -103,6 +103,8 @@ proc basraHits(flat: string, cfg: Config): seq[Hit] =
   for h in flat.hits(cfg.locations):
     if flat.precededBy(h, cfg.streetBefore) or flat.followedBy(h, cfg.streetAfter):
       continue # "شارع البصره" in Baghdad is a street, not the city
+    if flat.followedBy(h, cfg.notAPlaceAfter):
+      continue # "remote terminal units", "المدينه المنوره"
     result.add h
 
 proc locate(lines: seq[string], cfg: Config, why: var string): Place =
@@ -154,12 +156,23 @@ proc levelEvidence(lines: seq[string], cfg: Config): string =
   ""
 
 proc mandatoryCert(lines: seq[string], cfg: Config): string =
+  ## A certification on a line that says it is required, or listed under a
+  ## heading that does ("Required certifications:" / "الشهادات المطلوبه:")
+  ## until the next empty line.
+  var underRequiredHeading = false
   for line in lines:
     let flat = line.flatten
+    if line.strip.len == 0:
+      underRequiredHeading = false
+      continue
+    let required = flat.contains(cfg.requiredMarkers) and not flat.contains(cfg.optionalMarkers)
     let (found, h) = flat.firstHit(cfg.certifications)
-    if not found: continue
-    if flat.contains(cfg.requiredMarkers) and not flat.contains(cfg.optionalMarkers):
+    if found and (required or underRequiredHeading):
       return h.keyword
+    if not found and line.strip.endsWith(":"):
+      # a new heading: is it a "required certifications" heading?
+      underRequiredHeading = required and
+        (flat.contains("certif") or flat.contains("شهاد") or flat.contains("licen"))
   ""
 
 proc anySeniorityOnTitleLines(lines: seq[string], cfg: Config): bool =
@@ -173,7 +186,21 @@ proc anySeniorityOnTitleLines(lines: seq[string], cfg: Config): bool =
 
 # --------------------------------------------------------------- blocks
 
-proc judgeBlock(b: Block, header: Block, cfg: Config, wholePost: seq[string] = @[]): Decision =
+type WholePostPlace = object
+  ## Location of the whole post, computed at most once per post (computing
+  ## it once per job made 3,500-job posts take a minute).
+  lines: seq[string]
+  done: bool
+  place: Place
+  why: string
+
+proc get(w: var WholePostPlace, cfg: Config): (Place, string) =
+  if not w.done:
+    w.place = locate(w.lines, cfg, w.why)
+    w.done = true
+  (w.place, w.why)
+
+proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace): Decision =
   let roles = b.lines.findRoles(cfg)
   var best: RoleHit
   var found = false
@@ -191,9 +218,9 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, wholePost: seq[string] = @
 
   var why = ""
   var place = locate(b.lines & header.lines, cfg, why)
-  if place == plNone and wholePost.len > 0:
+  if place == plNone and whole.lines.len > 0:
     # The address may sit in a footer that was glued to another job.
-    place = locate(wholePost, cfg, why)
+    (place, why) = whole.get(cfg)
   result.reasons.add why
   case place
   of plNone, plElsewhere:
@@ -263,15 +290,17 @@ proc classify*(text: string, cfg: Config): Decision =
   if not flat.contains(cfg.jobSignals):
     return Decision(verdict: vReject, reasons: @["no job-advert wording"])
 
-  let blocks = norm.splitJobs(cfg.entryRoles & cfg.titles)
+  let blocks = norm.splitJobs(cfg.entryRoles & cfg.titles, cfg.jobNouns)
+  var noWhole = WholePostPlace()
   if blocks.len == 1:
-    return judgeBlock(blocks[0], Block(), cfg)
+    return judgeBlock(blocks[0], Block(), cfg, noWhole)
+  var whole = WholePostPlace(lines: norm.splitLines)
 
   result = Decision(verdict: vReject)
   var first = true
   for i, b in blocks:
     if b.isHeader: continue
-    var d = judgeBlock(b, blocks[0], cfg, norm.splitLines)
+    var d = judgeBlock(b, blocks[0], cfg, whole)
     d.reasons.insert("job " & $i & " of " & $(blocks.len - 1), 0)
     if first or d.verdict > result.verdict:
       result = d

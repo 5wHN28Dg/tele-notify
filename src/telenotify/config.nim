@@ -36,7 +36,7 @@ type
     titleMarkers*, seniority*, mentoring*, jobSignals*, otherPlaces*, roleExclusions*: KeywordList
     streetBefore*, streetAfter*, locationMarkers*: KeywordList
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
-    seekerPhrases*, employerPhrases*: KeywordList
+    seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
     maxExperienceYears*: int
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
     # Telegram side, used by the listener (not by the filter itself)
@@ -93,6 +93,8 @@ proc parseConfig*(j: JsonNode): Config =
   result.titleMarkers = toKeywords(titleMarkers)
   result.seekerPhrases = toKeywords(seekerPhrases)
   result.employerPhrases = toKeywords(employerPhrases)
+  result.notAPlaceAfter = toKeywords(notAPlaceAfter)
+  result.jobNouns = toKeywords(jobNouns)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))
   result.jobSignals = toKeywords(@jobSignals & j.strings("extra_job_signals"))
   result.otherPlaces = toKeywords(@otherPlaces & j.strings("extra_other_places"), strict = true)

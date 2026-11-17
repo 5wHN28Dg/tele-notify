@@ -14,13 +14,15 @@
 ## 1. Cut the post before every line that starts a list item ("1-", "2.",
 ##    "3)", "1️⃣") and at separator lines ("━━━━", "-----"). The text before
 ##    the first cut is the *header*.
-## 2. If the header itself names one of your job titles, the post is about
-##    that one job and the list is its requirements: keep the whole post as
-##    one block.
-## 3. Otherwise every list piece that names a job title starts a job block.
-##    A *numbered* piece without one of your titles is another job: dropped.
+## 2. If no list piece names one of your job titles, the post is one block
+##    (a single job, the list being its requirements).
+## 3. Otherwise every list piece that names one of your titles starts a job
+##    block. A numbered piece without one of your titles is either
+##    * another job, if it names *some* job ("2- محاسب", see `jobNouns`):
+##      dropped, or
+##    * a requirement ("2- خبرة 4 سنوات"): glued onto the job above it.
 ##    An un-numbered piece after a job (cut off by a separator line) is glued
-##    onto that job. If a job block has no location of its own or in the
+##    onto that job too. If a job block has no location of its own or in the
 ##    header, the whole post is searched (the address may be in a footer
 ##    that ended up attached to a dropped job).
 ## 4. When the list is compact (every item one line), whatever follows the
@@ -47,7 +49,7 @@ proc mentionsTitle(lines: seq[string], titles: KeywordList): bool =
   for l in lines:
     if l.flatten.contains(titles): return true
 
-proc splitJobs*(normText: string, titles: KeywordList): seq[Block] =
+proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
   ## Returns either one block (the whole post, `isHeader = true`) or a
   ## header block followed by one block per job.
   let lines = normText.splitLines
@@ -64,7 +66,10 @@ proc splitJobs*(normText: string, titles: KeywordList): seq[Block] =
     pieces[^1].add l
 
   let whole = @[Block(lines: lines, isHeader: true)]
-  if pieces.len < 2 or pieces[0].mentionsTitle(titles):
+  var titledPieces = 0
+  for i in 1 ..< pieces.len:
+    if numbered[i] and pieces[i].mentionsTitle(titles): inc titledPieces
+  if titledPieces == 0:
     return whole
 
   # A compact title list ("1- مهندس كهرباء\n2- مهندس ميكانيك\n3- ...") is
@@ -89,7 +94,11 @@ proc splitJobs*(normText: string, titles: KeywordList): seq[Block] =
     let p = pieces[i]
     if p.mentionsTitle(titles):
       result.add Block(lines: p)
-    elif result.len > 1 and not numbered[i]:
-      result[^1].lines.add p   # a footer or continuation of the job above
+    elif numbered[i] and p.mentionsTitle(jobNouns):
+      discard                  # another job that isn't yours
+    elif result.len > 1:
+      result[^1].lines.add p   # a requirement, footer or continuation
+    else:
+      result[0].lines.add p    # requirements before any job: shared
   if result.len == 1:
     return whole

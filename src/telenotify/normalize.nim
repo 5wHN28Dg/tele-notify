@@ -6,6 +6,7 @@
 ## "electrical engineer" match "Electrical-Engineer" inside a URL.
 
 import std/[unicode, strutils]
+import unicodedb/decompositions
 
 const
   arabicIndicZero = 0x0660   ## ٠
@@ -36,6 +37,15 @@ proc foldArabic(r: Rune): Rune =
   of 0x06A9: Rune(0x0643)                           # Persian ک -> ك
   else: r
 
+proc isStyledForm(r: Rune): bool =
+  ## Characters that are just a *styled copy* of a normal one:
+  ## * 𝗕𝗼𝗹𝗱 / 𝘪𝘵𝘢𝘭𝘪𝘤 letters and 𝟴 digits (Telegram users love them),
+  ## * Arabic presentation forms (ﻣﻬﻨﺪﺱ, text copied from PDFs),
+  ## * full-width letters (Ａ).
+  let c = int(r)
+  c in 0x1D400..0x1D7FF or c in 0xFB50..0xFDFF or c in 0xFE70..0xFEFF or
+    c in 0xFF01..0xFF5E
+
 proc foldDigit(r: Rune): Rune =
   let c = int(r)
   if c in arabicIndicZero..arabicIndicZero + 9:
@@ -50,8 +60,19 @@ proc normalizeText*(s: string): string =
   ## Newlines are kept: the filter works line by line.
   result = newStringOfCap(s.len)
   var lastSpace = false
+  var plain: seq[Rune]
   for r in s.runes:
+    if r.isStyledForm:
+      for d in r.decomposition: plain.add d   # 𝗦 -> S, ﻻ -> لا
+    else:
+      plain.add r
+  var prev = Rune(' ')
+  for r in plain:
     if r.isInvisible or r.isArabicDiacritic: continue
+    # A hamza after alef is often left out ("كربلا", "كهربا"): drop it
+    # everywhere so both spellings look the same.
+    if int(r) == 0x0621 and prev == Rune(0x0627): continue
+    prev = r
     var x = r.foldDigit.foldArabic.toLower
     if x == Rune('\r'): continue
     if x == Rune('\t') or x == Rune(0x00A0) or x == Rune(0x2009) or x == Rune(0x202F):

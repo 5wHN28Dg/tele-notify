@@ -12,7 +12,7 @@ const
     "supervisor", "superintendent", "director", "expert", "experienced",
     "team leader", "foreman",
     # Arabic
-    "اول", "رئيس", "مدير", "مشرف", "خبير", "ذو خبره", "ذوي الخبره",
+    "اول", "اقدم", "رئيس", "مدير", "مشرف", "خبير", "ذو خبره", "ذوي الخبره",
     "خبره عاليه", "خبره طويله", "مسؤول قسم",
   ]
 
@@ -50,7 +50,7 @@ const
     "qadisiyah", "hillah", "hilla", "babylon", "babil", "kirkuk", "mosul",
     "nineveh", "ninawa", "sulaymaniyah", "sulaimaniyah", "sulaymaniyya",
     "slemani", "duhok", "dohuk", "anbar", "ramadi", "fallujah", "diyala",
-    "baqubah", "karkh", "rusafa", "mansour", "karrada", "salahuddin", "salah al din", "tikrit", "kurdistan",
+    "baqubah", "zakho", "soran", "halabja", "koya", "ranya", "akre", "karkh", "rusafa", "mansour", "karrada", "salahuddin", "salah al din", "tikrit", "kurdistan",
     "dubai", "abu dhabi", "uae", "saudi", "riyadh", "jeddah", "qatar", "doha",
     "kuwait", "oman", "muscat", "bahrain", "jordan", "amman", "turkey",
     "istanbul", "iran", "egypt", "cairo", "lebanon", "beirut",
@@ -58,7 +58,7 @@ const
     "ذي قار", "السماوه", "المثنى", "الكوت", "واسط", "الديوانيه", "القادسيه",
     "الحله", "بابل", "كركوك", "الموصل", "نينوى", "السليمانيه", "دهوك",
     "الانبار", "الرمادي", "الفلوجه", "ديالى", "بعقوبه", "صلاح الدين", "تكريت",
-    "كردستان", "علي الغربي", "الكرخ", "الرصافه", "عويريج", "المنصور", "الكراده",
+    "كردستان", "زاخو", "سوران", "حلبجه", "كويه", "رانيه", "عقره", "المدينه المنوره", "علي الغربي", "الكرخ", "الرصافه", "عويريج", "المنصور", "الكراده",
     "الاعظميه", "الكاظميه", "زيونه", "دبي", "الامارات", "السعوديه", "الرياض", "جده",
     "قطر", "الدوحه", "الكويت", "عمان", "مسقط", "البحرين", "الاردن", "تركيا",
     "اسطنبول", "ايران", "مصر", "القاهره", "لبنان", "بيروت",
@@ -67,6 +67,15 @@ const
   ## A place name right after one of these is a street, not a city.
   streetBefore* = ["شارع", "طريق", "ساحه", "street", "st", "road", "rd"]
   streetAfter* = ["street", "st", "road", "rd", "avenue", "highway"]
+
+  ## A place keyword followed by one of these is not a place at all:
+  ## "remote terminal units", "remote monitoring", "المدينه المنوره" (Saudi
+  ## Arabia, not the Basra district), "المدينه الصناعيه" (an industrial zone).
+  notAPlaceAfter* = [
+    "terminal", "terminals", "monitoring", "control", "controlled", "access",
+    "sensing", "area", "areas", "site", "sites", "locations", "operations",
+    "المنوره", "الصناعيه",
+  ]
 
   ## Lines starting with (or containing) these say where the job *is*, or
   ## where the applicant must *live*. A place on such a line beats a place
@@ -114,7 +123,8 @@ const
     "انطلاق الدوره", "موعد الدوره", "مقاعد محدوده",
     # training *courses* and learning platforms (you pay or study, nobody hires)
     "الدوره الدوليه", "عن اطلاق البرنامج", "منصه تعليميه", "شهاده انجاز",
-    "شهاده مشاركه", "job simulation", "job simulations", "virtual experience program",
+    "شهاده مشاركه", "اعلان دوره", "دوره مكثفه", "الدوره المكثفه",
+    "رسوم التسجيل", "registration fee", "course fees", "job simulation", "job simulations", "virtual experience program",
   ]
 
   ## Entry-level phrases added to your `level_keywords_*`. These are
@@ -155,7 +165,12 @@ const
     "محتاج عمل", "محتاجه عمل", "محتاج وظيفه", "محتاجه وظيفه", "ابحث عن عمل",
     "ابحث عن وظيفه", "ابحث عن فرصه عمل", "باحث عن عمل", "باحث عن وظيفه",
     "ادور على شغل", "ادور شغل", "ادور عمل", "looking for a job",
-    "seeking employment", "i am looking for",
+    "seeking employment", "i am looking for", "seeking a position",
+    "seeking a job", "seeking an opportunity", "looking for an opportunity",
+    "looking for a position", "open to work", "cv available", "my cv",
+    "اريد اشتغل", "اريد اعمل", "اريد عمل", "ابحث عن فرصه", "راسلوني",
+    "اني مهندس", "انا مهندس", "اني خريج", "انا خريج", "انا خريجه",
+    "i am a fresh graduate", "i'm a fresh graduate", "my name is", "اسمي",
   ]
 
   ## Phrases only an employer writes.
@@ -163,4 +178,20 @@ const
     "we are hiring", "is hiring", "hiring", "we are looking for", "join our team",
     "تعلن", "حاجتها الى", "حاجتنا الى", "نبحث عن", "تبحث شركه", "مطلوب",
     "نعلن", "يعلن",
+  ]
+
+  ## Nouns that name *some* job. A numbered list item with one of these but
+  ## none of your roles is another job ("2- محاسب"); a numbered item without
+  ## any is a requirement ("2- خبرة 4 سنوات") and stays with the job above.
+  jobNouns* = [
+    "engineer", "technician", "developer", "programmer", "accountant",
+    "officer", "specialist", "manager", "coordinator", "assistant",
+    "supervisor", "operator", "driver", "designer", "analyst", "administrator",
+    "representative", "agent", "clerk", "secretary", "teacher", "nurse",
+    "doctor", "pharmacist", "lawyer", "translator", "cashier", "sales",
+    "مهندس", "مهندسه", "مهندسين", "فني", "فنيين", "مبرمج", "مبرمجين", "محاسب",
+    "محاسبين", "موظف", "موظفه", "موظفين", "مسؤول", "منسق", "مساعد", "مشرف",
+    "مدير", "سائق", "مصمم", "محلل", "مندوب", "سكرتير", "سكرتيره", "مدرس",
+    "مدرسه", "معلم", "معلمه", "ممرض", "طبيب", "صيدلاني", "مترجم", "كاشير",
+    "عامل", "عمال", "حارس", "مصور", "اعلامي", "اداري", "اداريه",
   ]

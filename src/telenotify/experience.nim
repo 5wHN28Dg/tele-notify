@@ -40,19 +40,25 @@ const
                 ("عشره", 10), ("عشر", 10)]
 
 let
-  experienceWord = re2(r"(?i)(?:experience|exp\b|خبر[هت]|خبرات|الخبر[هت]|\byears? (?:in|of|working)\b|سنوات في|سنوات بمجال)")
+  experienceWord = re2(r"(?i)(?:experience|exp\b|خبر[هت]|خبرات|الخبر[هت]|\b(?:years?|yrs?) (?:in|of|working)\b|سنوات في|سنوات بمجال|ممارسه|لا ?تقل عن)")
   # "3", "3+", "+3", "3-5", "3 to 5", "من 3 الي 5" (normalised form of الى), "3 او 4" followed by a unit
-  numericQty = re2(r"(?i)(\+\s*)?(\d{1,2})(?:\.\d)?\s*(?:(?:-|–|~|to|الي|او|or)\s*(\d{1,2}))?\s*(\+)?\s*(?:\(\s*\d+\s*\)\s*)?" & unit)
+  numericQty = re2(r"(?i)(\+\s*)?\(?(\d{1,2})(?:\.\d)?\)?\s*(?:(?:-|–|~|to|الي|او|or|حتي)\s*(\d{1,2}))?\s*(\+)?\s*(?:\(\s*\d+\s*\)\s*)?" & unit)
+  # "Years of Experience: 5+", "عدد سنوات الخبره: 6": the number comes last.
+  numberAfter = re2(r"(?i)(?:years of experience|experience years|سنوات الخبره|سنوات خبره)\s*:?\s*\+?\s*(\d{1,2})(?!\d)")
+  # "36 months of experience" -> 3 years (rounded up)
+  monthsQty = re2(r"(?i)(\d{1,3})\s*(?:months?|اشهر|شهرا|شهر)(?![\p{L}])")
   wordQtyEn = re2(r"(?i)\b(zero|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:\(\s*\d+\s*\)\s*)?(?:\+\s*)?(?:-\s*\w+\s*)?years?")
-  wordQtyAr = re2(r"(واحده|واحد|ثلاثه|ثلاث|اربعه|اربع|خمسه|خمس|سته|ست|سبعه|سبع|ثمانيه|ثمان|تسعه|تسع|عشره|عشر)\s+(?:سنوات|سنين|اعوام)")
+  wordQtyAr = re2(r"(واحده|واحد|ثلاثه|ثلاث|اربعه|اربع|خمسه|خمس|سته|ست|سبعه|سبع|ثمانيه|ثمان|تسعه|تسع|عشره|عشر)\s+(?:\(\s*\d+\s*\)\s*)?(?:سنوات|سنين|اعوام)")
   dualYear = re2(r"(?:^|[^\p{L}])(سنتين|سنتان|عامين|عامان)")
   singleYear = re2(r"(?:خبر[هت]|عن|لمده|من|تتجاوز|تزيد|اقل من)\s+(سنه|عام)(?:\s+واحده|\s+واحد)?(?:[^\p{L}]|$)")
   upperBound = re2(r"(?i)(?:less than|up to|maximum|max\.?|not more than|no more than|under|لا تتجاوز|لا تزيد|اقل من|لغايه|حتي)\s*$")
-  notExperience = re2(r"(?i)(?:\b(?:old|of age|duration|contract|program|programme)\b|العمر|عمر|مده البرنامج|مده العقد|مواليد)")
+  notExperience = re2(r"(?i)(?:\b(?:old|of age|duration|contract|program|programme|graduated|graduation)\b|العمر|عمر|مده البرنامج|مده العقد|مده التدريب|برنامج تدريبي|البرنامج التدريبي|مواليد|تخرج|التخرج)")
+  # "not less than 5 years" is a *minimum*, unlike "less than 2 years".
+  negatedBound = re2(r"(?i)(?:not|ليس|لا|غير)\s+(?:less than|اقل من|under)\s*$")
   # "سنه – خمس سنوات", "one to five years", "1 - 5 years": the quantity we
   # found is the *upper* end of a range; this finds the lower end before it.
   listNumber = re2(r"^\s*\d{1,2}\s*(?:[.)]|-\s)")
-  rangeLower = re2(r"(?i)(?:(\d{1,2})|(سنه|عام|واحد|one|a year))\s*(?:-|–|~|to|الي|او|or|\s)\s*$")
+  rangeLower = re2(r"(?i)(?:(\d{1,2})|(سنه|عام|واحد|one|a year))\s*(?:-|–|~|to|الي|او|or|حتي|\s)\s*$")
   noExperience = re2(r"(?i)(?:no (?:prior |previous )?experience|without experience|0\s*-\s*1 years?|لا يشترط (?:وجود )?(?:ال)?خبره|بدون خبره|من غير خبره|لا تشترط الخبره|بدون خبره سابقه)")
 
 proc wordValue(w: string): int =
@@ -77,22 +83,26 @@ proc joinedLines(text: string): seq[string] =
     result.add line
     inc i
 
-proc nearExperienceWord(line: string, a, b: int): bool =
-  ## Is the quantity at line[a..<b] close (about 10 words) to an
-  ## experience word?
-  for m in line.findAll(experienceWord):
-    let (s, e) = (m.boundaries.a, m.boundaries.b + 1)
+const maxGap = 160
+  ## How far (in bytes) a quantity may be from the experience word: about 25
+  ## English words or 12 Arabic ones (Arabic letters are 2 bytes each).
+
+proc nearExperienceWord(spans: seq[(int, int)], a, b: int): bool =
+  ## Is the quantity at line[a..<b] close to one of the experience-word
+  ## `spans` (found once per line, not once per quantity: that was slow on
+  ## huge posts)?
+  for (s, e) in spans:
     if s < b and a < e: return true # overlapping: "3-7 years in cybersecurity"
-    if (s >= b and s - b <= 90) or (a >= e and a - e <= 90): return true
+    if (s >= b and s - b <= maxGap) or (a >= e and a - e <= maxGap): return true
   false
 
 proc isUpperBound(line: string, a: int): bool =
   let before = line.runeSafe(a - 30, a)
-  before.contains(upperBound)
+  before.contains(upperBound) and not before.contains(negatedBound)
 
 proc isOtherDuration(line: string, a, b: int): bool =
   ## "3.5 years program", "aged 25 years old", "عمر 30 سنه": not experience.
-  let ctx = line.runeSafe(a - 25, b + 15)
+  let ctx = line.runeSafe(a - 40, b + 15)
   ctx.contains(notExperience)
 
 proc parseExperience*(normText: string): Experience =
@@ -107,11 +117,17 @@ proc parseExperience*(normText: string): Experience =
   for li, line in lines:
     if not line.contains(experienceWord) and not line.contains(dualYear):
       continue
+    var spans: seq[(int, int)]
+    for m in line.findAll(experienceWord): spans.add (m.boundaries.a, m.boundaries.b + 1)
     var qtys: seq[(int, int, int)] # (years, start, stop)
+    for m in line.findAll(numberAfter):
+      qtys.add (parseInt(line[m.group(0)]), m.group(0).a, m.group(0).b + 1)
+    for m in line.findAll(monthsQty):
+      qtys.add ((parseInt(line[m.group(0)]) + 11) div 12, m.boundaries.a, m.boundaries.b + 1)
     for m in line.findAll(numericQty):
       var lo = parseInt(line[m.group(1)])
       # "1- 5+ years" at the start of a line is list item 1, not "1 to 5".
-      if m.group(2).a >= 0 and line.runeSafe(0, m.boundaries.a).strip.len == 0 and
+      if m.group(2).a >= 0 and m.boundaries.a <= 8 and line.runeSafe(0, m.boundaries.a).strip.len == 0 and
           line[m.boundaries].contains(listNumber):
         lo = parseInt(line[m.group(2)])
       if line[m.boundaries].contains(re2(r"^\+?\s*\d{1,2}\.[1-9]")):
@@ -136,16 +152,17 @@ proc parseExperience*(normText: string): Experience =
     for (q, a, b) in qtys:
       var years = q
       if years < 0 or years > 30: continue
-      if not line.nearExperienceWord(a, b): continue
+      if not spans.nearExperienceWord(a, b): continue
       if line.isOtherDuration(a, b): continue
       var m: RegexMatch2
       let before = line.runeSafe(a - 20, a)
-      let isListNumber = line.runeSafe(0, a).contains(listNumber) and
-                         line.runeSafe(0, a).strip.len <= 4
+      let isListNumber = a <= 8 and line.runeSafe(0, a).contains(listNumber)
+      var isRange = false
       if not isListNumber and before.find(rangeLower, m):
         years = if m.group(0).a >= 0: parseInt(before[m.group(0)]) else: 1
+        isRange = true
       let phrase = line.runeSafe(a - 20, b + 10).strip
-      if line.isUpperBound(a) or years == 0:
+      if years == 0 or (not isRange and line.isUpperBound(a)):
         result.entryFriendly = true
         result.evidence.add "upper bound: '" & phrase & "'"
         continue

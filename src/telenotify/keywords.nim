@@ -62,8 +62,13 @@ proc arabicWordStart(s: string, i: int): bool =
 proc matchAt(s: string, i: int, k: Keyword): bool =
   if k.latin:
     if s.runeBefore(i).isWordRune: return false
-    if k.loose: return true
     let e = i + k.norm.len
+    if k.loose and e < s.len:
+      # OCR glues the next word on ("CCNAor MTCNA"): allow only that,
+      # so "CAP" still doesn't match "capable".
+      let rest = s[e .. min(s.len - 1, e + 4)]
+      if rest.startsWith("or ") or rest.startsWith("and ") or rest.startsWith("او "):
+        return true
     e >= s.len or not s.runeAt(e).isWordRune
   else:
     if not s.arabicWordStart(i): return false

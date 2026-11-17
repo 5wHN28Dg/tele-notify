@@ -84,7 +84,9 @@ Take this post (invented, but typical):
 
 ### Step 0: normalise (`normalize.nim`)
 
-The text becomes lower-case, with letter variants folded (أ/إ/آ→ا, ة→ه, ى→ي, گ→ك), Arabic-Indic digits turned into 0–9, diacritics and invisible characters removed. Keywords from your config go through the **same** function, so the two sides always agree. That's why your config can say "البصرة" while the code internally compares "البصره".
+The text becomes lower-case, with letter variants folded (أ/إ/آ→ا, ة→ه, ى→ي, گ→ك), Arabic-Indic digits turned into 0–9, diacritics and invisible characters removed.
+
+Styled copies of normal characters are turned back into the normal ones: 𝗕𝗼𝗹𝗱 and 𝘪𝘵𝘢𝘭𝘪𝘤 letters (popular on Telegram), Arabic presentation forms (ﻣﻬﻨﺪﺱ, text copied from PDFs) and full-width letters. The hamza after an alef is dropped, so "كربلاء" and "كربلا", or "كهرباء" and "كهربا", look the same. Keywords from your config go through the **same** function, so the two sides always agree. That's why your config can say "البصرة" while the code internally compares "البصره".
 
 There is also `flatten`, used only for keyword search. It turns `-`, `_`, `/`, `#`, `:` and similar into spaces, so `#مهندس_كهرباء` and `iqjscout.com/jobs/electrical-engineer-34` contain normal words.
 
@@ -100,8 +102,11 @@ Our example has "تعلن" and "فرص عمل", so it continues.
 
 Lines that start a list item ("1-", "2.", "3)", "1️⃣") or are separators ("━━━━") cut the post into pieces. The first piece is the *header*.
 
-- If the header itself names one of your job titles, it's a single-job post with a requirements list, so the whole post stays one block.
-- Otherwise each list piece that names one of your job titles becomes a job. A *numbered* piece without one of your titles is another job, and is dropped. An un-numbered piece (cut off by a "━━━" separator) is glued onto the job above it.
+- If no list item names one of your job titles, it's a single-job post (the list is its requirements), so the whole post stays one block.
+- Otherwise each list item that names one of your job titles becomes a job. A numbered item without one of your titles is one of two things:
+  - *another job*, if it names some job ("2- محاسب": see `jobNouns` in `defaults.nim`), and is dropped;
+  - a *requirement* ("2- خبرة لا تقل عن 4 سنوات"), and is glued onto the job above it.
+- An un-numbered piece (cut off by a "━━━" separator) is glued onto the job above it.
 - **Compact lists.** If every list item is a single line ("1- مهندس كهرباء / 2- مهندس ميكانيك / 3- …"), whatever follows the last item is a *shared footer* ("المتطلبات: خبرة 5 سنوات", the address). It joins the header and applies to every job.
 - If a job has no location of its own or in the header, the whole post is searched.
 
@@ -120,9 +125,9 @@ Each job block is then judged with the header as context (`judgeBlock`). The pos
 2. **Location** (`locate`).
    - A line that says where the job is or where you must live ("📍", "Location:", "موقع العمل", "من سكنه…") decides first.
    - Otherwise: Basra mentioned and no other city means Basra; Basra and another city with no location line means *mixed* (**review**).
-   - "شارع البصرة" (a street) doesn't count as Basra.
+   - "شارع البصرة" (a street) doesn't count as Basra; neither does a place keyword followed by a word that makes it something else ("remote terminal units", "المدينة المنورة", "المدينة الصناعية": see `notAPlaceAfter`).
 3. **Experience** (`experience.nim`). The *number* of years required is extracted (see section 4). More than `max_experience_years` (default 1): **reject**.
-4. **Certification** (job block and header). One of your `certifications` on a line with "required/must/مطلوب/يجب" (and not "a plus/preferred/يفضل") is mandatory: **reject**. If the post also says "apply even if you don't meet every requirement", it's **review** instead (issue #25: that phrase can excuse a cert, never years).
+4. **Certification** (job block and header). One of your `certifications` on a line with "required/must/مطلوب/يجب" (and not "a plus/preferred/يفضل"), or listed under a heading like "Required certifications:", is mandatory: **reject**. If the post also says "apply even if you don't meet every requirement", it's **review** instead (issue #25: that phrase can excuse a cert, never years).
 5. **Positive evidence**: one of your level keywords (not in a "mentor junior engineers" sentence), "0–1 years"/"no experience", or an `entry` role.
    - Found, and the title lines don't look senior: **publish**.
    - Found, but the role on a title line (first two lines, or a "Position:"/"المسمى الوظيفي" line) is marked senior: **review**.
@@ -153,18 +158,21 @@ type Experience = object
   evidence: seq[string]
 ```
 
-For each line that mentions experience (experience/exp/خبره/خبرات, or "N years in/of X", "سنوات في"):
+For each line that mentions experience (experience/exp/خبره/خبرات/ممارسه, "N years/yrs in X", "سنوات في", or "لا تقل عن", which in job ads is almost always about experience; an age uses "لا يقل"):
 
 1. **Find quantities.**
    - Digits with a unit ("3 years", "3+ yrs", "3-5 years", "من 5 الي 12 سنه").
    - English number words ("two years").
    - Arabic number words ("خمس سنوات").
    - Duals ("سنتين").
+   - The number after the words ("Years of Experience: 5+", "عدد سنوات الخبرة: 6").
+   - Months ("36 months" → 3 years, rounded up).
+   - "خمس (5) سنوات" is fine too.
    - A lone "سنه" after خبره/عن/من/تتجاوز.
-2. **Keep only quantities that are about experience.** They must overlap the experience phrase or be within 90 bytes of it: about 15 English words, but only about 8 Arabic ones, since Arabic letters take 2 bytes each. They must not be an age, contract length or program duration ("Program Duration: 3.5 Years"; English words are matched as whole words, so "programming" doesn't count). A list number is not a range: in "1- 5+ years" the answer is 5.
+2. **Keep only quantities that are about experience.** They must overlap the experience phrase or be within 160 bytes of it: about 25 English words, but only about 12 Arabic ones, since Arabic letters take 2 bytes each. They must not be an age, contract length, training-program length or graduation date ("Program Duration: 3.5 Years", "برنامج تدريبي لمدة عامين", "graduated within the last 2 years"; English words are matched as whole words, so "programming" doesn't count). A list number is not a range: in "1- 5+ years" the answer is 5.
 3. **Ranges use the lower end.** "1-3 years" and "سنة – خمس سنوات" both mean 1.
 4. **Decimals round up.** "1.5 years" counts as 2.
-5. **Upper bounds** ("less than", "لا تتجاوز") mark the post entry-friendly instead.
+5. **Upper bounds** ("less than", "لا تتجاوز") mark the post entry-friendly instead. "*Not* less than" / "ليس اقل من" is a minimum, though, and the end of a range ("من 3 حتى 5") is never an upper bound.
 6. **Optional or required.** "preferred / يفضل / a plus" on the line (or on the next short line when the sentence wraps) makes it optional. If "required" is also on the line, required wins.
 
 Things the regexes must remember: the text is **already normalised**, so they say `الي` not `الى`, `حتي` not `حتى`, `خبره` not `خبرة`. Forgetting this was a real bug during development.
@@ -194,6 +202,7 @@ Things the regexes must remember: the text is **already normalised**, so they sa
 
 **Keyword matching rules** (`keywords.nim`):
 - English keywords must be whole words ("intern" ≠ "internal").
+- Certifications must also be whole words ("CAP" doesn't match "capable"), except that OCR-glued "CCNAor"/"CCNAand" is accepted.
 - Arabic keywords may have a prefix in front (و ف ب ل ك ال، وال، بال، لل) and anything after. So "مبرمج" matches "مبرمجين", but "مهندس كهرباء" does **not** match "مهندس كهربائي": add both forms if you want both.
 
 ### The safety net: tests and the corpus
@@ -236,11 +245,11 @@ Same 196 labelled posts, your deployed keywords:
 
 | | Old Python | Nim, default | Nim, `publish_when_unsure` |
 |---|---|---|---|
-| Published, labelled FALSE | **96** | **4** | 7 |
+| Published, labelled FALSE | **96** | **4** | 6 |
 | Published, labelled TRUE | 9 | 5 | 9 |
 | TRUE sent to review | 5 | 9 | 5 |
 | TRUE lost (rejected) | 0 | 0 | 0 |
-| Total sent to review | 57 | 60 | 50 |
+| Total sent to review | 57 | 56 | 47 |
 
 The 4 wrong publishes in the default mode:
 - 2 summer trainings for *current* students. Arguably fine for your channel; it's a label question.
