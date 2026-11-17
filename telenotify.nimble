@@ -12,3 +12,4 @@ bin           = @["telenotify"]
 requires "nim >= 2.0.0"
 requires "regex >= 0.26.1"
 requires "unicodedb >= 0.13.2"
+requires "htmlparser >= 0.1.0"

@@ -13,6 +13,8 @@ const
     "team leader", "foreman",
     # Arabic
     "اول", "اقدم", "رئيس", "مدير", "مشرف", "خبير", "ذو خبره", "ذوي الخبره",
+    # feminine forms (seniority words must match whole words)
+    "اولي", "رئيسه", "مديره", "مشرفه", "خبيره", "ذات خبره", "ذات الخبره",
     "خبره عاليه", "خبره طويله", "مسؤول قسم",
   ]
 
@@ -22,7 +24,8 @@ const
     "mentor", "mentoring", "supervise", "supervising", "train", "training of",
     "guide", "guiding", "coach", "coaching", "lead", "leading", "manage",
     "managing", "oversee", "overseeing", "develop",
-    "تدريب", "اشراف على", "الاشراف على", "توجيه", "قياده",
+    "تدريب", "اشراف على", "الاشراف على", "توجيه", "قياده", "التعامل مع",
+    "تدريب وتوجيه", "متابعه",
   ]
 
   ## Phrases that show a post is a job/internship advert at all.

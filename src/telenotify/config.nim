@@ -14,6 +14,8 @@
 ##   *degree or field* ("electrical engineering", "علوم حاسبات") rather than a
 ##   job title. Without them, fields are guessed from the wording (see
 ##   `isFieldPhrase`).
+## * `extra_job_sites`: more career sites whose job pages carry a schema.org
+##   JobPosting block (see boards.nim), e.g. ["careers.example.iq"].
 ## * `extra_seniority`, `extra_role_exclusions`, `extra_job_signals`, `extra_not_a_job`,
 ##   `extra_other_places`, `extra_location_markers`: words added to the
 ##   built-in lists in defaults.nim.
@@ -38,6 +40,7 @@ type
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
     maxExperienceYears*: int
+    extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
     # Telegram side, used by the listener (not by the filter itself)
     apiId*: int
@@ -107,6 +110,7 @@ proc parseConfig*(j: JsonNode): Config =
   result.notAJob = toKeywords(@notAJob & j.strings("extra_not_a_job"))
   result.maxExperienceYears = j{"max_experience_years"}.getInt(1)
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
+  result.extraJobSites = j.strings("extra_job_sites")
 
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
