@@ -1,0 +1,141 @@
+## What the listener needs from Telegram, and how TDLib provides it.
+##
+## `Telegram` is a small set of operations (get unread messages, mark read,
+## forward, ...). The listener only ever uses this object, never TDLib
+## directly, so tests can pass a fake Telegram (see tests/tlistener.nim)
+## and run the whole bot logic without an account or a network.
+##
+## `tdTelegram` builds the real one on top of a TdClient, and
+## `parseMessage` turns TDLib's message JSON into a `TgMessage`. That
+## function is pure and tested against hand-written TDLib JSON.
+
+import std/[asyncdispatch, json, strutils, algorithm]
+import td
+
+type
+  TgMessage* = object
+    chatId*, id*: int64
+    date*: int64
+    text*: string        ## text or caption, plus hidden link targets
+    buttons*: seq[string] ## URLs of inline buttons
+    photoFileId*: int    ## TDLib file id of the largest photo size; 0 = none
+    chatTitle*: string
+
+  Telegram* = ref object
+    ## Every operation the listener uses. All of them may raise (network,
+    ## TDLib errors); the listener catches per message.
+    unread*: proc (chat: int64): Future[seq[TgMessage]] {.closure, gcsafe.}
+      ## unread messages of `chat`, oldest first
+    markRead*: proc (chat: int64, ids: seq[int64]): Future[void] {.closure, gcsafe.}
+    downloadPhoto*: proc (fileId: int): Future[string] {.closure, gcsafe.}
+      ## the photo's bytes
+    forward*: proc (target, chat, id: int64): Future[bool] {.closure, gcsafe.}
+      ## false when the chat forbids forwarding
+    link*: proc (chat, id: int64): Future[string] {.closure, gcsafe.}
+    sendText*: proc (chat: int64, text: string): Future[void] {.closure, gcsafe.}
+    selfChat*: proc (): Future[int64] {.closure, gcsafe.}
+      ## the chat id of Saved Messages, for alerts
+
+# ------------------------------------------------------------ parsing
+
+proc textWithLinks(ft: JsonNode): string =
+  ## A formattedText's text, plus the URLs hidden behind words
+  ## ("apply [here](https://...)"): the old bot never saw those.
+  result = ft{"text"}.getStr
+  if ft == nil or ft{"entities"} == nil: return
+  for e in ft["entities"]:
+    if e{"type", "@type"}.getStr == "textEntityTypeTextUrl":
+      result.add "\n" & e{"type", "url"}.getStr
+
+proc parseMessage*(m: JsonNode): TgMessage =
+  result.chatId = m{"chat_id"}.getBiggestInt
+  result.id = m{"id"}.getBiggestInt
+  result.date = m{"date"}.getBiggestInt
+  let content = m{"content"}
+  case content{"@type"}.getStr
+  of "messageText":
+    result.text = content{"text"}.textWithLinks
+  of "messagePhoto":
+    result.text = content{"caption"}.textWithLinks
+    var best = 0
+    for s in content{"photo", "sizes"}.getElems:
+      let w = s{"width"}.getInt
+      if w >= best and w <= 2560:
+        best = w
+        result.photoFileId = s{"photo", "id"}.getInt
+  else:
+    # videos, documents, animations...: only their caption is useful
+    result.text = content{"caption"}.textWithLinks
+  let markup = m{"reply_markup"}
+  if markup{"@type"}.getStr == "replyMarkupInlineKeyboard":
+    for row in markup{"rows"}.getElems:
+      for b in row.getElems:
+        if b{"type", "@type"}.getStr == "inlineKeyboardButtonTypeUrl":
+          result.buttons.add b{"type", "url"}.getStr
+
+# ------------------------------------------------------------ TDLib
+
+proc tdTelegram*(c: TdClient): Telegram =
+  result = Telegram()
+
+  result.unread = proc (chat: int64): Future[seq[TgMessage]] {.async, closure, gcsafe.} =
+    let info = await c.call(%*{"@type": "getChat", "chat_id": chat})
+    # The real read marker (the old bot computed "last id - unread count",
+    # which skips messages whenever a channel deletes posts).
+    let lastRead = info{"last_read_inbox_message_id"}.getBiggestInt
+    if info{"unread_count"}.getInt == 0: return @[]
+    let title = info{"title"}.getStr
+    var collected: seq[TgMessage]
+    var fromId = 0'i64
+    for page in 0 ..< 50:   # at most 50 × 100 messages
+      let batch = await c.call(%*{"@type": "getChatHistory", "chat_id": chat,
+        "from_message_id": fromId, "offset": 0, "limit": 100, "only_local": false})
+      let msgs = batch{"messages"}.getElems
+      if msgs.len == 0: break
+      var reachedRead = false
+      for m in msgs:                # newest first
+        let id = m{"id"}.getBiggestInt
+        if id <= lastRead:
+          reachedRead = true
+          break
+        var tm = parseMessage(m)
+        tm.chatTitle = title
+        collected.add tm
+      if reachedRead: break
+      fromId = msgs[^1]{"id"}.getBiggestInt
+    collected.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))   # oldest first
+    return collected
+
+  result.markRead = proc (chat: int64, ids: seq[int64]): Future[void] {.async, closure, gcsafe.} =
+    if ids.len == 0: return
+    discard await c.call(%*{"@type": "viewMessages", "chat_id": chat, "message_ids": ids,
+                            "source": nil, "force_read": true})
+
+  result.downloadPhoto = proc (fileId: int): Future[string] {.async, closure, gcsafe.} =
+    let f = await c.call(%*{"@type": "downloadFile", "file_id": fileId, "priority": 1,
+                            "offset": 0, "limit": 0, "synchronous": true})
+    let path = f{"local", "path"}.getStr
+    if path == "": return ""
+    return readFile(path)
+
+  result.forward = proc (target, chat, id: int64): Future[bool] {.async, closure, gcsafe.} =
+    let props = await c.call(%*{"@type": "getMessageProperties", "chat_id": chat, "message_id": id})
+    if not props{"can_be_forwarded"}.getBool(false): return false
+    discard await c.call(%*{"@type": "forwardMessages", "chat_id": target, "from_chat_id": chat,
+                            "message_ids": [id], "send_copy": false, "remove_caption": false})
+    return true
+
+  result.link = proc (chat, id: int64): Future[string] {.async, closure, gcsafe.} =
+    let l = await c.call(%*{"@type": "getMessageLink", "chat_id": chat, "message_id": id})
+    return l{"link"}.getStr
+
+  result.sendText = proc (chat: int64, text: string): Future[void] {.async, closure, gcsafe.} =
+    discard await c.call(%*{"@type": "sendMessage", "chat_id": chat,
+      "input_message_content": {"@type": "inputMessageText",
+        "text": {"@type": "formattedText", "text": text, "entities": []}}})
+
+  result.selfChat = proc (): Future[int64] {.async, closure, gcsafe.} =
+    let me = await c.call(%*{"@type": "getMe"})
+    let chat = await c.call(%*{"@type": "createPrivateChat", "user_id": me{"id"}.getBiggestInt,
+                               "force": false})
+    return chat{"id"}.getBiggestInt

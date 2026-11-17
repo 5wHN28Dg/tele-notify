@@ -10,15 +10,31 @@
 ##       Run the filter over a labelled corpus (one JSON object per line with
 ##       "id", "text" and "label": TRUE/FALSE/UNSURE) and print how well it did.
 ##
-## The Telegram listener will be added as `telenotify run` in a later stage.
+##   telenotify login [--config:FILE]
+##       Log in to Telegram once (phone, code, password) and list your chats
+##       with their IDs.
+##
+##   telenotify run [--config:FILE] [--dry-run]
+##       The bot: process unread messages, then watch for new ones.
+##       --dry-run judges and records but forwards nothing.
+##
+##   telenotify review [--config:FILE]
+##       Go through posts waiting for review: send each one or discard it.
+##
+##   telenotify stats [--config:FILE] [--days:N]
+##       What happened per chat in the last N days (default 7).
 
 import std/[parseopt, json, strutils, strformat, tables, os, math, asyncdispatch]
-import telenotify/[config, classify, normalize, gather, fetch, boards]
+import telenotify/[config, classify, normalize, gather, fetch, boards, commands]
 
 const usage = """
 usage:
   telenotify check [--config:FILE] [--image:FILE]... [--button:URL]... [--no-scrape] [--show-text] [POSTFILE]
   telenotify eval  [--config:FILE] [--show:fp|fn|wrong|all] [--out:FILE] CORPUS.jsonl
+  telenotify login [--config:FILE]
+  telenotify run   [--config:FILE] [--dry-run]
+  telenotify review [--config:FILE]
+  telenotify stats [--config:FILE] [--days:N]
 """
 
 proc printDecision(d: Decision) =
@@ -92,7 +108,8 @@ proc main() =
   var cmd, configPath, show, outPath, arg = ""
   var images, buttons: seq[string]
   var scrape = true
-  var showText = false
+  var showText, dryRun = false
+  var days = 7
   configPath = "config.json"
   for kind, key, val in getopt():
     case kind
@@ -107,6 +124,10 @@ proc main() =
       of "button": buttons.add val
       of "no-scrape": scrape = false
       of "show-text": showText = true
+      of "dry-run": dryRun = true
+      of "days":
+        try: days = parseInt(val)
+        except ValueError: quit "--days needs a number"
       of "help", "h": echo usage; quit 0
       else: quit "unknown option --" & key & "\n" & usage
     of cmdEnd: discard
@@ -117,6 +138,15 @@ proc main() =
   of "eval":
     if arg == "" or not fileExists(arg): quit "eval needs a corpus file\n" & usage
     cmdEval(cfg, arg, show, outPath)
+  of "login", "run", "review":
+    try:
+      case cmd
+      of "login": waitFor cmdLogin(cfg)
+      of "run": waitFor cmdRun(cfg, dryRun)
+      else: waitFor cmdReview(cfg)
+    except CatchableError as e:
+      quit "error: " & e.msg
+  of "stats": cmdStats(cfg, days)
   else: quit usage
 
 when isMainModule: main()
