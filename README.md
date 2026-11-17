@@ -6,10 +6,14 @@
 
 # tele-notify
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Telethon](https://img.shields.io/badge/Library-Telethon-green)](https://docs.telethon.dev/)
+
+[![asciicast](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5.svg)](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5)
+
 A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
 It also supports OCR on attached images and avoids forwarding duplicate messages.
-
-**⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs. It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
 
 ## 🚧 Rewrite in progress (v4, Nim)
 
@@ -31,7 +35,9 @@ Read [`docs/rewrite-guide.md`](docs/rewrite-guide.md) for how it works, and [`do
 
 ## ✨ Features
 
-* **Keyword-based filtering**: Matches at least one keyword from each of three keyword categories.
+* **2 filtering systems**: 
+    * v1: Matches at least one keyword from each of three keyword categories.
+    * v2+: **Evolved filtering system**: Started as simple keyword matching, now handles role-level detection, experience patterns, certification requirements, and all the edge cases you discover when filtering real job posts in the wild.
 * **Image text recognition**: Downloads attached images and extracts text using OCR (`pytesseract`).
 * **Duplicate prevention**: Checks your last 10 forwarded messages before sending a new one.
 * **Customizable filters**: Store your keywords and Telegram API keys in a JSON file.
@@ -39,61 +45,20 @@ Read [`docs/rewrite-guide.md`](docs/rewrite-guide.md) for how it works, and [`do
 
 ## 🎯 Version Guide
 
-This project offers two versions to suit different needs:
+On Oct 7th, 2025, this project split into two paths:
 
-### **v2 (Current)** - Specialized Job Filter
-**Best for:** Filtering job postings with intelligent level detection
-- Two-stage filtering with inference logic
-- Entry-level vs. mid-level classification
-- Experience, certification, and responsibility pattern matching
-- Optimized for English/Arabic job market terminology
-- **Trade-off:** Highly tailored; requires significant modification for other use cases
-
-### **v1 (Legacy)** - General Message Filter
-**Best for:** Simple keyword-based filtering for any content type
-- Straightforward AND logic (level + role + location)
-- Easy to repurpose for different domains (e.g., real estate, events, products)
-- Minimal configuration required
-- **Trade-off:** Less intelligent; may miss nuanced matches
-
-📁 **Files:**
-- `main.py` - Current specialized version (v2)
-- `main_simple.py` - Original general-purpose version (v1)
-
-💡 **Which should you use?**
-- Filtering job postings specifically? → Use v2
-- Need a simple keyword filter for other content? → Use v1
-- Want to build something custom? → Start with v1 as a template
-
----
-
-## 🔧 Customization Difficulty
-
-| Feature | v1 (Simple) | v2 (Specialized) |
+| Feature | v1 (Simple) `main_simple.py` | v2 (Specialized) `main.py` |
 |---------|-------------|------------------|
-| Add new keywords | Easy | Easy |
-| Change filter logic | Moderate | Complex |
-| Repurpose for different domain | Moderate | Very Complex |
-| Add new languages | Moderate | Challenging |
+| Best For | 📢 General Monitoring | 💼 Job Hunting |
+| Logic | Simple Keywords (A + B + C) | Smart Inference (Experience, Role, Level) |
+| Complexity | Low (Easy to customize) | High (Harder to customize) |
+| Use Case | "Find me any message with 'Apartment' and 'Rent'" | "Find me a Mid-Level Python job" |
 
 ## 📦 Requirements
 
 * Python 3.8+
 * Telegram API credentials (API ID & API Hash, check [Telethon documentation](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) for detailed instructions)
 * `tesseract-ocr` for OCR functionality
-
-## 📚 Dependencies
-
-Python libraries used:
-
-```txt
-telethon
-pillow
-pytesseract
-scikit-learn
-cryptg
-tenacity
-```
 
 ## ⚙️ Installation
 
@@ -103,7 +68,7 @@ tenacity
    git clone https://github.com/5wHN28Dg/tele-notify.git
    cd tele-notify
    ```
-2. create a virutal environment:
+2. create a virtual environment:
 
    ```bash
    python3 -m venv venv
@@ -130,25 +95,14 @@ tenacity
      ```
    * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
 
-> 📱 **Android Users:** lost in dependency hell (WIP).
+> 📱 **Android Users:** check the [wiki](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions) for detailed instructions.
 
 ## 🛠 Configuration
 
-1. Run this code (after you fill in your API ID and API Hash) to get a list of your chat list with their names and **IDs**:
-   ```python
-   from telethon import TelegramClient
+1. Run `get_chat_ids.py` to get a list of your chat list with their names and **IDs** (after you fill in your API ID and API Hash):
 
-   api_id = YOUR_API_ID
-   api_hash = 'YOUR_API_HASH'
-
-   client = TelegramClient('session_name', api_id, api_hash)
-
-   async def main():
-       async for dialog in client.iter_dialogs():
-           print('{:>14}: {}'.format(dialog.id, dialog.title))
-
-   with client:
-    client.loop.run_until_complete(main())
+   ```bash
+   python get_chat_ids.py
    ```
 2. Open `config.json` file in the project directory and fill it with the necessary information:
 
@@ -176,45 +130,17 @@ The script will:
    * Check for required keywords.
    * Skip if it’s a duplicate of one of your last 10 messages.
    * Forward it to your target chat.
+* if you have any questions, you may want to check the [FAQ](https://github.com/5wHN28Dg/tele-notify/wiki/FAQ)
 
-## 📝 To Do List:
-* [x] **Fix** race conditions when updating `recent_messages` and writing to `config.json`.
+## 🗺️ Roadmap
 
-### Documentation & Support
+Development is organized by milestones.
 
-* [ ] **Add** a FAQ section in the wiki with a table of contents.
+See full progress → [GitHub Milestones](https://github.com/5wHN28Dg/tele-notify/milestones)
 
-### Message Processing
+See what's being worked on → [Project Board](https://github.com/users/5wHN28Dg/projects/1)
 
-* [x] **Improve** regex matching to detect messages formatted like:
-  `#Basrah www.example.com/electrical-engineering-intern/`.
-* [x] **Determine** whether account bans reported by telethon.client.updates are caused by the script (highly unlikely, as none of the reported chat IDs appear in the dialogs list obtained beforehand).
-* [x] **Rethink & test** job level identification logic for posts without clear level markers.🚨⚠️
-  - ✅ Implemented two-stage filtering: explicit keywords (stage 1) + inference-based detection (stage 2)
-  - ✅ Entry-level: Matches if no experience/certification requirements found
-  - ✅ Mid-level: Matches if no experience/certification/responsibility requirements found
-  - ✅ Ambiguous messages forwarded to personal chat for manual review
-
-### Reliability & Error Handling
-
-* [ ] **Review** and improve the retry mechanism.
-* [ ] **Set up** crash notifications (email, webhook, or other) and autostart upon system boot.🔄
-* [ ] **Add** logging for pattern match stages (which stage matched, which patterns triggered) for debugging? Maybe, we will see.
-
-### CLI & User Experience
-
-* [ ] **Create** a modern CLI with real-time statistics instead of plain logs:
-
-  * [ ] **Show** progress bar for unread message processing.
-  * [ ] **Display** processed message counts per chat and overall (over a time period).
-  * [ ] **Display** forwarded message counts per chat and overall (over a time period).
-  * [ ] **Show** breakdown of matches by stage (stage 1 vs. stage 2 inference)?
-  * [ ] **Display** count of ambiguous messages forwarded for manual review.
-  * [ ] **Highlight** important events (account bans, connection issues, etc.).
-
-### Code Quality
-
-* [ ] **Analyze** the codebase for a possible second refactoring.
+**⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs, read the full article [here](https://medium.com/@TogataMirio/a-needle-in-a-haystack-and-the-deadly-pursuit-to-prove-your-worth-88c34f1df79f). It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
 
 ## 📜 License
 

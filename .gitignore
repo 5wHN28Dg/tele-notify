@@ -1,4 +1,18 @@
 test.session
+function.md
+*.jpg
+*.jpeg
+myFile.txt
+test.py
+job.txt
+config copy.json
+template.txt
+test.txt
+IJS.html
+testo.py
+test1.py
+temp.json
+web_scraping.py
 /Private
 # local environments and caches
 myenv/
