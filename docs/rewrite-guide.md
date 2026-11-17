@@ -322,9 +322,10 @@ It returns that text plus `notes` saying what happened ("read Khana (2952 charac
   - Every run gets a fresh private temp folder, so two OCRs of the same picture at once can't collide.
   - On timeout, the process is killed *and waited for*, so no zombie process is left behind. The test `issue #30: the bot keeps working while OCR runs` proves a ticker keeps ticking during OCR.
 - **A single job link is always followed (#34).** The old code only scraped when almost nothing else was in the post, and OCR text from a picture counted as "something else". That's why the LinkedIn post in #34 was never read. Now any post with exactly one supported link gets its job page read; the page usually has the experience requirement the post leaves out.
+  - Epilogue for #34: the post was someone writing "#فرصة_عمل" and *resharing* an ad for an accountant in Baghdad. Now that it's read, it's rejected, which is the right answer. The old ❌ was right by luck.
 - **Several links: none followed.** A post with several job links is almost always several jobs, and reading all their pages would mix them together.
-- **Downloads have rules** (`fetch.nim`):
-  - 20-second time limit, after which the connection is *closed* (an abandoned connection leaked a socket);
+- **Downloads use our own small HTTP client** (`fetch.nim`), not Nim's `std/httpclient`. Review showed the standard client hides the socket. It resolves names itself, so `127.1`, `0x7f000001` or a name pointing at 127.0.0.1 slipped past the "no local addresses" check. It can't cancel a connection that's still opening. And it read a redirect's whole body (200 MB once). Ours resolves the name, refuses if *any* address is local or private (including IPv4-in-IPv6 forms), connects to the checked address, and verifies the HTTPS certificate belongs to the host (Nim's async TLS doesn't). It sends one `GET` with `Connection: close`, and never reads a redirect's body. Its rules:
+  - 20-second time limit, after which our socket is closed, cancelling a connect or read in progress;
   - pages capped at 3 MB, checked against the announced size and while reading;
   - only `http`/`https`, and never local or private addresses (127.0.0.1, 10.x, 192.168.x…), so a short link in a post can't make the bot poke at your home network;
   - redirects followed by hand, so the final URL is known (needed for `lnkd.in`);
@@ -340,7 +341,7 @@ These were chosen by counting links in the 3,834 latest posts of your channels o
 | Khana | `khana.jobs/jobs/9915` | its JSON API: title, location, description |
 | Taeen | `taeen.iq/ar/jobs/<uuid>` | its JSON API: title, city, experience years, description |
 | LinkedIn job | `linkedin.com/jobs/view/<id>` | page title (it includes the location) + the `description__text` block |
-| LinkedIn post | `linkedin.com/posts/<slug>` | the longest post-text block |
+| LinkedIn post | `linkedin.com/posts/<slug>` | the post's own text plus, for a reshare, the reshared post. **Never comments**: anyone can write a comment, and a long one used to replace the post |
 | `lnkd.in` | `lnkd.in/<code>` | resolved first, then read if the target is supported |
 | JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
 
@@ -351,6 +352,10 @@ The scraped text starts with `Job title: …` and `Location: …` lines, which t
 - **Workable and mselect**: zero links in the 3,834 recent posts, so there was no real page to test against. Adding a board back means a `BoardKind`, a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`.
 
 **Why "JSON-LD only" for Yadanoo-style sites.** A Yadanoo job page also contains a city picker listing *every* city, Basra included. Reading the whole page would make every job look like a Basra job. A test checks that a Duhok job's text never contains "Basrah".
+
+**Job links must look like a job.** On the JSON-LD sites the path needs at least two parts, the last with a digit (`/job/55ab`, not `/jobs` or `/careers`). E-mail addresses (`hr@shift-iraq.com/...`) don't count, and a link ends at the first non-ASCII character, so `yadanoo.com/job/55،للتقديم` is read as `/job/55`.
+
+**Pictures are checked before OCR.** Only PNG, JPEG, WebP and GIF, up to 12,000 pixels a side, read from the file header without decoding. Given text instead of a picture, tesseract reads it as a list of files to open; and a tiny PNG claiming 30,000×30,000 pixels made it use 1.8 GB.
 
 **Hostile pages.** Pages with more than 15,000 tags are refused before parsing. The HTML parser is recursive, and a page of 50,000 nested tags crashed the whole process; real job pages have about 3,000 tags.
 

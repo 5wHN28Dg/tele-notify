@@ -14,6 +14,9 @@ proc handler(req: Request) {.async, gcsafe.} =
     await req.respond(Http200, "y".repeat(4_000_000))
   of "/to-private": await req.respond(Http302, "", newHttpHeaders({"Location": "http://10.0.0.1/admin"}))
   of "/to-file": await req.respond(Http302, "", newHttpHeaders({"Location": "file:///etc/passwd"}))
+  of "/redir-big": await req.respond(Http302, "z".repeat(4_000_000), newHttpHeaders({"Location": "/ok"}))
+  of "/redir-upper": await req.respond(Http302, "", newHttpHeaders({"Location": "HTTP://127.0.0.1:" & $req.hostname.len & "/never"}))
+  of "/chunk": await req.respond(Http200, "chunked body")
   of "/slow":
     await sleepAsync(3000)
     await req.respond(Http200, "late")
@@ -93,13 +96,38 @@ suite "fetch: review pass 1 (stage 2) findings":
     let r = waitFor fetch(base & "/huge", allowPrivate = true)
     check not r.ok and "too large" in r.error
 
-  test "local and private addresses and non-web schemes are refused":
-    check "private" in (waitFor fetch(base & "/ok")).error
-    check "private" in (waitFor fetch(base & "/to-private", allowPrivate = false)).error
-    let r = waitFor fetch(base & "/to-private", allowPrivate = true)
-    check not r.ok   # 10.0.0.1 is not refused here but unreachable/slow; must still not crash
+  test "local and private addresses are refused, however they are written":
+    for u in ["http://127.0.0.1:" & $port & "/ok", "http://127.1:" & $port & "/",
+              "http://2130706433:" & $port & "/", "http://0x7f000001:" & $port & "/",
+              "http://0:" & $port & "/", "http://localhost.:" & $port & "/",
+              "http://localhost:" & $port & "/", "http://[::1]:" & $port & "/",
+              "http://[::ffff:127.0.0.1]:" & $port & "/", "http://[::]:" & $port & "/",
+              "http://10.1.2.3/", "http://192.168.1.1/", "http://169.254.169.254/"]:
+      let r = waitFor fetch(u, 2000)
+      check not r.ok
+      check "private" in r.error
+    # ... including after a redirect from an allowed page
+    check "private" in (waitFor fetch(base & "/to-private")).error
+
+  test "non-web schemes are refused":
     check "scheme" in (waitFor fetch(base & "/to-file", allowPrivate = true)).error
     check "scheme" in (waitFor fetch("ftp://example.com/x")).error
+
+  test "an upper-case scheme in a redirect is fine":
+    let r = waitFor fetch(base & "/redir-upper", 2000, allowPrivate = true)
+    check "scheme" notin r.error
+
+  test "a redirect's body is never read":
+    let r = waitFor fetch(base & "/redir-big", allowPrivate = true)
+    check r.ok and r.body == "hello"
+
+  test "a connection still being opened is cancelled by the time limit":
+    let before = openFds()
+    for i in 0 ..< 10:   # 10.255.255.1 never answers, so connect() hangs
+      let r = waitFor fetch("http://10.255.255.1/", 100, allowPrivate = true)
+      check not r.ok and "timed out" in r.error
+    waitFor sleepAsync(100)
+    check openFds() - before < 3
 
   test "sub-second time limits are reported sensibly":
     check "300 ms" in get("/slow", 300).error

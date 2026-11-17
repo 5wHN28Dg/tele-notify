@@ -29,7 +29,9 @@ proc cmdCheck(cfg: Config, path: string, images, buttons: seq[string],
               scrape, showText: bool) =
   let text = if path == "" or path == "-": stdin.readAll else: readFile(path)
   var post = Post(text: text, buttons: buttons)
-  for img in images: post.images.add readFile(img)
+  for img in images:
+    try: post.images.add readFile(img)
+    except IOError: quit "cannot read image " & img
   let g = waitFor gather(post, defaultFetcher(), defaultOcr(),
                          @defaultJobPostingSites & cfg.extraJobSites, scrape)
   for n in g.notes: echo "note: ", n

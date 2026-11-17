@@ -30,6 +30,16 @@ proc findAllByClass*(n: XmlNode, cls: string): seq[XmlNode] =
     if x.hasClass(cls): result.add x
     for i in countdown(x.len - 1, 0): stack.add x[i]
 
+proc findByAttr*(n: XmlNode, attr, value: string): XmlNode =
+  ## First element whose attribute `attr` equals `value`, or nil.
+  var stack = @[n]
+  while stack.len > 0:
+    let x = stack.pop
+    if x == nil or x.kind != xnElement: continue
+    if x.attrs != nil and x.attr(attr) == value: return x
+    for i in countdown(x.len - 1, 0): stack.add x[i]
+  nil
+
 proc findTag*(n: XmlNode, tag: string): XmlNode =
   ## First element called `tag` (document order), or nil.
   var stack = @[n]

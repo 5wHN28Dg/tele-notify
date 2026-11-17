@@ -53,3 +53,25 @@ suite "ocr: review pass 1 (stage 2) findings":
     check "Z" notin ps
     check toSeq(walkDir(getTempDir())).len <= tmpBefore + 1  # fake-bin dir only
     removeDir(fake)
+
+suite "ocr: review pass 2 (stage 2) findings":
+  test "only real images are given to tesseract (a path list would read local files)":
+    let r = waitFor ocrBytes(fx / "ocr_english.png" & "\n")
+    check not r.ok and "not an image" in r.error
+
+  test "images with absurd dimensions are refused":
+    # a valid PNG header claiming 30000 x 30000 pixels
+    var png = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+    for v in [30000'u32, 30000'u32]:
+      png.add char((v shr 24) and 0xff); png.add char((v shr 16) and 0xff)
+      png.add char((v shr 8) and 0xff); png.add char(v and 0xff)
+    png.add "\x08\x02\x00\x00\x00"
+    let r = waitFor ocrBytes(png)
+    check not r.ok and "too large" in r.error
+
+  test "image dimensions are read from PNG and JPEG headers":
+    check imageSize(readFile(fx / "ocr_english.png")) == (900, 220)
+    check imageSize(readFile(fx / "ocr_english.jpg")) == (900, 220)
+    check imageSize("GIF89a\x10\x00\x20\x00") == (16, 32)
+    check imageSize("hello") == (-1, -1)
+    check (waitFor ocrFile(fx / "ocr_english.jpg")).ok

@@ -1,32 +1,37 @@
-## Downloading pages, safely.
+## Downloading pages, safely: a small HTTP client of our own.
 ##
-## Rules learned from the old version (problems report 4.1, 5.3) and from
-## the stage 2 review:
-## * a download can never crash the caller: every failure becomes a
-##   `Fetched` with `ok = false` and a reason;
-## * every download has a time limit (20 s by default). When it fires the
-##   connection is *closed*, not just abandoned: abandoned connections
-##   leaked one socket each;
-## * pages are capped at 3 MB, checked against the announced size first and
-##   then while reading, so a huge page is never held in memory;
-## * only http and https, and never local or private network addresses
-##   (127.0.0.1, 10.x, 192.168.x, ...): a short link in a post must not be
-##   able to make us poke at the home network. Tests turn this off with
-##   `allowPrivate` to talk to their own local server.
+## Why not Nim's `std/httpclient`? Reviews of stage 2 broke it in ways it
+## doesn't let us fix:
+## * it resolves host names itself, so we can't check the address it really
+##   connects to: `127.1`, `0x7f000001`, `localhost.` or a name like
+##   `localtest.me` all reached the local machine past our checks;
+## * a connection still being opened can't be cancelled, so a time limit
+##   left a socket behind and the request could still go out later;
+## * on a redirect it insisted on reading the whole old body (200 MB once).
 ##
-## Redirects are followed by hand (up to 5) so we know the *final* URL;
-## lnkd.in short links need it. Uses Nim's standard async HTTP client,
-## which needs `-d:ssl` (set in config.nims).
+## Here we hold the socket ourselves:
+## 1. resolve the host name, and refuse if *any* address is local or
+##    private (127.x, 10.x, 192.168.x, ::1, ::ffff:127.0.0.1, ...);
+## 2. connect to that checked address (so a second DNS answer can't swap
+##    it for a local one);
+## 3. for https, check the certificate really belongs to the host name
+##    (the async TLS layer in Nim doesn't);
+## 4. send one GET with `Connection: close`, read at most 3 MB, close.
+## Each redirect is a new connection (up to 5). When the time limit fires
+## we close the socket, which cancels whatever was in progress.
 ##
-## Known limit: the standard client looks up host names synchronously, so
-## a very slow DNS server can pause the bot briefly; the time limit can't
-## interrupt that part.
+## Every failure is returned as `Fetched(ok: false, error: ...)`; nothing
+## raises. Tests use `allowPrivate = true` to talk to their local server.
+## Known limit: name lookups are synchronous (as in the standard library),
+## so a very slow DNS server can pause the bot; the time limit can't cut
+## a lookup short.
 
-import std/[asyncdispatch, httpclient, uri, strutils, net]
+import std/[asyncdispatch, asyncnet, net, uri, strutils, nativesockets, openssl]
 
 const
   userAgent* = "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"
   maxBytes* = 3_000_000
+  maxHeaderBytes = 64_000
 
 type
   Fetched* = object
@@ -39,82 +44,194 @@ type
   Fetcher* = proc (url: string): Future[Fetched] {.closure, gcsafe.}
     ## Anything that can download a URL. Tests pass a fake one.
 
-proc isPrivateHost*(host: string): bool =
-  ## Loopback, private, link-local or "this host" addresses, and localhost.
-  let h = host.toLowerAscii.strip(chars = {'[', ']'})
-  if h == "localhost" or h.endsWith(".localhost") or h.endsWith(".local"): return true
-  if not isIpAddress(h): return false
-  let ip = parseIpAddress(h)
+  FetchError = object of CatchableError
+
+  Live = ref object
+    ## What a running download is doing, so the time limit can stop it.
+    sock: AsyncSocket
+    current: string
+
+# ------------------------------------------------------------ addresses
+
+proc isPrivateIp*(ip: IpAddress): bool =
+  ## Loopback, private, link-local, carrier-grade NAT, "this host" and
+  ## unspecified addresses, including IPv4 addresses written as IPv6.
   case ip.family
   of IpAddressFamily.IPv4:
     let a = ip.address_v4
     a[0] in [0'u8, 10, 127] or (a[0] == 172 and a[1] in 16'u8 .. 31'u8) or
       (a[0] == 192 and a[1] == 168) or (a[0] == 169 and a[1] == 254) or
-      (a[0] == 100 and a[1] in 64'u8 .. 127'u8)
+      (a[0] == 100 and a[1] in 64'u8 .. 127'u8) or a[0] >= 224
   of IpAddressFamily.IPv6:
     let a = ip.address_v6
-    var loopback = a[15] == 1
-    for i in 0 .. 14:
-      if a[i] != 0: loopback = false
-    loopback or (a[0] and 0xFE) == 0xFC or (a[0] == 0xFE and (a[1] and 0xC0) == 0x80)
+    var zeroUpTo10 = true
+    for i in 0 .. 9:
+      if a[i] != 0: zeroUpTo10 = false
+    if zeroUpTo10 and ((a[10] == 0xFF and a[11] == 0xFF) or (a[10] == 0 and a[11] == 0)):
+      # ::ffff:a.b.c.d (mapped), ::a.b.c.d (compatible), :: and ::1
+      return isPrivateIp(IpAddress(family: IpAddressFamily.IPv4,
+                                   address_v4: [a[12], a[13], a[14], a[15]]))
+    (a[0] and 0xFE) == 0xFC or (a[0] == 0xFE and (a[1] and 0xC0) == 0x80) or a[0] == 0xFF
 
-proc refuse(url: string, allowPrivate: bool): string =
-  ## Why `url` must not be downloaded, or "" if it's fine.
+proc resolve(host: string, port: Port, allowPrivate: bool): (string, Domain) =
+  ## A checked address to connect to. Raises FetchError when refused.
+  var info: ptr AddrInfo
+  try:
+    info = getAddrInfo(host, port, Domain.AF_UNSPEC)
+  except OSError as e:
+    raise newException(FetchError, "cannot resolve " & host & ": " & e.msg.splitLines[0])
+  defer: freeAddrInfo(info)
+  var first = ""
+  var domain = Domain.AF_INET
+  var it = info
+  while it != nil:
+    if it.ai_family.cint in [toInt(Domain.AF_INET), toInt(Domain.AF_INET6)]:
+      let ip = parseIpAddress(getAddrString(it.ai_addr))
+      if not allowPrivate and ip.isPrivateIp:
+        raise newException(FetchError, "refused a private/local address (" & host & ")")
+      if first == "":
+        first = $ip
+        domain = if ip.family == IpAddressFamily.IPv4: Domain.AF_INET else: Domain.AF_INET6
+    it = it.ai_next
+  if first == "": raise newException(FetchError, "no address for " & host)
+  (first, domain)
+
+# ------------------------------------------------------------ one request
+
+proc closeQuietly(live: Live) =
+  ## Close the current socket, if any. Closing a socket whose connect was
+  ## still in progress can raise "Bad file descriptor"; that's fine here.
+  if live.sock != nil:
+    try: live.sock.close()
+    except CatchableError: discard
+    live.sock = nil
+
+proc checkCertificate(sock: AsyncSocket, host: string) =
+  when defined(ssl):
+    let cert = SSL_get_peer_certificate(sock.sslHandle)
+    if cert == nil: raise newException(FetchError, "no TLS certificate from " & host)
+    defer: X509_free(cert)
+    if X509_check_host(cert, host.cstring, host.len.cint, 0, nil) != 1:
+      raise newException(FetchError, "TLS certificate is not for " & host)
+
+proc recvExactly(sock: AsyncSocket, n: int): Future[string] {.async.} =
+  result = await sock.recv(n)
+  while result.len < n:
+    let more = await sock.recv(n - result.len)
+    if more.len == 0: raise newException(FetchError, "connection closed early")
+    result.add more
+
+proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, string)] {.async.} =
+  ## One GET without following redirects: (status, location header, body).
   let u = parseUri(url)
-  if u.scheme notin ["http", "https"]: return "unsupported scheme '" & u.scheme & "'"
-  if not allowPrivate and u.hostname.isPrivateHost: return "refused a private/local address"
-  ""
+  let scheme = u.scheme.toLowerAscii
+  if scheme notin ["http", "https"]:
+    raise newException(FetchError, "unsupported scheme '" & u.scheme & "'")
+  let host = u.hostname.strip(chars = {'[', ']'})
+  if host.len == 0: raise newException(FetchError, "no host in " & url)
+  var port = if scheme == "https": 443 else: 80
+  if u.port != "":
+    try: port = parseInt(u.port)
+    except ValueError: raise newException(FetchError, "bad port " & u.port)
+    if port notin 1 .. 65535: raise newException(FetchError, "bad port " & u.port)
+  let (ip, domain) = resolve(host, Port(port), allowPrivate)
+  let sock = newAsyncSocket(domain, SockType.SOCK_STREAM, Protocol.IPPROTO_TCP, buffered = true)
+  live.sock = sock
+  await sock.connect(ip, Port(port))
+  if scheme == "https":
+    when defined(ssl):
+      let ctx = newContext(verifyMode = CVerifyPeer)
+      wrapConnectedSocket(ctx, sock, handshakeAsClient, host)
+    else:
+      raise newException(FetchError, "built without -d:ssl")
+  var path = (if u.path == "": "/" else: u.path)
+  if u.query != "": path.add "?" & u.query
+  let hostHeader = (if ':' in host: "[" & host & "]" else: host) &
+                   (if u.port != "": ":" & u.port else: "")
+  await sock.send("GET " & path & " HTTP/1.1\r\nHost: " & hostHeader &
+                  "\r\nUser-Agent: " & userAgent &
+                  "\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n")
+  if scheme == "https": checkCertificate(sock, host)
 
-proc readCapped(resp: AsyncResponse): Future[(bool, string)] {.async.} =
-  ## The body, stopping as soon as it passes `maxBytes`.
-  var body = ""
+  # status line and headers
+  let statusLine = await sock.recvLine(maxLength = maxHeaderBytes)
+  let parts = statusLine.splitWhitespace
+  if parts.len < 2 or not parts[0].startsWith("HTTP/"):
+    raise newException(FetchError, "not an HTTP answer")
+  var status = 0
+  try: status = parseInt(parts[1])
+  except ValueError: raise newException(FetchError, "bad HTTP status")
+  var location, transfer = ""
+  var length = -1
+  var headerBytes = statusLine.len
   while true:
-    let (more, chunk) = await resp.bodyStream.read()
-    if not more: break
-    body.add chunk
-    if body.len > maxBytes: return (false, "")
-  return (true, body)
+    let line = await sock.recvLine(maxLength = maxHeaderBytes)
+    headerBytes += line.len
+    if headerBytes > maxHeaderBytes: raise newException(FetchError, "headers too large")
+    if line == "\r\n" or line == "": break
+    let i = line.find(':')
+    if i <= 0: continue
+    let (k, v) = (line[0 ..< i].strip.toLowerAscii, line[i + 1 .. ^1].strip)
+    case k
+    of "location": location = v
+    of "transfer-encoding": transfer = v.toLowerAscii
+    of "content-length":
+      try: length = parseInt(v)
+      except ValueError: discard
+    else: discard
+  if status in 300 .. 399 and location != "":
+    return (status, location, "")       # don't read a redirect's body at all
+  if length > maxBytes: raise newException(FetchError, "page too large")
 
-proc fetchWith(client: AsyncHttpClient, url: string, allowPrivate: bool): Future[Fetched] {.async.} =
-  var current = url
+  # body: chunked, fixed length, or until the server closes
+  var body = ""
+  if "chunked" in transfer:
+    while true:
+      let sizeLine = (await sock.recvLine(maxLength = 100)).strip.split(';')[0]
+      var size = 0
+      try: size = parseHexInt(sizeLine)
+      except ValueError: raise newException(FetchError, "bad chunk size")
+      if size == 0: break
+      if body.len + size > maxBytes: raise newException(FetchError, "page too large")
+      body.add await sock.recvExactly(size)
+      discard await sock.recvLine(maxLength = 10)
+  elif length >= 0:
+    body = await sock.recvExactly(length)
+  else:
+    while true:
+      let chunk = await sock.recv(65_536)
+      if chunk.len == 0: break
+      body.add chunk
+      if body.len > maxBytes: raise newException(FetchError, "page too large")
+  return (status, "", body)
+
+proc fetchWith(live: Live, url: string, allowPrivate: bool): Future[Fetched] {.async.} =
+  live.current = url
   try:
     for hop in 0 .. 5:
-      let why = refuse(current, allowPrivate)
-      if why != "":
-        return Fetched(ok: false, finalUrl: current, error: why)
-      let resp = await client.get(current)
-      let code = resp.code.int
-      if code in 300 .. 399 and resp.headers.hasKey("location"):
-        current = $(parseUri(current).combine(parseUri(resp.headers["location"])))
-        discard await resp.readCapped   # drain before reusing the connection
+      let (status, location, body) = await getOnce(live, live.current, allowPrivate)
+      live.closeQuietly()
+      if location != "":
+        live.current = $(parseUri(live.current).combine(parseUri(location)))
         continue
-      if resp.headers.hasKey("content-length"):
-        var announced = 0
-        try: announced = parseInt(resp.headers["content-length"])
-        except ValueError: discard
-        if announced > maxBytes:
-          return Fetched(ok: false, status: code, finalUrl: current, error: "page too large")
-      let (fits, body) = await resp.readCapped
-      if not fits:
-        return Fetched(ok: false, status: code, finalUrl: current, error: "page too large")
-      if code != 200:
-        return Fetched(ok: false, status: code, finalUrl: current, body: body,
-                       error: "HTTP " & $code)
-      return Fetched(ok: true, status: code, finalUrl: current, body: body)
-    return Fetched(ok: false, finalUrl: current, error: "too many redirects")
+      if status != 200:
+        return Fetched(ok: false, status: status, finalUrl: live.current, body: body,
+                       error: "HTTP " & $status)
+      return Fetched(ok: true, status: status, finalUrl: live.current, body: body)
+    return Fetched(ok: false, finalUrl: live.current, error: "too many redirects")
   except CatchableError as e:
-    return Fetched(ok: false, finalUrl: current, error: e.msg.splitLines[0])
+    live.closeQuietly()
+    return Fetched(ok: false, finalUrl: live.current, error: e.msg.splitLines[0])
 
 proc fetch*(url: string, timeoutMs = 20_000, allowPrivate = false): Future[Fetched] {.async.} =
   ## Download `url`. Never raises; check `ok`.
-  let client = newAsyncHttpClient(userAgent = userAgent, maxRedirects = 0)
-  let fut = fetchWith(client, url, allowPrivate)
+  let live = Live()
+  let fut = fetchWith(live, url, allowPrivate)
   if await withTimeout(fut, timeoutMs):
-    client.close()
     return fut.read
-  client.close()   # fails the pending request and frees its socket
+  live.closeQuietly()   # cancels a connect or read in progress
   let limit = if timeoutMs < 1000: $timeoutMs & " ms" else: $(timeoutMs div 1000) & " s"
-  return Fetched(ok: false, finalUrl: url, error: "timed out after " & limit)
+  return Fetched(ok: false, finalUrl: live.current, error: "timed out after " & limit)
 
 proc defaultFetcher*(): Fetcher =
   result = proc (url: string): Future[Fetched] {.closure, gcsafe.} = fetch(url)

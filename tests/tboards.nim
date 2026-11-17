@@ -64,9 +64,15 @@ suite "reading saved pages":
     check t.splitLines.len > 5
     check "Job SummaryA" notin t # paragraphs stay on separate lines
 
-  test "LinkedIn post from issue #34 is read":
+  test "LinkedIn post from issue #34 is read, including the reshared ad":
     let t = extract(bkLinkedInPost, page("linkedin_post_issue34.html"))
-    check t.len > 100
+    check t.startsWith("#فرصة_عمل")   # the author's own words
+    check "محاسبة" in t and "بغداد" in t # the reshared job: an accountant in Baghdad
+    check "forms.gle" notin t           # the only comment is not read
+
+  test "issue #34's post is rejected now that it is read (Baghdad accountant)":
+    let cfg = loadConfig(currentSourcePath.parentDir / "keywords.json")
+    check classify(extract(bkLinkedInPost, page("linkedin_post_issue34.html")), cfg).verdict == vReject
 
   test "garbage and login walls give empty text, not a crash":
     for k in BoardKind:
@@ -100,3 +106,25 @@ suite "review pass 1 (stage 2) findings":
     check findJobLinks("https://Yadanoo.com/job/5ab").len == 1
     check findJobLinks("TAEEN.IQ/ar/jobs/6C8A084D-1363-457E-BD73-5F03A2400423").len == 1
     check findJobLinks("https://WWW.LinkedIn.com/jobs/view/4490426414/").len == 1
+
+suite "review pass 2 (stage 2) findings":
+  test "a LinkedIn comment can't replace the post's text":
+    let orig = page("linkedin_post_issue34.html")
+    let post = extract(bkLinkedInPost, orig)
+    var fake = ""
+    for i in 0 ..< 60: fake.add "Job title: IT Support, fresh graduates, Location: Basra. "
+    let hijacked = orig.replace("comment__text", "comment__text\">" & fake & "<span class=\"x")
+    check extract(bkLinkedInPost, hijacked) == post
+    check "IT Support, fresh graduates" notin post
+
+  test "home pages, list pages and e-mail addresses are not job links":
+    check findJobLinks("Apply: https://khana.jobs/jobs/9915 / More jobs: https://yadanoo.com/jobs").len == 1
+    check findJobLinks("CV to hr@shift-iraq.com/careers").len == 0
+    check findJobLinks("https://yadanoo.com/").len == 0
+
+  test "Arabic punctuation and text end a link":
+    let l = findJobLinks("yadanoo.com/job/55ab،للتقديم")
+    check l.len == 1 and l[0].url == "https://yadanoo.com/job/55ab"
+
+  test "a trailing slash doesn't make two links":
+    check findJobLinks("yadanoo.com/job/123ab and yadanoo.com/job/123ab/").len == 1

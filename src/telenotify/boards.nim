@@ -15,7 +15,7 @@
 ## | Khana | khana.jobs/jobs/9915 | JSON API (title, location, description) |
 ## | Taeen | taeen.iq/ar/jobs/<uuid> | JSON API (title, city, experience years, description) |
 ## | LinkedIn job | linkedin.com/jobs/view/<id> | page `<title>` + `description__text` block |
-## | LinkedIn post | linkedin.com/posts/<slug> | the post text block |
+## | LinkedIn post | linkedin.com/posts/<slug> | the post's own text (+ the reshared post's), never comments |
 ## | lnkd.in | lnkd.in/<code> | resolved to its target, which is then read if supported |
 ## | Sites with schema.org JobPosting | yadanoo.com/job/<id>, shift-iraq.com/jobs/<id>, + `extra_job_sites` | the page's JSON-LD `JobPosting` block only |
 ##
@@ -56,13 +56,26 @@ let
   liJob = re2(r"(?i)linkedin\.com/(?:comm/)?jobs/view/(?:[A-Za-z0-9%_-]*-)?(\d{6,})")
   liPost = re2(r"(?i)linkedin\.com/posts/([A-Za-z0-9%_-]+)")
   shortLink = re2(r"(?i)lnkd\.in/([A-Za-z0-9_-]+)")
-  anyUrl = re2(r"(?i)(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s""'<>()\[\]\x{200E}\x{200F}\x{2060}]*)?")
+  # Links end at the first non-ASCII character (Arabic text or punctuation
+  # glued to the link, "yadanoo.com/job/55،للتقديم") or at quotes/brackets.
+  anyUrl = re2(r"(?i)(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[!#-&*-;=?-Z^-~]*)?")
   ldJson = re2(r"(?s)<script[^>]*application/ld\+json[^>]*>(.*?)</script>")
 
 proc addUnique(list: var seq[JobLink], l: JobLink) =
   for x in list:
     if x.url == l.url: return
   list.add l
+
+proc looksLikeJobPath(path: string): bool =
+  ## "/job/55ab", "/jobs/251f8967-..." yes; "/", "/jobs", "/careers" no:
+  ## at least two parts, and the last one has a digit (an ID).
+  var parts: seq[string]
+  for p in path.split('/'):
+    if p.len > 0: parts.add p
+  if parts.len < 2: return false
+  for c in parts[^1]:
+    if c in Digits: return true
+  false
 
 proc findJobLinks*(text: string, jobSites: openArray[string] = defaultJobPostingSites): seq[JobLink] =
   ## Every supported job link in `text` (post text, button URLs, OCR...),
@@ -78,11 +91,14 @@ proc findJobLinks*(text: string, jobSites: openArray[string] = defaultJobPosting
   for m in text.findAll(shortLink):
     result.addUnique JobLink(kind: bkShortLink, url: "https://lnkd.in/" & text[m.group(0)])
   for m in text.findAll(anyUrl):
+    let start = m.boundaries.a
+    if start > 0 and text[start - 1] in {'@', '.', '-', '_'} + Letters + Digits:
+      continue   # part of an e-mail address or a longer host name
     let host = text[m.group(0)].toLowerAscii
     for site in jobSites:
       if (host == site or host.endsWith("." & site)) and m.group(1).a >= 0:
-        let path = text[m.group(1)].split({'?', '#'})[0]
-        if path.len > 1:
+        let path = text[m.group(1)].split({'?', '#'})[0].strip(leading = false, chars = {'/', '.', ','})
+        if path.looksLikeJobPath:
           result.addUnique JobLink(kind: bkJobPosting, url: "https://" & host & path)
 
 proc isSupported*(url: string, jobSites: openArray[string] = defaultJobPostingSites): bool =
@@ -163,11 +179,17 @@ proc extractLinkedInJob(body: string): string =
   line("Job title", title) & desc[0].toText
 
 proc extractLinkedInPost(body: string): string =
-  ## The post body is the longest "attributed-text-segment-list__container"
-  ## (the first one can be just a hashtag).
-  for n in parsePage(body).findAllByClass("attributed-text-segment-list__container"):
-    let t = n.toText
-    if t.len > result.len: result = t
+  ## Only the post's own text: the author's words and, for a reshare, the
+  ## reshared post's words (that's where the job usually is; issue #34 was
+  ## "#فرصة_عمل" resharing a job ad). Comments under the post use similar
+  ## blocks and anyone can write them, so they are never read: taking "the
+  ## longest block" let a long comment replace the post.
+  let doc = parsePage(body)
+  var parts: seq[string]
+  for id in ["main-feed-activity-card__commentary", "feed-reshare-content__commentary"]:
+    let n = doc.findByAttr("data-test-id", id)
+    if n != nil: parts.add n.toText
+  parts.join("\n\n").strip
 
 proc extract*(kind: BoardKind, body: string): string =
   ## Text of a downloaded job, or "" when the page isn't what we expect
