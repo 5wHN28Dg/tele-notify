@@ -2,6 +2,8 @@
 
 Written 2026-11-17, against the `testing` branch at commit `6d49bcc`.
 
+> **Status (updated as the rewrite progresses).** Sections 3 and 4.1–4.5 are fixed in the Nim rewrite (stages 1–2), as are 5.1 (OCR) and most of 7: tests, CI, and a `requirements.txt` that installs again (including the missing `beautifulsoup4`, `lxml` and `urlextract`). Sections 4.6–4.13, 5.2–5.6 and 6 belong to stage 3, the Telegram listener. Progress is tracked in [`rewrite-guide.md`](rewrite-guide.md#roadmap).
+
 Each problem below says what is wrong, why it matters, and how to fix it. Each one is also marked by how I know:
 
 - **[tested]**: I reproduced it by running the code.

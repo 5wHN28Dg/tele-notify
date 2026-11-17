@@ -26,6 +26,7 @@ tests/*
 !tests/*.nim
 !tests/*.nims
 !tests/*.json
+!tests/fixtures/
 nimcache/
 # never commit sessions or private corpora
 *.session

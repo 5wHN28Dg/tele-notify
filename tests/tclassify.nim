@@ -217,3 +217,7 @@ suite "review pass 2 (adversarial) findings":
     discard verdict("مطلوب it support في البصرة\n" & line)
     # was 68 s before the fix; ~3 s in a debug build, ~0.2 s in release
     check epochTime() - t0 < 10.0
+
+suite "found on recent channel posts":
+  test "a female manager role and 'dealing with trainees' are not entry level":
+    check verdict("تعلن شركة هندسية في محافظة البصرة عن حاجتها إلى موظفة للعمل بمنصب مديرة مركز تدريب\nشهادة جامعية ويفضل في التخصصات الهندسية\nمهارات عالية في التواصل والتعامل مع المتدربين\nموقع العمل: محافظة البصرة") != vPublish

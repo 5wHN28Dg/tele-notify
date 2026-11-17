@@ -2,146 +2,128 @@
 
 [🇮🇶 العربية](README.ar.md)
 
-</div>
-
 # tele-notify
 
+**Watches Telegram job channels and forwards only the posts that fit you.**
+
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
-[![Telethon](https://img.shields.io/badge/Library-Telethon-green)](https://docs.telethon.dev/)
+[![Nim](https://img.shields.io/badge/Nim-2.2-yellow)](https://nim-lang.org)
+[![CI](https://github.com/5wHN28Dg/tele-notify/actions/workflows/nim.yml/badge.svg)](https://github.com/5wHN28Dg/tele-notify/actions/workflows/nim.yml)
+
+</div>
+
+In Iraq, most jobs are posted on Telegram, in hundreds of channels and hundreds of posts a day. Finding the few entry-level IT, control and computer engineering jobs in Basra in that stream is a needle in a haystack. tele-notify reads the channels for you and forwards only the matches, to a channel of your own ([this one](https://t.me/BQTechJobs), for example). The story behind it: [*A Needle in a Haystack*](https://medium.com/@TogataMirio/a-needle-in-a-haystack-and-the-deadly-pursuit-to-prove-your-worth-88c34f1df79f).
+
+It is built around that one need, but the keywords, places and channels are yours to set.
 
 [![asciicast](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5.svg)](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5)
 
-A Python script that monitors specified Telegram chats and forwards messages matching your custom filters to another chat.
-It also supports OCR on attached images and avoids forwarding duplicate messages.
+## Status: being rewritten in Nim
 
-## 🚧 Rewrite in progress (v4, Nim)
+| | What it is | State |
+|---|---|---|
+| **v3, Python** (`main.py`) | The bot that runs today | Works, frozen: no new features |
+| **v4, Nim** (`src/`) | The rewrite, built in stages | Stages 1–2 done: the filter, OCR and job-board reading. The Telegram part comes next |
 
-tele-notify is being rewritten in [Nim](https://nim-lang.org), in stages, while the Python version below keeps working:
+The rewrite exists because the Python filter published far too many wrong posts: on a test with 196 real posts, 96 of its 115 publications were wrong, against 4 for the new filter. The [problems report](docs/problems-report.md) explains what was wrong; the [rewrite guide](docs/rewrite-guide.md) explains how the new code works.
 
-1. ✅ **Filter core**: `telenotify check` / `telenotify eval`, with evidence-based verdicts (publish / review / reject) and a reason for each.
-2. ⏳ OCR and job-board scrapers.
-3. ⏳ Telegram listener (TDLib).
-4. ⏳ Side-by-side run, then switch over.
+## How the new filter decides
 
-Try the new filter on a post:
+Every post gets one of three verdicts, **with the reasons**:
 
-```bash
-nimble build -d:release
-./telenotify check --config:config.json post.txt
+| Verdict | When |
+|---|---|
+| ✅ `publish` | Your role, in Basra (or remote), *and* a sign it's for beginners: "fresh graduate", "intern", "0–1 years", help desk… |
+| 🤔 `review` | Role and place fit, but nothing says the level. You decide |
+| ❌ `reject` | Not a job advert, wrong city, needs years of experience, senior title, mandatory certificate… |
+
+Before deciding, it gathers everything there is to read:
+- the post text;
+- text in its pictures (OCR, Arabic and English);
+- the job page when the post links to a known job board: Khana, Taeen, Yadanoo, LinkedIn, Shift.
+
+Posts listing several jobs are split, and each job is judged on its own.
+
+```
+$ ./telenotify check --config:config.json post.txt
+note: read Khana (2952 characters)
+verdict: publish
+  - role (rkTitle): مهندس كهرباء
+  - location line: 'location: البصره - basra'
+  - entry level: حديث التخرج
 ```
 
-Read [`docs/rewrite-guide.md`](docs/rewrite-guide.md) for how it works, and [`docs/problems-report.md`](docs/problems-report.md) for why it is being rewritten.
+## Try the new filter
 
-## ✨ Features
+You need [Nim](https://nim-lang.org/install.html) 2.2 and tesseract with Arabic:
 
-* **2 filtering systems**: 
-    * v1: Matches at least one keyword from each of three keyword categories.
-    * v2+: **Evolved filtering system**: Started as simple keyword matching, now handles role-level detection, experience patterns, certification requirements, and all the edge cases you discover when filtering real job posts in the wild.
-* **Image text recognition**: Downloads attached images and extracts text using OCR (`pytesseract`).
-* **Duplicate prevention**: Checks your last 10 forwarded messages before sending a new one.
-* **Customizable filters**: Store your keywords and Telegram API keys in a JSON file.
-* **Multi-chat monitoring**: Watch multiple Telegram chats at once.
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-ara tesseract-ocr-eng   # Ubuntu/Debian
+git clone https://github.com/5wHN28Dg/tele-notify.git && cd tele-notify
+nimble build -d:release
+```
 
-## 🎯 Version Guide
+Then:
 
-On Oct 7th, 2025, this project split into two paths:
+```bash
+./telenotify check --config:config.json post.txt                  # one post
+./telenotify check --config:config.json --image:ad.jpg post.txt   # with a picture
+./telenotify check --config:config.json --show-text post.txt      # see everything it read
+./telenotify eval --config:config.json posts.jsonl                # a labelled collection
+```
 
-| Feature | v1 (Simple) `main_simple.py` | v2 (Specialized) `main.py` |
-|---------|-------------|------------------|
-| Best For | 📢 General Monitoring | 💼 Job Hunting |
-| Logic | Simple Keywords (A + B + C) | Smart Inference (Experience, Role, Level) |
-| Complexity | Low (Easy to customize) | High (Harder to customize) |
-| Use Case | "Find me any message with 'Apartment' and 'Rent'" | "Find me a Mid-Level Python job" |
+`nimble test` runs the tests.
 
-## 📦 Requirements
+## Run the bot (Python, until v4 is finished)
 
-* Python 3.8+
-* Telegram API credentials (API ID & API Hash, check [Telethon documentation](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in) for detailed instructions)
-* `tesseract-ocr` for OCR functionality
-
-## ⚙️ Installation
-
-1. clone the repository:
-
+1. Get Telegram API credentials: an API ID and API hash from [my.telegram.org](https://my.telegram.org) ([how](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).
+2. Install:
    ```bash
-   git clone https://github.com/5wHN28Dg/tele-notify.git
-   cd tele-notify
-   ```
-2. create a virtual environment:
-
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-3. Install dependencies:
-
-   ```bash
+   python3 -m venv venv && source venv/bin/activate
    pip install -r requirements.txt
    ```
-4. Install Tesseract OCR:
-
-   * **Ubuntu/Debian**:
-
-     ```bash
-     sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara
-     ```
-   * **Windows**: [Download installer](https://github.com/UB-Mannheim/tesseract/wiki)
-   * **MacOS**:
-
-     ```bash
-     brew install tesseract tesseract-lang
-     ```
-   * **Note**: If you encounter any issues or difficulties with Tesseract installation, refer to the [official documentation](https://tesseract-ocr.github.io/tessdoc/Installation.html) or community forums.
-
-> 📱 **Android Users:** check the [wiki](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions) for detailed instructions.
-
-## 🛠 Configuration
-
-1. Run `get_chat_ids.py` to get a list of your chat list with their names and **IDs** (after you fill in your API ID and API Hash):
-
-   ```bash
-   python get_chat_ids.py
+   You also need tesseract, as above. On Android, see the [wiki](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions).
+3. Find your chat IDs by running this once, with your API ID and hash filled in:
+   ```python
+   from telethon import TelegramClient
+   client = TelegramClient("test", API_ID, "API_HASH")
+   async def main():
+       async for d in client.iter_dialogs():
+           print(f"{d.id:>15}: {d.title}")
+   with client:
+       client.loop.run_until_complete(main())
    ```
-2. Open `config.json` file in the project directory and fill it with the necessary information:
+4. Fill in `config.json` (see below), then run `python main.py`. The first time, it asks for your phone number and the login code.
 
-  * Your API ID and API Hash.
-  * the IDs of the chats you want to watch.
-  * the ID of the chat you want to forward messages to.
-  * the keywords you want to filter messages based on.
+The bot first goes through the unread posts, then watches for new ones. A match is forwarded to `target_chat`, unless it repeats one of the last 10 forwarded posts. Unclear posts go to your Saved Messages for review.
 
-  **Note**: do not touch `recent_messages`.
+`main_simple.py` is the original, simpler version: a post matches when it has one keyword from each of three lists. It suits any topic, not just jobs.
 
-## 🚀 Usage
+## Configuration
 
-Run the script:
+Both versions read the same `config.json`:
 
-```bash
-python main.py
-```
+| Key | What |
+|---|---|
+| `api_id`, `api_hash` | Your Telegram API credentials. **Keep them private** |
+| `chats` | IDs of the channels/groups to watch |
+| `target_chat` | ID of the chat matches are forwarded to |
+| `level_keywords_en/_ar` | Words that mean "for beginners": intern, حديث التخرج… |
+| `entry_level_role_en/_ar` | Roles that are entry-level by nature: help desk, فني دعم… |
+| `mid_level_general_role_en/_ar` | Your job titles and fields: electrical engineer, هندسة حاسبات… |
+| `location_keywords_en/_ar` | Places that count: Basra and its districts, oil fields, "remote"… |
+| `certifications` | Certificates that disqualify a post when they are *required* |
+| `recent_messages` | Used by the Python bot to spot duplicates; leave it alone |
 
-The script will:
+The Nim version adds optional keys, such as `publish_when_unsure` and `max_experience_years`. They are listed in the [rewrite guide](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). My own keywords are in [`example_keywords.txt`](example_keywords.txt).
 
-1. ask you to login as the user by entering your phone number and code.
-2. starts watching the specified Telegram chats.
-3. starts processing unread messages if there are any and watch for new messages:
-   * Extract text from the message body and image (if present).
-   * Check for required keywords.
-   * Skip if it’s a duplicate of one of your last 10 messages.
-   * Forward it to your target chat.
-* if you have any questions, you may want to check the [FAQ](https://github.com/5wHN28Dg/tele-notify/wiki/FAQ)
+## More
 
-## 🗺️ Roadmap
+- [Wiki](https://github.com/5wHN28Dg/tele-notify/wiki): FAQ, Android, the new filter, supported job boards
+- [Issues](https://github.com/5wHN28Dg/tele-notify/issues): plans and known problems
 
-Development is organized by milestones.
+**Disclaimer:** this is a personal tool, built for one person's job hunt. It isn't meant for high-volume use or anything that would approach Telegram's limits. Use your own account responsibly.
 
-See full progress → [GitHub Milestones](https://github.com/5wHN28Dg/tele-notify/milestones)
+## License
 
-See what's being worked on → [Project Board](https://github.com/users/5wHN28Dg/projects/1)
-
-**⚠️ Disclaimer**: This project is a custom-built solution for a specific problem I encountered, designed solely to meet my personal needs, read the full article [here](https://medium.com/@TogataMirio/a-needle-in-a-haystack-and-the-deadly-pursuit-to-prove-your-worth-88c34f1df79f). It is not intended for high-volume use or scenarios that might approach API rate limits. Features outside my requirements have not been implemented, so you may need to adapt or modify the code to fit your own use case.
-
-## 📜 License
-
-This project is licensed under the AGPL License.
+[AGPL-3.0](LICENSE)

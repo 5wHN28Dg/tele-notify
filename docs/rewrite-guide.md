@@ -3,7 +3,7 @@
 This document explains what was built, why it looks the way it does, and how to keep working on it, so you don't have to reverse-engineer anything. Read it top to bottom once; after that, use the headings as a reference.
 
 - **Problems report** (what was wrong with the Python version and why): [`problems-report.md`](problems-report.md)
-- **Where we are**: stage 1 of 4 is done (the filter core). See [Roadmap](#roadmap).
+- **Where we are**: stages 1 and 2 of 4 are done: the filter core, plus OCR and job-board reading (see [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)). See [Roadmap](#roadmap).
 
 ---
 
@@ -14,12 +14,12 @@ The old `main.py` did everything in one file: Telegram, OCR, scraping, filtering
 ```
              ┌────────────────────────────────────────────┐
  stage 3     │ listener: Telegram via TDLib, state in      │  (not built yet)
-             │ SQLite, forwards, alerts                    │
+             │ SQLite, review queue, alerts                │
              ├────────────────────────────────────────────┤
- stage 2     │ text gathering: OCR (tesseract), scrapers   │  (not built yet)
-             │ for LinkedIn / IJS / Khana / Taeen / ...    │
+ stage 2     │ TEXT GATHERING: OCR (tesseract), job pages  │  ✅ done
+             │ from Khana / Taeen / LinkedIn / Yadanoo ... │
              ├────────────────────────────────────────────┤
- stage 1     │ FILTER CORE: text -> verdict + reasons      │  ✅ this PR
+ stage 1     │ FILTER CORE: text -> verdict + reasons      │  ✅ done
              └────────────────────────────────────────────┘
 ```
 
@@ -36,7 +36,7 @@ It gets the full text of a post and returns one of `publish`, `review` or `rejec
 | Verdict | Meaning | What the listener will do (stage 3) |
 |---|---|---|
 | `publish` | Positive evidence it's an entry-level job in your field in Basra | Forward to your channel |
-| `review` | Role and place fit, but the level is unclear | Forward to your Saved Messages (like the old "manual review") |
+| `review` | Role and place fit, but the level is unclear | Keep it in tele-notify's own review queue; you send or discard it from the CLI (see Roadmap) |
 | `reject` | Not for you, with a reason | Nothing; it's logged |
 
 The old code had no "review" for unclear posts: it **published** them (stage 2 inference). On your Saved Messages that rule caused 80 of 96 false positives. If you ever want the old behaviour back, set `"publish_when_unsure": true` in config.json.
@@ -46,10 +46,16 @@ The old code had no "review" for unclear posts: it **published** them (stage 2 i
 ## 2. Files
 
 ```
-telenotify.nimble          package definition (name, version, dependency on nim-regex)
+telenotify.nimble          package definition (name, version, dependencies)
+config.nims                build settings (-d:ssl for HTTPS)
 src/
   telenotify.nim           the command-line tool: `check` and `eval`
   telenotify/
+    gather.nim             stage 2: post text + OCR + one job page -> text to judge
+    ocr.nim                stage 2: tesseract, without blocking
+    fetch.nim              stage 2: downloading with time limits, never raising
+    boards.nim             stage 2: which job links we follow and how to read them
+    html.nim               stage 2: HTML -> text with line breaks
     normalize.nim          text folding (Arabic variants, digits, invisible chars)
     keywords.nim           keyword lists and how they are searched
     defaults.nim           built-in word lists (seniority, job signals, other cities…)
@@ -61,7 +67,12 @@ tests/
   keywords.json            your keyword lists (no credentials) used by the tests
   tnormalize.nim           tests for normalize + keywords
   texperience.nim          tests for experience extraction
-  tclassify.nim            one test per problem in the report
+  tclassify.nim            one test per problem in the report (and per review finding)
+  tboards.nim              job links and page readers, on real saved pages
+  tgather.nim              gather() with fake downloads and fake OCR
+  tocr.nim                 real tesseract on two small rendered images
+  tfetch.nim               fetch() against a local test web server
+  fixtures/                saved job pages (scripts/styles removed) and OCR images
   config.nims              lets the tests import from src/
 .github/workflows/nim.yml  CI: style check, build, tests, CLI smoke test
 ```
@@ -235,9 +246,18 @@ Things the regexes must remember: the text is **already normalised**, so they sa
 | `results_testing.json` | what the old Python code decided for each post, including the OCR and scraped text (`full`) |
 | `labels_[abcd].json` | TRUE/FALSE/UNSURE label + reason for each of 196 distinct posts |
 | `eval.jsonl` | what `eval` reads: one `{"id","text","label","reason","note","old"}` per line |
-| `scripts/` | the Python scripts used to export and replay. Temporary: stage 3 replaces them with a `telenotify export` command |
+| `labels-review.xlsx` | **the readable version of the labels**: one row per post, label column to edit, filters, a summary sheet |
+| `channels_recent.json(l)` | the latest 100 posts of every watched channel (3,834 posts, read 2026-11-17), unlabelled. Used to find today's job-board links and to sanity-check the filter |
+| `scripts/` | the Python scripts used to export, replay and build the spreadsheet. Temporary: stage 3 replaces them with `telenotify` commands, and the review queue will produce labels as you work |
 
-**The labels were made by AI reviewers, not by you.** The rubric was: real job, Basra or remote, IT/electrical/control role, reachable for a fresh graduate. I spot-checked a sample and agreed, but you know the market better. Some labels are debatable: e.g. summer training for *current students* is labelled FALSE because the rubric said "fresh graduate", but your channel's audience may want it. Fix any label by editing `eval.jsonl` (change `"label"`) and re-run `eval`.
+**The labels were made by AI reviewers, not by you.** The rubric was: real job, Basra or remote, IT/electrical/control role, reachable for a fresh graduate. I spot-checked a sample and agreed, but you know the market better. Some labels are debatable: e.g. summer training for *current students* is labelled FALSE because the rubric said "fresh graduate", but your channel's audience may want it. To fix labels, open `labels-review.xlsx`, change the yellow *Label* cells, save, and copy them back into `eval.jsonl`:
+
+```bash
+python3 -m venv /tmp/xl && /tmp/xl/bin/pip install openpyxl
+/tmp/xl/bin/python ~/.local/share/tele-notify-corpus/scripts/labels_from_xlsx.py ~/.local/share/tele-notify-corpus
+```
+
+Then re-run `eval`. (This is the one Python step left in the workflow; it's private tooling, not part of tele-notify.)
 
 ### Current numbers
 
@@ -258,6 +278,13 @@ The 4 wrong publishes in the default mode:
 
 The rules were tuned while looking at this same corpus, so expect real-life numbers to be somewhat worse. The way to keep them honest is to keep adding newly saved posts to the corpus.
 
+### A sanity check on fresh posts
+
+The filter was also run over the 2,872 posts the watched channels published from 2026-10-01 to 2026-11-17 (text only), and its 11 publications were read one by one:
+- 7 good: IT Specialist (Basra, cross-posted twice), Baker Hughes graduate programme, KBR fresh-graduates list, two EPCM oil-field graduate calls, and "engineers of all specialties, fresh graduates".
+- 3 borderline: a Data Entry Officer with a CS degree and 0–1 years (cross-posted twice), and a hashtag-only teaser.
+- 1 wrong: a *female* training-centre manager. Seniority words were masculine only; now fixed and tested, so 10 remain.
+
 ---
 
 ## 6. Nim things used here, in case you're rusty
@@ -268,6 +295,70 @@ The rules were tuned while looking at this same corpus, so expect real-life numb
 - **`j{"key"}.getInt(1)`**: the `{}` accessor returns nil instead of raising when the key is missing, and `getInt(default)` handles nil.
 - **`enum` with strings**: `vPublish = "publish"`, so `$verdict` prints `publish`. Enums are ordered, so `vPublish > vReview > vReject` is how "best verdict" is computed.
 - **`nimble test`** compiles and runs every `tests/t*.nim`; `tests/config.nims` adds `src/` to the import path.
+- **`{.async.}` and `await`** (stage 2, `std/asyncdispatch`): an async proc returns a `Future`; `await` pauses *that* proc until the result is ready, and other async work runs meanwhile. In a test or the CLI, `waitFor` runs the event loop until one future finishes. Async procs **can't take `var` parameters**, which is why `gather.nim`'s `follow` returns its notes in an object instead.
+- **Recursion and deep trees**: the HTML parser nests unclosed tags inside each other, so a real page can be thousands of levels deep. The walks in `html.nim` use an explicit stack (`while stack.len > 0: let x = stack.pop ...`) instead of calling themselves.
+- **Overloading pitfall**: a proc named `add` that calls `list.add` inside will call *itself* if the types match. `boards.nim` uses `addUnique` for that reason (this exact bug happened).
+
+---
+
+## 7. Stage 2: gathering the text (OCR and job boards)
+
+Before the filter runs, `gather` (`gather.nim`) builds the text it will read:
+
+```
+post text
+  + text of each attached picture (OCR)            ocr.nim
+  + button URLs
+  + the job page, if exactly one supported job link is found
+    in the text, the buttons or the pictures       boards.nim + fetch.nim
+```
+
+It returns that text plus `notes` saying what happened ("read Khana (2952 characters)", "OCR failed: …", "2 job links: none followed"). Nothing in it can crash: every failure becomes a note. `telenotify check` prints the notes, and `--show-text` prints the whole text.
+
+### Why it's built this way
+
+- **OCR doesn't freeze the bot (#30).** `ocr.nim` starts the `tesseract` program and *awaits* it, checking every 50 ms, so other work continues meanwhile. tesseract writes its result to a temporary file rather than a pipe: a pipe's small buffer could make both programs wait for each other forever on a big result. The test `issue #30: the bot keeps working while OCR runs` proves a ticker keeps ticking during OCR.
+- **A single job link is always followed (#34).** The old code only scraped when almost nothing else was in the post, and OCR text from a picture counted as "something else". That's why the LinkedIn post in #34 was never read. Now any post with exactly one supported link gets its job page read; the page usually has the experience requirement the post leaves out.
+- **Several links: none followed.** A post with several job links is almost always several jobs, and reading all their pages would mix them together.
+- **Downloads have rules** (`fetch.nim`):
+  - 20-second time limit;
+  - pages capped at 3 MB;
+  - redirects followed by hand, so the final URL is known (needed for `lnkd.in`);
+  - a polite User-Agent naming the project;
+  - errors returned, never raised.
+
+### Supported boards (`boards.nim`)
+
+These were chosen by counting links in the 3,834 latest posts of your channels on 2026-11-17:
+
+| Board | Example link | Read from |
+|---|---|---|
+| Khana | `khana.jobs/jobs/9915` | its JSON API: title, location, description |
+| Taeen | `taeen.iq/ar/jobs/<uuid>` | its JSON API: title, city, experience years, description |
+| LinkedIn job | `linkedin.com/jobs/view/<id>` | page title (it includes the location) + the `description__text` block |
+| LinkedIn post | `linkedin.com/posts/<slug>` | the longest post-text block |
+| `lnkd.in` | `lnkd.in/<code>` | resolved first, then read if the target is supported |
+| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
+
+The scraped text starts with `Job title: …` and `Location: …` lines, which the filter's title and location rules understand.
+
+**Gone:**
+- **Iraq Jobs Scout**: `iqjscout.com` now redirects to Yadanoo's home page, so old IJS links are dead; new posts link to Yadanoo directly.
+- **Workable and mselect**: zero links in the 3,834 recent posts, so there was no real page to test against. Adding a board back means a `BoardKind`, a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`.
+
+**Why "JSON-LD only" for Yadanoo-style sites.** A Yadanoo job page also contains a city picker listing *every* city, Basra included. Reading the whole page would make every job look like a Basra job. A test checks that a Duhok job's text never contains "Basrah".
+
+**When a site changes its layout**, the reader returns empty text and `gather` notes "page had no job text (expired, login wall or new layout)". To fix it:
+1. save the new page into `tests/fixtures/`;
+2. adjust the reader in `boards.nim`;
+3. run `nimble test`.
+
+LinkedIn is the most likely to change: it shows logged-out visitors a simplified page, and sometimes a login wall.
+
+### Things found while building stage 2
+
+- Khana's old links in your corpus (jobs 425, 426, 7641) now return 404: job pages expire. That's why the tests use saved fixtures instead of live sites.
+- `lnkd.in` sometimes redirects straight to the job, and sometimes shows a "you're leaving LinkedIn" page; both are handled. In the corpus, one led to Al-Majal Energy's graduate programme on **fountain.com**, which isn't supported yet. It's a candidate for the JSON-LD list if its pages carry a `JobPosting` block.
 
 ---
 
@@ -276,6 +367,7 @@ The rules were tuned while looking at this same corpus, so expect real-life numb
 | Stage | What | Status |
 |---|---|---|
 | 1 | Filter core + tests + eval against the corpus | ✅ done |
-| 2 | Text gathering: async OCR (`tesseract` subprocess, fixes #30) and one small scraper per job board, with saved HTML/JSON fixtures as tests (fixes #34, report 4.1–4.5) | next |
-| 3 | Listener: TDLib (Telegram's official library, via its C JSON interface), unread bootstrap using the real read marker, processing queue (fixes duplicates race), state + stats in SQLite (unblocks #10–#15), downtime alerts (#3, #16), systemd unit (#6), `telenotify export` for the corpus | after 2. **Needs you once:** a fresh Telegram login with the phone code |
+| 2 | Text gathering: async OCR (fixes #30), job-board readers with saved pages as tests (fixes #34, report 4.1–4.5) | ✅ done |
+| 3 | Listener: TDLib (Telegram's official library, via its C JSON interface), unread bootstrap using the real read marker, one processing queue (fixes the duplicates race), state and stats in SQLite (unblocks #10–#15), downtime alerts (#3, #16), systemd unit (#6), `telenotify export` for the corpus | next. **Needs you once:** a fresh Telegram login with the phone code |
+| 3b | **Review queue**, as you described: `review` posts are stored by tele-notify (not sent to Saved Messages), and the CLI dashboard (#10) shows them with *send* / *discard*. Each decision is also saved as a label, so the corpus grows on its own while you work | with/after 3 |
 | 4 | Run it next to the Python bot (Nim only logs what it *would* do), compare a week of verdicts, then switch, and move the Python files to `legacy/` | after 3 |

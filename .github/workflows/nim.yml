@@ -14,10 +14,12 @@ jobs:
         with:
           nim-version: '2.2.x'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install tesseract (OCR tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr tesseract-ocr-ara tesseract-ocr-eng
       - name: Install dependencies
         run: nimble install -y --depsOnly
       - name: Lint (style check)
-        run: nim check --styleCheck:error src/telenotify.nim
+        run: for f in src/telenotify.nim tests/t*.nim; do nim check --styleCheck:error "$f" || exit 1; done
       - name: Build
         run: nimble build -y -d:release
       - name: Test
