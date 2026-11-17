@@ -3,7 +3,7 @@
 This document explains what was built, why it looks the way it does, and how to keep working on it, so you don't have to reverse-engineer anything. Read it top to bottom once; after that, use the headings as a reference.
 
 - **Problems report** (what was wrong with the Python version and why): [`problems-report.md`](problems-report.md)
-- **Where we are**: stages 1 and 2 of 4 are done: the filter core, plus OCR and job-board reading (see [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)). See [Roadmap](#roadmap).
+- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Next is stage 4, running next to the Python bot. See [Roadmap](#roadmap).
 
 ---
 
@@ -13,7 +13,7 @@ The old `main.py` did everything in one file: Telegram, OCR, scraping, filtering
 
 ```
              ┌────────────────────────────────────────────┐
- stage 3     │ listener: Telegram via TDLib, state in      │  (not built yet)
+ stage 3     │ LISTENER: Telegram via TDLib, state in      │  ✅ done
              │ SQLite, review queue, alerts                │
              ├────────────────────────────────────────────┤
  stage 2     │ TEXT GATHERING: OCR (tesseract), job pages  │  ✅ done
@@ -56,6 +56,14 @@ src/
     fetch.nim              stage 2: downloading with time limits, never raising
     boards.nim             stage 2: which job links we follow and how to read them
     html.nim               stage 2: HTML -> text with line breaks
+    tdjson.nim             stage 3: TDLib's C functions, loaded at run time
+    td.nim                 stage 3: async requests/answers/updates with TDLib
+    telegram.nim           stage 3: what the bot does on Telegram (+ parseMessage)
+    session.nim            stage 3: starting TDLib, login
+    listener.nim           stage 3: what happens to each message
+    state.nim              stage 3: SQLite state
+    dedup.nim              stage 3: duplicate detection
+    commands.nim           stage 3: login, run, review, stats
     normalize.nim          text folding (Arabic variants, digits, invisible chars)
     keywords.nim           keyword lists and how they are searched
     defaults.nim           built-in word lists (seniority, job signals, other cities…)
@@ -72,8 +80,14 @@ tests/
   tgather.nim              gather() with fake downloads and fake OCR
   tocr.nim                 real tesseract on two small rendered images
   tfetch.nim               fetch() against a local test web server
+  ttd.nim                  TdClient against a fake libtdjson
+  ttelegram.nim            parseMessage on TDLib JSON
+  tlistener.nim            the whole bot against a fake Telegram
+  tstate.nim, tdedup.nim   SQLite state, duplicates
   fixtures/                saved job pages (scripts/styles removed) and OCR images
   config.nims              lets the tests import from src/
+deploy/build-tdlib.sh      builds lib/libtdjson.so (shell: drives cmake)
+deploy/tele-notify.service systemd user unit
 .github/workflows/nim.yml  CI: style check, build, tests, CLI smoke test
 ```
 
@@ -379,6 +393,80 @@ LinkedIn is the most likely to change: it shows logged-out visitors a simplified
 |---|---|---|
 | 1 | Filter core + tests + eval against the corpus | ✅ done |
 | 2 | Text gathering: async OCR (fixes #30), job-board readers with saved pages as tests (fixes #34, report 4.1–4.5) | ✅ done |
-| 3 | Listener: TDLib (Telegram's official library, via its C JSON interface), unread bootstrap using the real read marker, one processing queue (fixes the duplicates race), state and stats in SQLite (unblocks #10–#15), downtime alerts (#3, #16), systemd unit (#6), `telenotify export` for the corpus | next. **Needs you once:** a fresh Telegram login with the phone code |
-| 3b | **Review queue**, as you described: `review` posts are stored by tele-notify (not sent to Saved Messages), and the CLI dashboard (#10) shows them with *send* / *discard*. Each decision is also saved as a label, so the corpus grows on its own while you work | with/after 3 |
-| 4 | Run it next to the Python bot (Nim only logs what it *would* do), compare a week of verdicts, then switch, and move the Python files to `legacy/` | after 3 |
+| 3 | Listener on TDLib: unread bootstrap with the real read marker, one processing queue, state and stats in SQLite, downtime alerts (#3, #16), systemd unit (#6), review queue with `telenotify review` (send / discard) | ✅ done |
+| 4 | Run `telenotify run --dry-run` next to the Python bot for a week, compare (`telenotify stats`, the `processed` table), then switch: stop the Python service, start the Nim one, move the Python files to `legacy/` | next |
+| 5 | The nice CLI dashboard (#10–#15): live counts, review queue with keys, highlighted events, on top of the SQLite state that now exists. Plus `telenotify export` so review decisions become corpus labels | after 4 |
+
+
+---
+
+## 8. Stage 3: the Telegram listener
+
+### The pieces
+
+```
+telenotify run
+  session.nim    start TDLib, check the saved login
+  td.nim         talk to TDLib: requests ↔ answers, updates
+  telegram.nim   the few things the bot does on Telegram (an interface)
+  listener.nim   what happens to each message
+  state.nim      what the bot remembers (SQLite)
+  dedup.nim      "did I already publish this?"
+```
+
+**TDLib** is Telegram's own client library, written in C++. It handles the hard parts the old bot struggled with: reconnecting, missed updates, read markers and flood limits. Its whole interface is four C functions that exchange JSON (`tdjson.nim`). The library is loaded when `run` starts, not at build time, so building and testing never need it.
+
+**`td.nim`** turns that into async Nim. Every request gets an `@extra` number; TDLib copies it into its answer, so `call` can return a Future that completes with the right answer. Anything without our `@extra` is an *update* (a new message, a connection change) and goes to `onUpdate`. `pump` polls TDLib every 20 ms without blocking.
+
+**`telegram.nim`** is the seam that makes the bot testable. The listener only uses a `Telegram` object with a few operations: `unread`, `markRead`, `downloadPhoto`, `forward`, `link`, `sendText`, `selfChat`. `tdTelegram` implements them with TDLib, and `tests/tlistener.nim` implements them with tables in memory. The whole bot is therefore tested without an account. `parseMessage` reads the text *and the links hidden behind words*, which the old bot never saw.
+
+### What happens to a message (`listener.nim`)
+
+1. Already in `processed`? Skip it. This covers restarts and the startup backlog overlapping live updates.
+2. `gather` reads the text, the photo (OCR) and the job page, then `classify` decides.
+3. Then:
+   - **publish**: if it repeats something published in the last 14 days (same job link, or ≥ 80% the same words), skip it as a duplicate. Otherwise forward it to `target_chat`. Where the channel forbids forwarding, send "match: role / post link" instead, using Telegram's real link, which also works for private channels.
+   - **review**: put it in the review queue in `state.sqlite3`, not in Saved Messages.
+   - **reject**: nothing.
+4. Record the verdict, reasons and action in `processed`, then mark the message read.
+
+There is one queue, and messages are handled **one at a time**. The startup backlog (every watched chat's unread messages, oldest first, found with the chat's real read marker) and live messages go through the same queue. That alone removes the old duplicate race and the "deleted posts make us skip unread messages" bug.
+
+A failure (a download, OCR, a Telegram error) affects only its own message: it's logged and recorded with the error, and the bot moves on.
+
+### Commands
+
+| Command | What |
+|---|---|
+| `telenotify login` | Once: phone number, the code Telegram sends, your 2FA password. Prints your chats with their IDs (it replaces `get_chat_ids.py`). The login is saved in `data_dir/tdlib` |
+| `telenotify run [--dry-run]` | The bot. `--dry-run` (or `"dry_run": true`) judges and records everything but forwards nothing and marks nothing read |
+| `telenotify review` | Goes through the review queue: shows the post, its link and why it's unclear; `s` sends it to your channel, `d` discards it, `n` skips it |
+| `telenotify stats [--days:N]` | Per chat: how many messages got each verdict, how many were forwarded, and how many reviews are waiting |
+
+### State (`state.sqlite3` in `data_dir`)
+
+| Table | Holds |
+|---|---|
+| `processed` | every judged message with verdict, role, reasons and action |
+| `published` | what was published, for duplicate checks |
+| `reviews` | the queue and your decisions. Those decisions are labels for the corpus: stage 5 adds an export |
+| `meta` | the heartbeat |
+
+`config.json` is now only *read*. The old bot rewrote it on every forward, which could throw away your edits.
+
+Open it with `sqlite3 ~/.local/share/tele-notify/state.sqlite3`. For example, `SELECT chat_title, verdict, action, reasons FROM processed ORDER BY at DESC LIMIT 20;`
+
+### Downtime alerts (#3, #16)
+
+Every minute the bot saves a heartbeat. At start-up, a heartbeat older than `alert_after_minutes` (default 10) means it was down. When TDLib reports the connection back after a long gap, that counts too. Either way you get a message in Saved Messages, e.g. "⚠️ tele-notify: was not running for 2h 6m (since 2026-11-18 02:17). Back now." Set `"alerts": false` to only log them.
+
+### Building TDLib and running as a service
+
+- `deploy/build-tdlib.sh` (shell, because it only drives cmake for a C++ library) builds `lib/libtdjson.so`. Expect about 4 GB of RAM per parallel job (`JOBS=2` by default) and 20–40 minutes. It builds `gperf` from GNU's source if it's missing, so no system install is needed beyond a compiler, cmake, and the OpenSSL and zlib headers (already on your machine).
+- `deploy/tele-notify.service` is a systemd **user** unit (no sudo) with `Restart=always`. The comments at its top say how to install it.
+
+### Not done yet
+
+- **The nice dashboard (#10).** `review` and `stats` are plain text for now. The data the dashboard needs is all in SQLite already.
+- **`telenotify export`.** It will export review decisions and Saved Messages as corpus labels, replacing the Python scripts in the corpus folder.
+- **First run on your account.** That needs your login.

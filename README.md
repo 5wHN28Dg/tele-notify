@@ -23,7 +23,7 @@ It is built around that one need, but the keywords, places and channels are your
 | | What it is | State |
 |---|---|---|
 | **v3, Python** (`main.py`) | The bot that runs today | Works, frozen: no new features |
-| **v4, Nim** (`src/`) | The rewrite, built in stages | Stages 1–2 done: the filter, OCR and job-board reading. The Telegram part comes next |
+| **v4, Nim** (`src/`) | The rewrite, built in stages | Stages 1–3 done: the filter, OCR, job-board reading and the Telegram listener. Next: a trial run next to the Python bot |
 
 The rewrite exists because the Python filter published far too many wrong posts: on a test with 196 real posts, 96 of its 115 publications were wrong, against 4 for the new filter. The [problems report](docs/problems-report.md) explains what was wrong; the [rewrite guide](docs/rewrite-guide.md) explains how the new code works.
 
@@ -74,6 +74,32 @@ Then:
 
 `nimble test` runs the tests.
 
+## Run the Nim bot (preview)
+
+The Nim bot talks to Telegram through [TDLib](https://core.telegram.org/tdlib), Telegram's official library. Build it once (about an hour on one core; needs cmake, a C++ compiler, zlib and OpenSSL headers):
+
+```bash
+JOBS=2 deploy/build-tdlib.sh      # puts lib/libtdjson.so next to the program
+```
+
+Then:
+
+```bash
+./telenotify login --config:config.json          # once: phone number, code, 2FA password
+./telenotify run --config:config.json --dry-run  # judge everything, forward nothing
+./telenotify run --config:config.json            # the real thing
+./telenotify review --config:config.json         # go through the unclear posts: send or discard
+./telenotify stats --config:config.json --days:7 # what each channel brought
+```
+
+What's different from the Python bot:
+- Unclear posts wait in tele-notify's own review queue (`telenotify review`) instead of your Saved Messages.
+- Every message is remembered (in `~/.local/share/tele-notify/state.sqlite3`), so nothing is judged or forwarded twice, even across restarts.
+- Duplicates are checked against everything published in the last 14 days, by link and by text.
+- If the bot was down or offline for more than 10 minutes, it tells you in Saved Messages when it's back.
+
+To start it automatically, see [`deploy/tele-notify.service`](deploy/tele-notify.service).
+
 ## Run the bot (Python, until v4 is finished)
 
 1. Get Telegram API credentials: an API ID and API hash from [my.telegram.org](https://my.telegram.org) ([how](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).
@@ -115,7 +141,7 @@ Both versions read the same `config.json`:
 | `certifications` | Certificates that disqualify a post when they are *required* |
 | `recent_messages` | Used by the Python bot to spot duplicates; leave it alone |
 
-The Nim version adds optional keys, such as `publish_when_unsure` and `max_experience_years`. They are listed in the [rewrite guide](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). My own keywords are in [`example_keywords.txt`](example_keywords.txt).
+The Nim version adds optional keys, such as `publish_when_unsure`, `max_experience_years`, `data_dir`, `dry_run` and `alerts`. They are listed in the [rewrite guide](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). My own keywords are in [`example_keywords.txt`](example_keywords.txt).
 
 ## More
 
