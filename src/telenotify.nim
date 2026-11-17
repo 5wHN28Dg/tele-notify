@@ -18,11 +18,15 @@
 ##       The bot: process unread messages, then watch for new ones.
 ##       --dry-run judges and records but forwards nothing.
 ##
-##   telenotify review [--config:FILE]
-##       Go through posts waiting for review: send each one or discard it.
+##   telenotify review [--config:FILE] [--dry-run]
+##       Go through posts waiting for review: approve or discard each one.
+##       Works while the bot runs; the bot sends what you approved.
 ##
-##   telenotify stats [--config:FILE] [--days:N]
+##   telenotify stats [--config:FILE] [--days:N] [--dry-run]
 ##       What happened per chat in the last N days (default 7).
+##
+##   Dry runs keep their own state (state-dryrun.sqlite3); add --dry-run to
+##   review or stats to look at it.
 
 import std/[parseopt, json, strutils, strformat, tables, os, math, asyncdispatch]
 import telenotify/[config, classify, normalize, gather, fetch, boards, commands]
@@ -33,8 +37,8 @@ usage:
   telenotify eval  [--config:FILE] [--show:fp|fn|wrong|all] [--out:FILE] CORPUS.jsonl
   telenotify login [--config:FILE]
   telenotify run   [--config:FILE] [--dry-run]
-  telenotify review [--config:FILE]
-  telenotify stats [--config:FILE] [--days:N]
+  telenotify review [--config:FILE] [--dry-run]
+  telenotify stats [--config:FILE] [--days:N] [--dry-run]
 """
 
 proc printDecision(d: Decision) =
@@ -138,15 +142,15 @@ proc main() =
   of "eval":
     if arg == "" or not fileExists(arg): quit "eval needs a corpus file\n" & usage
     cmdEval(cfg, arg, show, outPath)
-  of "login", "run", "review":
+  of "login", "run", "review", "stats":
     try:
       case cmd
       of "login": waitFor cmdLogin(cfg)
       of "run": waitFor cmdRun(cfg, dryRun)
-      else: waitFor cmdReview(cfg)
+      of "review": cmdReview(cfg, dryRun)
+      else: cmdStats(cfg, days, dryRun)
     except CatchableError as e:
       quit "error: " & e.msg
-  of "stats": cmdStats(cfg, days)
   else: quit usage
 
 when isMainModule: main()

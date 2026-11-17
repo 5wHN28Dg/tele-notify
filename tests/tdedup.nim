@@ -19,3 +19,8 @@ suite "duplicates":
   test "different jobs are not duplicates":
     check similarity("Electrical engineer in Basra, fresh graduates", "Accountant in Baghdad, 5 years") < 0.3
     check duplicateOf("Electrical engineer in Basra", @[]) == ""
+
+  test "a bare company or job-board domain is not a job link":
+    check jobUrls("apply at https://careers.company.com/ or https://bayt.com") == newSeq[string]()
+    check duplicateOf("Electrical engineer, Basra. Apply: https://careers.company.com",
+                      @["Accountant, Basra office. Apply: https://careers.company.com"]) == ""

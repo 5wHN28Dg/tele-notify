@@ -31,16 +31,9 @@ proc ask(prompt: string, secret = false): string =
   stdout.flushFile
   stdin.readLine.strip
 
-proc connect*(cfg: Config, interactive: bool,
-              onUpdate: UpdateHandler = nil): Future[Session] {.async.} =
-  ## Start TDLib and wait until logged in. With `interactive`, asks for the
-  ## phone number, code and password as needed; otherwise raises if not
-  ## logged in.
-  if cfg.apiId == 0 or cfg.apiHash == "":
-    raise newException(ValueError, "api_id and api_hash are missing from config.json")
-  createDir(cfg.dataDir)
-  setFilePermissions(cfg.dataDir, {fpUserRead, fpUserWrite, fpUserExec})  # your login lives here
-  let lib = loadTdLib(cfg.tdlibPath)
+proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
+                  onUpdate: UpdateHandler = nil): Future[Session] {.async.} =
+  ## `connect` with a given library (tests pass a fake one).
   let c = newTdClient(lib)
   var authState = ""
   c.onUpdate = proc (u: JsonNode) {.closure, gcsafe.} =
@@ -84,7 +77,22 @@ proc connect*(cfg: Config, interactive: bool,
     of "authorizationStateClosed", "authorizationStateClosing", "authorizationStateLoggingOut":
       raise newException(ValueError, "TDLib closed during login (" & authState & ")")
     else:
-      discard
+      # e.g. Telegram asking for an e-mail address, or a new account's
+      # registration: waiting would hang forever, so say what it wants
+      c.stopped = true
+      raise newException(ValueError, "unsupported login step: " & authState &
+        ". Log in once with an official Telegram app on this account, then try again")
+
+proc connect*(cfg: Config, interactive: bool,
+              onUpdate: UpdateHandler = nil): Future[Session] {.async.} =
+  ## Start TDLib and wait until logged in. With `interactive`, asks for the
+  ## phone number, code and password as needed; otherwise raises if not
+  ## logged in.
+  if cfg.apiId == 0 or cfg.apiHash == "":
+    raise newException(ValueError, "api_id and api_hash are missing from config.json")
+  createDir(cfg.dataDir)
+  setFilePermissions(cfg.dataDir, {fpUserRead, fpUserWrite, fpUserExec})  # your login lives here
+  return await connectWith(loadTdLib(cfg.tdlibPath), cfg, interactive, onUpdate)
 
 proc loadAllChats*(s: Session) {.async.} =
   ## TDLib only knows chats it has loaded; ask for the whole main list.

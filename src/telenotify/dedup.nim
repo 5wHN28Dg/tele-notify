@@ -4,7 +4,8 @@
 ## 1. **Same link.** Both posts contain the same job-specific link (query
 ##    and trailing slash ignored). Links that many unrelated posts share
 ##    don't count: a channel's own t.me link, WhatsApp, Instagram,
-##    Facebook...
+##    Facebook... Nor do bare domains ("apply at https://company.com"),
+##    which many different jobs from one company end with.
 ## 2. **Same words.** The cosine similarity of the two posts' word counts is
 ##    0.8 or more (the old threshold, which you found "spot on"). Words are
 ##    normalised first (normalize.nim), and links are left out.
@@ -33,8 +34,10 @@ proc jobUrls*(text: string): seq[string] =
     var shared = false
     for h in sharedHosts:
       if host == h or host.endsWith("." & h): shared = true
-    if shared or host == "": continue
     let path = u.path.strip(leading = false, chars = {'/'})
+    # a bare domain (a company's careers page, a job board's home page) is
+    # shared by many different jobs, so it says nothing
+    if shared or host == "" or path == "": continue
     result.add host & path
 
 proc wordCounts(text: string): CountTable[string] =

@@ -88,7 +88,7 @@ Then:
 ./telenotify login --config:config.json          # once: phone number, code, 2FA password
 ./telenotify run --config:config.json --dry-run  # judge everything, forward nothing
 ./telenotify run --config:config.json            # the real thing
-./telenotify review --config:config.json         # go through the unclear posts: send or discard
+./telenotify review --config:config.json         # unclear posts: approve or discard (works while the bot runs)
 ./telenotify stats --config:config.json --days:7 # what each channel brought
 ```
 

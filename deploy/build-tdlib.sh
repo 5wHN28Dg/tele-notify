@@ -7,7 +7,11 @@
 # job and takes 20-40 minutes. Lower JOBS if memory is tight.
 #
 #   JOBS=2 deploy/build-tdlib.sh            # default JOBS=2
-#   TD_REF=v1.8.0 deploy/build-tdlib.sh     # a specific TDLib tag/commit
+#   TD_REF=<commit> deploy/build-tdlib.sh   # another TDLib commit
+#
+# TD_REF defaults to the commit tele-notify was tested with (TDLib 1.8.70,
+# 2026-11-16). TDLib renames fields now and then, so move to a newer one
+# on purpose: change it here, then run the tests and a dry run.
 #
 # Needs: git, cmake, a C++ compiler, gperf, OpenSSL and zlib headers
 # (Ubuntu: sudo apt install git cmake g++ gperf libssl-dev zlib1g-dev).
@@ -15,7 +19,7 @@
 set -eu
 
 JOBS=${JOBS:-2}
-TD_REF=${TD_REF:-master}
+TD_REF=${TD_REF:-03220f6b3043c6fd7785fbf0901d63f19ad19974}
 BUILD=${BUILD:-$HOME/.cache/tele-notify-build}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 

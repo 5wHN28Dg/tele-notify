@@ -7,6 +7,11 @@ var stopRequested = new bool   # set by Ctrl-C or `systemctl stop` (SIGTERM)
 
 proc onSignal(sig: cint) {.noconv.} = stopRequested[] = true
 
+proc statePath*(cfg: Config, dryRun: bool): string =
+  ## Dry runs keep their own state, so switching to the real bot later
+  ## doesn't skip messages the dry run had already judged.
+  cfg.dataDir / (if dryRun: "state-dryrun.sqlite3" else: "state.sqlite3")
+
 proc cmdLogin*(cfg: Config) {.async.} =
   let s = await connect(cfg, interactive = true)
   echo "Logged in. Your chats (use these IDs for \"chats\" and \"target_chat\"):"
@@ -15,8 +20,10 @@ proc cmdLogin*(cfg: Config) {.async.} =
   await s.client.close()
 
 proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
-  let st = openState(cfg.dataDir / "state.sqlite3")
+  let dry = dryRunFlag or cfg.dryRun
+  let st = openState(statePath(cfg, dry))
   var l: Listener
+  var sessionLost = ""
   var titles = initTable[int64, string]()
   let watched = cfg.chats
   let s = await connect(cfg, interactive = false, onUpdate =
@@ -32,9 +39,16 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
         l.enqueue m
       of "updateConnectionState":
         l.onConnectionState(u{"state", "@type"}.getStr)
+      of "updateAuthorizationState":
+        # logged out from another device, or TDLib closing: stop (and let
+        # systemd restart us) instead of hanging while looking alive
+        let a = u.authState
+        if a != "authorizationStateReady" and sessionLost == "":
+          sessionLost = a
+          l.stop[] = true      # l.stop is stopRequested (set below)
       else: discard)
-  l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(),
-                  dryRunFlag or cfg.dryRun)
+  l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
+  l.stop = stopRequested
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
   await s.loadAllChats()
   for chat in cfg.chats:
@@ -47,23 +61,29 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
-  asyncCheck l.heartbeat(stopRequested)
+  asyncCheck l.heartbeat()
   await l.bootstrap()
-  l.log &"watching {titles.len} chats"
-  await l.worker(stopRequested)
+  if not stopRequested[]: l.log &"watching {titles.len} chats"
+  await l.worker()
   l.log "stopping"
   await s.client.close()
   st.close()
+  if sessionLost != "":
+    raise newException(ValueError, "the Telegram session ended (" & sessionLost &
+      "). If you logged out, run `telenotify login` again")
 
-proc cmdReview*(cfg: Config) {.async.} =
-  ## Go through the review queue: send each post to your channel or discard it.
-  let st = openState(cfg.dataDir / "state.sqlite3")
+proc cmdReview*(cfg: Config, dryRun: bool) =
+  ## Go through the review queue: approve each post or discard it. This
+  ## only records your decision, so it works while the bot runs; the
+  ## running bot sends what you approved within a few seconds.
+  let st = openState(statePath(cfg, dryRun))
+  defer: st.close()
   let pending = st.pendingReviews()
   if pending.len == 0:
     echo "Nothing to review."
     return
-  let s = await connect(cfg, interactive = false)
-  let tg = tdTelegram(s.client)
+  var approved = 0
+  var quitting = false
   for i, r in pending:
     echo "\n", "═".repeat(70)
     echo &"[{i + 1}/{pending.len}]  {r.chatTitle}  ·  {fromUnix(r.at).local.format(\"yyyy-MM-dd HH:mm\")}"
@@ -79,16 +99,13 @@ proc cmdReview*(cfg: Config) {.async.} =
     while not done:
       stdout.write "[s]end to channel  [d]iscard  [n]ext  [q]uit > "
       stdout.flushFile
-      case stdin.readLine.strip.toLowerAscii
+      var answer = ""
+      if not stdin.readLine(answer): answer = "q"    # end of input
+      case answer.strip.toLowerAscii
       of "s":
-        try:
-          if not await tg.forward(cfg.targetChat, r.chatId, r.msgId):
-            await tg.sendText(cfg.targetChat, "match: " & r.role & "\npost link: " & r.link)
-          st.addPublished(r.chatId, r.msgId, r.text)
-          st.decideReview(r.id, "sent")
-          echo "sent ✅"
-        except CatchableError as e:
-          echo "could not send: ", e.msg
+        st.decideReview(r.id, "to_send")
+        inc approved
+        echo "approved ✅"
         done = true
       of "d":
         st.decideReview(r.id, "discarded")
@@ -96,13 +113,16 @@ proc cmdReview*(cfg: Config) {.async.} =
         done = true
       of "n", "": done = true
       of "q":
-        await s.client.close()
-        return
+        quitting = true
+        done = true
       else: discard
-  await s.client.close()
+    if quitting: break
+  if approved > 0:
+    if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
+    else: echo &"\n{approved} approved: the running bot sends them within seconds (or when it next starts)."
 
-proc cmdStats*(cfg: Config, days: int) =
-  let st = openState(cfg.dataDir / "state.sqlite3")
+proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
+  let st = openState(statePath(cfg, dryRun))
   let rows = st.stats(days)
   echo &"Last {days} days                                  publish  review  reject  forwarded"
   var tot: array[4, int]

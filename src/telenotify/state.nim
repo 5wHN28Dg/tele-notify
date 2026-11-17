@@ -34,6 +34,9 @@ proc openState*(path: string): State =
   result = State(db: open(path, "", "", ""))
   let db = result.db
   db.exec(sql"PRAGMA journal_mode=WAL")
+  # `telenotify review` writes while the bot runs: wait for the other
+  # writer instead of failing with "database is locked"
+  db.exec(sql"PRAGMA busy_timeout=10000")
   db.exec(sql"""CREATE TABLE IF NOT EXISTS processed (
     chat_id INTEGER, msg_id INTEGER, chat_title TEXT, verdict TEXT, role TEXT,
     reasons TEXT, action TEXT, at INTEGER, PRIMARY KEY (chat_id, msg_id))""")
@@ -70,16 +73,30 @@ proc addReview*(s: State, chat, msg: int64, title, text, reasons, role, link: st
     (chat_id, msg_id, chat_title, text, reasons, role, link, at) VALUES (?,?,?,?,?,?,?,?)""",
     chat, msg, title, text, reasons, role, link, now())
 
-proc pendingReviews*(s: State): seq[Review] =
+proc reviewsWithStatus(s: State, status: string): seq[Review] =
   for r in s.db.fastRows(sql"""SELECT id, chat_id, msg_id, chat_title, text, reasons, role, link,
-                               status, at FROM reviews WHERE status = 'pending' ORDER BY at"""):
+                               status, at FROM reviews WHERE status = ? ORDER BY at""", status):
     result.add Review(id: parseBiggestInt(r[0]), chatId: parseBiggestInt(r[1]),
                       msgId: parseBiggestInt(r[2]), chatTitle: r[3], text: r[4], reasons: r[5],
                       role: r[6], link: r[7], status: r[8], at: parseBiggestInt(r[9]))
 
+proc pendingReviews*(s: State): seq[Review] =
+  ## Posts waiting for your decision.
+  s.reviewsWithStatus("pending")
+
+proc approvedReviews*(s: State): seq[Review] =
+  ## Posts you chose to send; the running bot sends them (`sendApproved`).
+  s.reviewsWithStatus("to_send")
+
 proc decideReview*(s: State, id: int64, status: string) =
-  ## status: "sent" (it was good: published) or "discarded".
+  ## status: "to_send" (you approved it; the bot will send it), "sent"
+  ## (published) or "discarded".
   s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ?", status, now(), id)
+
+proc reopenReview*(s: State, id: int64, problem: string) =
+  ## Sending failed: put it back in the queue, with the reason.
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = reasons || '; could not send: ' || ?
+                   WHERE id = ?""", problem, id)
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)

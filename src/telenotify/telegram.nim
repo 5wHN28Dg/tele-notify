@@ -95,14 +95,18 @@ proc tdTelegram*(c: TdClient): Telegram =
       var reachedRead = false
       for m in msgs:                # newest first
         let id = m{"id"}.getBiggestInt
+        # with offset 0 a page starts *at* from_message_id, which the
+        # previous page already had
+        if id == fromId: continue
         if id <= lastRead:
           reachedRead = true
           break
         var tm = parseMessage(m)
         tm.chatTitle = title
         collected.add tm
-      if reachedRead: break
-      fromId = msgs[^1]{"id"}.getBiggestInt
+      let oldest = msgs[^1]{"id"}.getBiggestInt
+      if reachedRead or oldest == fromId: break   # read marker or start of the chat
+      fromId = oldest
     collected.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))   # oldest first
     return collected
 
@@ -116,14 +120,19 @@ proc tdTelegram*(c: TdClient): Telegram =
                             "offset": 0, "limit": 0, "synchronous": true})
     let path = f{"local", "path"}.getStr
     if path == "": return ""
-    return readFile(path)
+    result = readFile(path)
+    # we have the bytes; don't let a 24/7 bot fill the disk with photos
+    try: discard await c.call(%*{"@type": "deleteFile", "file_id": fileId})
+    except CatchableError: discard
 
   result.forward = proc (target, chat, id: int64): Future[bool] {.async, closure, gcsafe.} =
     let props = await c.call(%*{"@type": "getMessageProperties", "chat_id": chat, "message_id": id})
     if not props{"can_be_forwarded"}.getBool(false): return false
-    discard await c.call(%*{"@type": "forwardMessages", "chat_id": target, "from_chat_id": chat,
-                            "message_ids": [id], "send_copy": false, "remove_caption": false})
-    return true
+    let sent = await c.call(%*{"@type": "forwardMessages", "chat_id": target, "from_chat_id": chat,
+                               "message_ids": [id], "send_copy": false, "remove_caption": false})
+    # TDLib puts null in place of a message it could not forward
+    let msgs = sent{"messages"}.getElems
+    return msgs.len == 1 and msgs[0].kind == JObject
 
   result.link = proc (chat, id: int64): Future[string] {.async, closure, gcsafe.} =
     let l = await c.call(%*{"@type": "getMessageLink", "chat_id": chat, "message_id": id})

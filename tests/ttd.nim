@@ -18,6 +18,7 @@ proc fakeSend(id: cint, req: cstring) {.cdecl, gcsafe.} = {.cast(gcsafe).}:
   case r{"@type"}.getStr
   of "getChat": answer = %*{"@type": "chat", "id": r["chat_id"], "title": "Jobs"}
   of "fail": answer = %*{"@type": "error", "code": 400, "message": "CHAT_NOT_FOUND"}
+  of "silent": return              # TDLib never answers (it is closing)
   else: answer = %*{"@type": "ok"}
   if extra != nil: answer["@extra"] = extra
   answer["@client_id"] = %id
@@ -49,6 +50,18 @@ suite "TdClient":
     check updates == @["updateConnectionState"]   # the other client's update is ignored
     check sent[0]{"@type"}.getStr == "getOption"   # the first request wakes TDLib up
     c.stopped = true
+
+  test "when TDLib closes, waiting calls fail instead of hanging forever":
+    let c = newTdClient(lib)
+    let p = c.pump()
+    let waiting = c.call(%*{"@type": "silent"})
+    waitFor sleepAsync(60)
+    check not waiting.finished
+    c.stopped = true                # what authorizationStateClosed does
+    waitFor p
+    check waiting.failed
+    expect TdError:
+      discard waitFor c.call(%*{"@type": "getChat", "chat_id": 1})   # later calls fail at once
 
   test "helpers":
     check authState(%*{"@type": "updateAuthorizationState",

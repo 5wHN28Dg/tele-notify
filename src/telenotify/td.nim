@@ -44,7 +44,11 @@ proc newTdClient*(lib: TdLib): TdClient =
 
 proc call*(c: TdClient, request: JsonNode): Future[JsonNode] =
   ## Send `request`; the future completes with TDLib's answer, or fails
-  ## with TdError when TDLib answers with an "error" object.
+  ## with TdError when TDLib answers with an "error" object or has closed.
+  if c.stopped:
+    let fut = newFuture[JsonNode]("td.call")
+    fut.fail(newException(TdError, "TDLib closed"))
+    return fut
   inc c.nextExtra
   let extra = $c.nextExtra
   var req = request.copy
@@ -71,8 +75,18 @@ proc dispatch(c: TdClient, msg: JsonNode) =
   elif c.onUpdate != nil:
     c.onUpdate(msg)
 
+proc failPending(c: TdClient) =
+  ## TDLib is gone: nobody will answer, so fail every waiting call instead
+  ## of leaving it hanging forever.
+  let waiting = c.pending
+  c.pending.clear()
+  for _, fut in waiting:
+    if not fut.finished:
+      fut.fail(newException(TdError, "TDLib closed"))
+
 proc pump*(c: TdClient) {.async.} =
   ## Receive and dispatch until `stopped`. Run it with `asyncCheck`.
+  defer: c.failPending()
   while not c.stopped:
     let raw = c.lib.receive(0.0)
     if raw == nil:

@@ -112,7 +112,7 @@ JOBS=2 deploy/build-tdlib.sh      # يضع lib/libtdjson.so بجانب البر�
 ./telenotify login --config:config.json          # مرة واحدة: رقم الهاتف، الرمز، كلمة مرور التحقق بخطوتين
 ./telenotify run --config:config.json --dry-run  # يحكم على كل شيء ولا يحوّل شيئًا
 ./telenotify run --config:config.json            # التشغيل الفعلي
-./telenotify review --config:config.json         # راجع المنشورات غير الواضحة: أرسل أو تجاهل
+./telenotify review --config:config.json         # المنشورات غير الواضحة: وافق أو تجاهل (يعمل والبوت شغّال)
 ./telenotify stats --config:config.json --days:7 # ما جلبته كل قناة
 ```
 

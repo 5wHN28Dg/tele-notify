@@ -425,14 +425,20 @@ telenotify run
 1. Already in `processed`? Skip it. This covers restarts and the startup backlog overlapping live updates.
 2. `gather` reads the text, the photo (OCR) and the job page, then `classify` decides.
 3. Then:
-   - **publish**: if it repeats something published in the last 14 days (same job link, or ≥ 80% the same words), skip it as a duplicate. Otherwise forward it to `target_chat`. Where the channel forbids forwarding, send "match: role / post link" instead, using Telegram's real link, which also works for private channels.
+   - **publish**: if it repeats something published in the last 14 days (same job link, or ≥ 80% the same words), skip it as a duplicate. A bare domain like `https://company.com` doesn't count as a job link: many different jobs from one company end with it. Otherwise forward it to `target_chat`. Where the channel forbids forwarding, send "match: role / post link" instead, using Telegram's real link, which also works for private channels.
    - **review**: put it in the review queue in `state.sqlite3`, not in Saved Messages.
    - **reject**: nothing.
 4. Record the verdict, reasons and action in `processed`, then mark the message read.
 
-There is one queue, and messages are handled **one at a time**. The startup backlog (every watched chat's unread messages, oldest first, found with the chat's real read marker) and live messages go through the same queue. That alone removes the old duplicate race and the "deleted posts make us skip unread messages" bug.
+There is one queue, and messages are handled **one at a time**. First the startup backlog (every watched chat's unread messages, oldest first, found with the chat's real read marker), then live messages. Live messages that arrive while the backlog is still being read wait until it's done. Otherwise a new message could be marked read first, and since Telegram's read marker is a single position per chat, the backlog behind it would count as read: if the bot then died, those messages would never be handled. One queue alone removes the old duplicate race and the "deleted posts make us skip unread messages" bug.
 
-A failure (a download, OCR, a Telegram error) affects only its own message: it's logged and recorded with the error, and the bot moves on.
+A failure (a download, OCR, a Telegram error such as a flood limit) affects only its own message, and the message isn't lost: it goes to the review queue with the error, so you decide.
+
+A stop request (Ctrl-C, `systemctl stop`) is honoured after the current message, not after the whole backlog. Whatever is left stays unread and is handled at the next start.
+
+If the Telegram session ends while the bot runs (you logged it out from your phone, for example), the bot stops with an error, so systemd restarts it and the log says why. Before, it would have hung while looking alive. Any request still waiting for TDLib then fails instead of waiting forever (`td.nim`).
+
+Photos are deleted from TDLib's file folder once read, so a bot that runs for months doesn't fill the disk.
 
 ### Commands
 
@@ -440,8 +446,12 @@ A failure (a download, OCR, a Telegram error) affects only its own message: it's
 |---|---|
 | `telenotify login` | Once: phone number, the code Telegram sends, your 2FA password. Prints your chats with their IDs (it replaces `get_chat_ids.py`). The login is saved in `data_dir/tdlib` |
 | `telenotify run [--dry-run]` | The bot. `--dry-run` (or `"dry_run": true`) judges and records everything but forwards nothing and marks nothing read |
-| `telenotify review` | Goes through the review queue: shows the post, its link and why it's unclear; `s` sends it to your channel, `d` discards it, `n` skips it |
-| `telenotify stats [--days:N]` | Per chat: how many messages got each verdict, how many were forwarded, and how many reviews are waiting |
+| `telenotify review [--dry-run]` | Goes through the review queue: shows the post, its link and why it's unclear; `s` approves it, `d` discards it, `n` skips it, `q` quits |
+| `telenotify stats [--days:N] [--dry-run]` | Per chat: how many messages got each verdict, how many were forwarded, and how many reviews are waiting |
+
+**Why `review` doesn't send anything itself.** TDLib locks its database, so only one program can use your login at a time. If `review` opened Telegram, you'd have to stop the bot first. So `review` only writes your decision (status `to_send`) to SQLite, and the running bot sends approved posts within about five seconds (`sendApproved`). If one can't be sent, it goes back to the queue with the reason. `login` still needs the bot stopped, but you only run it once.
+
+**Dry runs have their own state** (`state-dryrun.sqlite3`). Otherwise every message the dry run judged would be skipped as "already seen" once you switch to the real bot. Add `--dry-run` to `review` and `stats` to look at it.
 
 ### State (`state.sqlite3` in `data_dir`)
 
@@ -449,7 +459,7 @@ A failure (a download, OCR, a Telegram error) affects only its own message: it's
 |---|---|
 | `processed` | every judged message with verdict, role, reasons and action |
 | `published` | what was published, for duplicate checks |
-| `reviews` | the queue and your decisions. Those decisions are labels for the corpus: stage 5 adds an export |
+| `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`). Those decisions are labels for the corpus: stage 5 adds an export |
 | `meta` | the heartbeat |
 
 `config.json` is now only *read*. The old bot rewrote it on every forward, which could throw away your edits.
@@ -462,7 +472,7 @@ Every minute the bot saves a heartbeat. At start-up, a heartbeat older than `ale
 
 ### Building TDLib and running as a service
 
-- `deploy/build-tdlib.sh` (shell, because it only drives cmake for a C++ library) builds `lib/libtdjson.so`. Expect about 4 GB of RAM per parallel job (`JOBS=2` by default) and 20–40 minutes. It builds `gperf` from GNU's source if it's missing, so no system install is needed beyond a compiler, cmake, and the OpenSSL and zlib headers (already on your machine).
+- `deploy/build-tdlib.sh` (shell, because it only drives cmake for a C++ library) builds `lib/libtdjson.so`. Expect about 4 GB of RAM per parallel job (`JOBS=2` by default) and 20–40 minutes. It builds a fixed TDLib commit, the one this code was tested with, because TDLib renames fields from time to time. To move to a newer TDLib, change `TD_REF` in the script and run the tests and a dry run. It builds `gperf` from GNU's source if it's missing, so no system install is needed beyond a compiler, cmake, and the OpenSSL and zlib headers (already on your machine).
 - `deploy/tele-notify.service` is a systemd **user** unit (no sudo) with `Restart=always`. The comments at its top say how to install it.
 
 ### Not done yet
