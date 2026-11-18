@@ -25,6 +25,10 @@
 ##   telenotify stats [--config:FILE] [--days:N] [--dry-run]
 ##       What happened per chat in the last N days (default 7).
 ##
+##   telenotify compare [--config:FILE] [--days:N]
+##       Stage 4: what the dry run would have published next to what the
+##       Python bot did publish, over the last N days (default 7).
+##
 ##   Dry runs keep their own state (state-dryrun.sqlite3); add --dry-run to
 ##   review or stats to look at it.
 
@@ -39,6 +43,7 @@ usage:
   telenotify run   [--config:FILE] [--dry-run]
   telenotify review [--config:FILE] [--dry-run]
   telenotify stats [--config:FILE] [--days:N] [--dry-run]
+  telenotify compare [--config:FILE] [--days:N]
 """
 
 proc printDecision(d: Decision) =
@@ -142,12 +147,13 @@ proc main() =
   of "eval":
     if arg == "" or not fileExists(arg): quit "eval needs a corpus file\n" & usage
     cmdEval(cfg, arg, show, outPath)
-  of "login", "run", "review", "stats":
+  of "login", "run", "review", "stats", "compare":
     try:
       case cmd
       of "login": waitFor cmdLogin(cfg)
       of "run": waitFor cmdRun(cfg, dryRun)
       of "review": cmdReview(cfg, dryRun)
+      of "compare": cmdCompare(cfg, days)
       else: cmdStats(cfg, days, dryRun)
     except CatchableError as e:
       quit "error: " & e.msg

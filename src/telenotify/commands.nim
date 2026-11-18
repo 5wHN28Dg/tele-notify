@@ -1,7 +1,7 @@
 ## The commands that talk to Telegram: login, chats, run, review, stats.
 
 import std/[asyncdispatch, json, os, strutils, strformat, tables, times, posix, unicode]
-import config, td, session, telegram, state, listener, fetch, gather
+import config, td, session, telegram, state, listener, fetch, gather, compare
 
 var stopRequested = new bool   # set by Ctrl-C or `systemctl stop` (SIGTERM)
 
@@ -45,12 +45,29 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
       if l == nil: return
       case u{"@type"}.getStr
       of "updateNewMessage":
-        let msg = u["message"]
-        if msg{"is_outgoing"}.getBool: return
-        var m = parseMessage(msg)
+        var m = parseMessage(u["message"])
+        if m.outgoing:
+          # in a dry run, your own posts in the target chat are the Python bot's
+          if l.dryRun and m.chatId == l.cfg.targetChat: asyncCheck l.noteOtherBot(m)
+          return
         if m.chatId notin watched: return
         m.chatTitle = titles.getOrDefault(m.chatId, $m.chatId)
         l.enqueue m
+      of "updateMessageContent":
+        # an edit: look again if it's recent (handleGroup decides if needed)
+        let chat = u{"chat_id"}.getBiggestInt
+        if chat in watched:
+          let id = u{"message_id"}.getBiggestInt
+          let tg = l.tg
+          proc refetch() {.async.} =
+            try:
+              var m = await tg.getMessage(chat, id)
+              if getTime().toUnix - m.date > 2 * 86400: return
+              m.edited = true
+              m.chatTitle = titles.getOrDefault(chat, $chat)
+              l.enqueue m
+            except CatchableError: discard   # deleted meanwhile, etc.
+          asyncCheck refetch()
       of "updateConnectionState":
         l.onConnectionState(u{"state", "@type"}.getStr)
       of "updateAuthorizationState":
@@ -78,6 +95,10 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
       discard await s.client.call(%*{"@type": "openChat", "chat_id": chat})
     except TdError as e:
       l.log &"⚠️  chat {chat} from config.json is not available: {e.msg}"
+  if l.dryRun:
+    # so TDLib reliably delivers the Python bot's posts there (compare)
+    try: discard await s.client.call(%*{"@type": "openChat", "chat_id": cfg.targetChat})
+    except TdError as e: l.log &"⚠️  target_chat {cfg.targetChat} is not available: {e.msg}"
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
@@ -147,6 +168,32 @@ proc fitColumn*(s: string, width: int): string =
   let r = s.toRunes
   result = if r.len > width: $r[0 ..< width - 1] & "…" else: s
   result.add " ".repeat(max(0, width - result.runeLen))
+
+proc short(s: string, n: int): string =
+  let one = s.printable.replace("\n", " ").strip
+  let r = one.toRunes
+  if r.len > n: $r[0 ..< n] & "…" else: one
+
+proc cmdCompare*(cfg: Config, days: int) =
+  ## The dry run next to the Python bot (compare.nim).
+  let st = openState(statePath(cfg, dryRun = true))
+  defer: st.close()
+  let c = st.compareRuns(getTime().toUnix - days * 86400)
+  echo &"Last {days} days: both published {c.both.len}, Python only {c.pythonOnly.len}, Nim only {c.nimOnly.len}"
+  if c.both.len + c.pythonOnly.len == 0:
+    echo "(nothing from the Python bot yet: is `telenotify run --dry-run` running?)"
+  echo "\n── Python only (Nim's verdict and why) " & "─".repeat(32)
+  for x in c.pythonOnly:
+    echo "• ", x.other.text.short(90)
+    if x.nimSaw:
+      echo &"    Nim: {x.nim.action}, {x.nim.chatTitle.short(30)} #{x.nim.msgId}: {x.nim.reasons.short(160)}"
+    else:
+      echo "    Nim: never saw it (before the dry run started, or not from a watched chat)"
+  echo "\n── Nim only " & "─".repeat(59)
+  for x in c.nimOnly:
+    echo &"• {x.nim.chatTitle.short(30)} #{x.nim.msgId} ({x.nim.role.short(30)}): " &
+         st.publishedText(x.nim.chatId, x.nim.msgId).short(90)
+    echo "    why: ", x.nim.reasons.short(160)
 
 proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
   let st = openState(statePath(cfg, dryRun))

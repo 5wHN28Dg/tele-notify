@@ -20,6 +20,10 @@ type
     buttons*: seq[string] ## URLs of inline buttons
     photoFileId*: int    ## TDLib file id of the largest photo size; 0 = none
     chatTitle*: string
+    albumId*: int64      ## same non-zero id for every picture of one album
+    edited*: bool        ## comes from an edit, not a new message
+    outgoing*: bool      ## sent by this account (e.g. by the Python bot)
+    originChat*, originMsg*: int64  ## for a forward from a channel: where it came from
 
   Unread* = object
     messages*: seq[TgMessage]  ## oldest first
@@ -33,8 +37,13 @@ type
     markRead*: proc (chat: int64, ids: seq[int64]): Future[void] {.closure, gcsafe.}
     downloadPhoto*: proc (fileId: int): Future[string] {.closure, gcsafe.}
       ## the photo's bytes
-    forward*: proc (target, chat, id: int64): Future[bool] {.closure, gcsafe.}
-      ## false when the chat forbids forwarding
+    forward*: proc (target, chat: int64, ids: seq[int64]): Future[bool] {.closure, gcsafe.}
+      ## forward one message or a whole album; false when the chat forbids
+      ## forwarding (or Telegram refused)
+    getMessage*: proc (chat, id: int64): Future[TgMessage] {.closure, gcsafe.}
+      ## one message as it is now (used for edits)
+    linkTarget*: proc (url: string): Future[(int64, int64)] {.closure, gcsafe.}
+      ## the chat and message a t.me link points to
     link*: proc (chat, id: int64): Future[string] {.closure, gcsafe.}
     sendText*: proc (chat: int64, text: string): Future[void] {.closure, gcsafe.}
     selfChat*: proc (): Future[int64] {.closure, gcsafe.}
@@ -55,6 +64,16 @@ proc parseMessage*(m: JsonNode): TgMessage =
   result.chatId = m{"chat_id"}.getBiggestInt
   result.id = m{"id"}.getBiggestInt
   result.date = m{"date"}.getBiggestInt
+  result.outgoing = m{"is_outgoing"}.getBool
+  let origin = m{"forward_info", "origin"}
+  if origin{"@type"}.getStr == "messageOriginChannel":
+    result.originChat = origin{"chat_id"}.getBiggestInt
+    result.originMsg = origin{"message_id"}.getBiggestInt
+  # TDLib writes 64-bit ids as strings in JSON
+  let album = m{"media_album_id"}
+  if album != nil:
+    result.albumId = (if album.kind == JString: (try: parseBiggestInt(album.getStr) except ValueError: 0'i64)
+                      else: album.getBiggestInt)
   let content = m{"content"}
   case content{"@type"}.getStr
   of "messageText":
@@ -136,14 +155,25 @@ proc tdTelegram*(c: TdClient): Telegram =
     try: discard await c.call(%*{"@type": "deleteFile", "file_id": fileId})
     except CatchableError: discard
 
-  result.forward = proc (target, chat, id: int64): Future[bool] {.async, closure, gcsafe.} =
-    let props = await c.call(%*{"@type": "getMessageProperties", "chat_id": chat, "message_id": id})
+  result.forward = proc (target, chat: int64, ids: seq[int64]): Future[bool] {.async, closure, gcsafe.} =
+    if ids.len == 0: return false
+    let props = await c.call(%*{"@type": "getMessageProperties", "chat_id": chat, "message_id": ids[0]})
     if not props{"can_be_forwarded"}.getBool(false): return false
     let sent = await c.call(%*{"@type": "forwardMessages", "chat_id": target, "from_chat_id": chat,
-                               "message_ids": [id], "send_copy": false, "remove_caption": false})
-    # TDLib puts null in place of a message it could not forward
-    let msgs = sent{"messages"}.getElems
-    return msgs.len == 1 and msgs[0].kind == JObject
+                               "message_ids": ids, "send_copy": false, "remove_caption": false})
+    # TDLib puts null in place of a message it could not forward. If any
+    # part of an album went out, the post is in your channel: count it as
+    # forwarded (sending a link as well would post it twice).
+    for m in sent{"messages"}.getElems:
+      if m.kind == JObject: return true
+    return false
+
+  result.linkTarget = proc (url: string): Future[(int64, int64)] {.async, closure, gcsafe.} =
+    let info = await c.call(%*{"@type": "getMessageLinkInfo", "url": url})
+    return (info{"chat_id"}.getBiggestInt, info{"message", "id"}.getBiggestInt)
+
+  result.getMessage = proc (chat, id: int64): Future[TgMessage] {.async, closure, gcsafe.} =
+    return parseMessage(await c.call(%*{"@type": "getMessage", "chat_id": chat, "message_id": id}))
 
   result.link = proc (chat, id: int64): Future[string] {.async, closure, gcsafe.} =
     let l = await c.call(%*{"@type": "getMessageLink", "chat_id": chat, "message_id": id})

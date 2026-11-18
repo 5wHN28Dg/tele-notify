@@ -29,11 +29,11 @@ proc toTelegram(f: FakeTg): Telegram =
     {.cast(gcsafe).}:
       if fileId in f.brokenPhotos: raise newException(IOError, "download failed")
       return readFile(currentSourcePath.parentDir / "fixtures" / "ocr_arabic.png")
-  result.forward = proc (t, chat, id: int64): Future[bool] {.async, closure, gcsafe.} =
+  result.forward = proc (t, chat: int64, ids: seq[int64]): Future[bool] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
       if f.forwardFails: raise newException(IOError, "FLOOD_WAIT")
       if chat in f.noForward: return false
-      f.forwarded.add (chat, id)
+      for id in ids: f.forwarded.add (chat, id)
       if f.afterForward != nil: f.afterForward()
       return true
   result.link = proc (chat, id: int64): Future[string] {.async, closure, gcsafe.} =
@@ -42,6 +42,14 @@ proc toTelegram(f: FakeTg): Telegram =
     return "https://t.me/c/" & $(-chat) & "/" & $id
   result.sendText = proc (chat: int64, text: string): Future[void] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}: f.texts.add (chat, text)
+  result.getMessage = proc (chat, id: int64): Future[TgMessage] {.async, closure, gcsafe.} =
+    {.cast(gcsafe).}:
+      for m in f.chats.getOrDefault(chat):
+        if m.id == id: return m
+      raise newException(IOError, "message not found")
+  result.linkTarget = proc (url: string): Future[(int64, int64)] {.async, closure, gcsafe.} =
+    if "t.me/basrajobs/" notin url: raise newException(IOError, "unknown link")
+    return (-5'i64, parseBiggestInt(url.split('/')[^1]))
   result.selfChat = proc (): Future[int64] {.async, closure, gcsafe.} = return 42
 
 proc noFetch(): Fetcher =
@@ -235,3 +243,150 @@ suite "listener":
     let (l, _) = setup(f)
     waitFor l.bootstrap()
     check f.texts.len == 1 and "only the newest were checked" in f.texts[0][1]
+
+  test "an album is judged and forwarded as one post":
+    let f = FakeTg()
+    var parts = @[msg(-1, 20, "صور الاعلان"), msg(-1, 21, "", photo = 1), msg(-1, 22, "", photo = 1)]
+    for p in parts.mitems: p.albumId = 777
+    f.chats[-1] = parts & @[msg(-1, 23, bad)]
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 20'i64), (-1'i64, 21'i64), (-1'i64, 22'i64)]
+    check st.seen(-1, 21) and st.seen(-1, 22) and st.seen(-1, 23)
+    check f.read.len == 4
+    check st.recentPublished().len == 1
+
+  test "album pictures arriving a moment apart are still grouped":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()                      # nothing unread; now live
+    l.albumWaitMs = 400
+    var a = msg(-1, 40, good)
+    a.albumId = 9
+    var b = msg(-1, 41, "", photo = 1)
+    b.albumId = 9
+    l.enqueue a
+    let p = l.processQueue()
+    waitFor sleepAsync(100)
+    l.enqueue b
+    waitFor p
+    check f.forwarded == @[(-1'i64, 40'i64), (-1'i64, 41'i64)]
+
+  test "a rejected post edited into a job ad is judged again; others are not":
+    let f = FakeTg()
+    const other = "Hiring a junior Electrical Engineer in Basra, fresh graduates welcome"
+    f.chats[-1] = @[msg(-1, 30, "اعلان وظائف قريبا"), msg(-1, 31, other)]
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 31'i64)]
+    var same = msg(-1, 30, "اعلان وظائف قريبا")     # e.g. a link preview loaded: same text
+    same.edited = true
+    l.enqueue same
+    var again = msg(-1, 31, other & " (updated)")  # a published post edited: left alone
+    again.edited = true
+    l.enqueue again
+    waitFor l.processQueue()
+    check f.forwarded.len == 1
+    var real = msg(-1, 30, good & " حقل الرميلة")
+    real.edited = true
+    l.enqueue real
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 31'i64), (-1'i64, 30'i64)]
+    check st.previous(-1, 30).action == "forwarded"
+
+  test "an edit of a message never seen is ignored (it would forward old posts)":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()
+    var m = msg(-2, 50, good)
+    m.edited = true
+    l.enqueue m
+    waitFor l.processQueue()
+    check f.forwarded.len == 0
+
+  test "dry run: the Python bot's posts in the channel are noted, with where they came from":
+    let f = FakeTg()
+    let (l, st) = setup(f, dryRun = true)
+    var fwd = msg(target, 900, good)
+    (fwd.originChat, fwd.originMsg) = (-1'i64, 10'i64)
+    waitFor l.noteOtherBot(fwd)
+    waitFor l.noteOtherBot(msg(target, 901, "match: electrical engineer\npost link: https://t.me/basrajobs/77"))
+    waitFor l.noteOtherBot(msg(target, 902, "match: x\npost link: https://t.me/unknown/1"))
+    let notes = st.otherBotSince(0)
+    check notes.len == 3
+    check (notes[0].originChat, notes[0].originMsg) == (-1'i64, 10'i64)
+    check (notes[1].originChat, notes[1].originMsg) == (-5'i64, 77'i64)
+    check notes[2].originChat == 0 and notes[2].originMsg == 1   # chat unknown, id kept
+
+  test "album parts arriving after their first picture was handled are not judged again":
+    let f = FakeTg()
+    var parts = @[msg(-1, 60, good), msg(-1, 61, "", photo = 1), msg(-1, 62, "", photo = 1)]
+    for p in parts.mitems: p.albumId = 5
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    waitFor l.handle(parts[0])               # the backlog had only the first picture
+    l.enqueue parts[0]
+    l.enqueue parts[1]
+    l.enqueue parts[2]
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 60'i64)]
+    check st.seen(-1, 61) and st.seen(-1, 62)
+
+  test "an edit doesn't join an album, and the same picture twice counts once":
+    let f = FakeTg()
+    var parts = @[msg(-1, 71, "", photo = 1), msg(-1, 70, good)]   # out of order
+    for p in parts.mitems: p.albumId = 6
+    var edited = msg(-1, 70, good & " (edited)")
+    edited.albumId = 6
+    edited.edited = true
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()
+    l.enqueue parts[0]
+    l.enqueue parts[1]
+    l.enqueue parts[1]
+    l.enqueue edited
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 70'i64), (-1'i64, 71'i64)]    # once, in order
+
+  test "approving a reviewed album forwards the whole album":
+    let f = FakeTg()
+    var parts = @[msg(-1, 80, unclear), msg(-1, 81, "", photo = 7)]
+    f.brokenPhotos.incl 7
+    for p in parts.mitems: p.albumId = 8
+    f.chats[-1] = parts
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    let r = st.pendingReviews()
+    check r.len == 1 and r[0].albumIds == @[80'i64, 81]
+    check st.decideReview(r[0].id, "to_send")
+    waitFor l.sendApproved()
+    check f.forwarded == @[(-1'i64, 80'i64), (-1'i64, 81'i64)]
+
+  test "a message rejected before fingerprints existed is not judged again on an edit":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    st.markProcessed(-1, 90, "chat1", "reject", "", "", "rejected")   # a stage 3 row
+    var m = msg(-1, 90, good)
+    m.edited = true
+    l.enqueue m
+    waitFor l.processQueue()
+    check f.forwarded.len == 0
+
+  test "a late or split-off album picture counts as part of the handled post":
+    let f = FakeTg()
+    var a = msg(-1, 100, "Hiring a junior Electrical Engineer in Basra, fresh graduates welcome")
+    var b = msg(-1, 101, "", photo = 1)                  # its own picture text would publish
+    a.albumId = 42
+    b.albumId = 42
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    l.albumWaitMs = 10
+    l.enqueue a
+    l.enqueue msg(-2, 5, bad)                             # another chat in between
+    l.enqueue b
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 100'i64)]
+    check st.previous(-1, 101).found
+    for row in st.stats(1):
+      if row.chat == "chat1": check row.forwarded == 1   # one post, not two pictures

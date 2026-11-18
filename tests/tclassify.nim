@@ -221,3 +221,46 @@ suite "review pass 2 (adversarial) findings":
 suite "found on recent channel posts":
   test "a female manager role and 'dealing with trainees' are not entry level":
     check verdict("تعلن شركة هندسية في محافظة البصرة عن حاجتها إلى موظفة للعمل بمنصب مديرة مركز تدريب\nشهادة جامعية ويفضل في التخصصات الهندسية\nمهارات عالية في التواصل والتعامل مع المتدربين\nموقع العمل: محافظة البصرة") != vPublish
+
+suite "found on the first real run (stage 4)":
+  test "'extensive experience' outweighs a channel's 'fresh graduates and experienced' tag":
+    let post = "#وظائف_نفطية #البصرة التقديم يضم #حديثي_التخرج واصحاب الخبرة\nفرصة عمل\nمهندس كهرباء - ضمان ومراقبة الجودة (QA/QC)\nموقع العمل: البصرة\nخبرة واسعة في مجال ضمان ومراقبة الجودة"
+    check verdict(post) == vReview
+    check verdict("Hiring electrical engineer in Basra, fresh graduates welcome. Proven field experience required") == vReview
+
+  test "a real fresh-graduate post still publishes":
+    check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة") == vPublish
+    check verdict("#البصرة مطلوب مهندس كهرباء #حديثي_التخرج\nموقع العمل: البصرة") == vPublish
+    check verdict("Hiring Electrical Engineer in Basra (fresh graduates or experienced), strong communication skills") == vPublish
+
+  test "'strong experience' only counts when it is asked for, as a level":
+    const fg = "Hiring electrical engineer in Basra, fresh graduates welcome. "
+    for t in ["No extensive experience required", "Deep learning experience is a plus",
+              "This internship lets you gain solid practical experience",
+              "Studied abroad experience is a plus", "We want strong, experienced communicators",
+              "Strong Excel experience", "Up to 2 years of experience. Strong experience with AutoCAD is a plus"]:
+      check verdict(fg & t) == vPublish
+    check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة لا يشترط خبرة واسعة") == vPublish
+    for t in ["Extensive hands-on experience required", "Strong field experience in oil and gas"]:
+      check verdict(fg & t) == vReview
+    for t in ["الخبرة الواسعة في المجال", "خبرات واسعة", "خبرة عملية واسعة"]:
+      check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة\n" & t) == vReview
+
+  test "'strong experience': review pass 2 cases":
+    const fg = "Hiring electrical engineer in Basra, fresh graduates welcome. "
+    const ar = "مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة\n"
+    for t in ["We are a company with extensive experience in oil and gas",
+              "Interns will work alongside staff with extensive industry experience",
+              "You will earn broad industry experience", "Extensive experience is not required",
+              "Extensive experience is a plus", "Strong experience with MS Office",
+              "strong experience of working in teams"]:
+      check verdict(fg & t) == vPublish
+    for t in ["شركة نفطية ذات خبرة واسعة", "ستحصل على خبرة عملية واسعة", "الخبرة الواسعة غير مطلوبة",
+              "يفضل من لديه خبرة واسعة", "خبرة ممتازة في الاوتوكاد"]:
+      check verdict(ar & t) == vPublish
+    for t in ["We do not offer accommodation. Extensive experience in substations required",
+              "Contract No. 12. Strong field experience required",
+              "Get in touch: extensive experience in substations required"]:
+      check verdict(fg & t) == vReview
+    for t in ["اولا: خبرة واسعة", "مثلا خبرة واسعة في المجال", "مشروع صغير\nخبرة واسعة", "خبرة سابقة واسعة"]:
+      check verdict(ar & t) == vReview
