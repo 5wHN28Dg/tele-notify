@@ -2,9 +2,11 @@
 
 Top: the bot panel (service state, alive, connection, pending reviews, and
 start / stop / restart for the service of the mode this screen shows) and
-the activity panel (today / 7-day totals and a 14-day chart). Below, three
-views: the live feed of judged messages, per-chat numbers, and alerts with
-chat health.
+the activity panel: a period picker (today, last 7 / 30 days, this month,
+this year, all time, or a custom range of days), the totals for that period
+and a chart of it by day, week, month or year. Below, three views: the live
+feed of judged messages, per-chat numbers for the same period, and alerts
+with chat health.
 
 `reload()` never blocks: the state file is read in a thread and systemctl
 runs as a subprocess, both in workers; the widgets are updated when they
@@ -14,10 +16,11 @@ finish. A missing state file, table, or systemctl shows a muted note.
 from __future__ import annotations
 
 import asyncio
+import math
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -31,9 +34,9 @@ from textual.widgets import (
     Button,
     ContentSwitcher,
     DataTable,
+    Input,
     Label,
-    RadioButton,
-    RadioSet,
+    Select,
     Static,
     TabbedContent,
     Tabs,
@@ -50,8 +53,14 @@ from . import search_data
 
 ALIVE_SECONDS = 120
 FEED_ROWS = 50
-CHART_DAYS = 14
+CHART_WIDTH = 46    # the activity panel's width (50) less its border and padding
 CHART_HEIGHT = 3
+# A period whose numbers took longer than this to count (all time on a big
+# state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
+# refresh tick; choosing a period always counts it afresh.
+SLOW_SECONDS = 0.25
+SLOW_REUSE_SECONDS = 60
+CUSTOM_SHOWN = "custom-shown"   # the picker entry naming the custom range shown now
 VERDICT_STYLE = {"publish": "green", "review": "yellow", "reject": "dim"}
 STAT_COLUMNS = ("chat", "total", "publish", "review", "reject", "forwarded")
 
@@ -75,7 +84,10 @@ def fmt_age(seconds: float) -> str:
 def fmt_time(at: int, now: float) -> str:
     if not at:
         return "?"
-    t = datetime.fromtimestamp(at)
+    try:
+        t = datetime.fromtimestamp(at)
+    except (OverflowError, ValueError, OSError, TypeError):   # a broken time in the state file
+        return "?"
     if t.date() == datetime.fromtimestamp(now).date():
         return t.strftime("%H:%M")
     return t.strftime("%d %b %H:%M")
@@ -85,14 +97,42 @@ def first_reason(reasons: str) -> str:
     return search_data.main_reason(reasons)
 
 
-def render_chart(days: list[dd.DayCount], height: int = CHART_HEIGHT) -> Text:
-    """A small stacked bar chart: publish (green) at the bottom, then review (yellow), then reject (dim)."""
-    top = max((d.total for d in days), default=0)
+def bar_label(day: str, bucket: str) -> str:
+    """How a chart bar is named under the chart: "18 Nov", "Nov 2026", "2026"."""
+    d = date.fromisoformat(day)
+    if bucket == "year":
+        return f"{d.year}"
+    if bucket == "month":
+        return f"{d:%b %Y}"
+    return dd.fmt_day(d, short=True)
+
+
+def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
+    """Join neighbouring bars until they fit in `width` columns (only a very long custom range needs it)."""
+    if len(bars) <= width:
+        return bars
+    k = math.ceil(len(bars) / width)
+    return [dd.DayCount(group[0].day, sum(b.publish for b in group), sum(b.review for b in group),
+                        sum(b.reject for b in group))
+            for group in (bars[i:i + k] for i in range(0, len(bars), k))]
+
+
+def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
+                 height: int = CHART_HEIGHT) -> Text:
+    """A small stacked bar chart: publish (green) at the bottom, then review (yellow), then reject (dim).
+
+    Bars are two columns wide with a gap while they fit, then one column,
+    then without gaps. Up to 15 days each bar is labelled with its day of the
+    month; otherwise the first and last bars are named at the two ends."""
+    bars = _merge(bars, width)
+    n = len(bars)
+    bar_w, gap = (2, 1) if n * 3 - 1 <= width else (1, 1) if n * 2 - 1 <= width else (1, 0)
+    top = max((d.total for d in bars), default=0)
     out = Text()
     units = height * 8
     eighths = " ▁▂▃▄▅▆▇█"
     scaled = []
-    for d in days:
+    for d in bars:
         if top == 0:
             scaled.append((0, 0, 0))
             continue
@@ -108,15 +148,24 @@ def render_chart(days: list[dd.DayCount], height: int = CHART_HEIGHT) -> Text:
             fill = min(8, max(0, t - lo))
             mid = lo + max(fill, 1) / 2
             style = "green" if mid < p else "yellow" if mid < r else "grey50"
-            out.append(eighths[fill] * 2, style=style)
-            if i < len(scaled) - 1:
+            out.append(eighths[fill] * bar_w, style=style)
+            if gap and i < n - 1:
                 out.append(" ")
         out.append("\n")
-    for i, d in enumerate(days):
-        label = d.day[-2:]
-        out.append(label, style="bold" if i == len(days) - 1 else "dim")
-        if i < len(days) - 1:
-            out.append(" ")
+    if not bars:
+        return out
+    if bucket == "day" and bar_w == 2:
+        for i, d in enumerate(bars):
+            out.append(d.day[-2:], style="bold" if i == n - 1 else "dim")
+            if i < n - 1:
+                out.append(" ")
+        return out
+    span = n * (bar_w + gap) - gap
+    first, last = bar_label(bars[0].day, bucket), bar_label(bars[-1].day, bucket)
+    out.append(first, style="dim")
+    if n > 1:
+        out.append(" " * max(1, span - len(first) - len(last)))
+        out.append(last, style="dim")
     return out
 
 
@@ -132,9 +181,8 @@ class Snapshot:
     mode: str = ""
     connection: str = ""
     pending: int = 0
-    today: dd.Totals = field(default_factory=dd.Totals)
-    week: dd.Totals = field(default_factory=dd.Totals)
-    days: list[dd.DayCount] = field(default_factory=list)
+    period: dd.PeriodStats | None = None
+    period_cost: float = 0.0   # seconds it took to count `period`
     stats: list[ChatStats] = field(default_factory=list)
     feed: list[Judged] = field(default_factory=list)
     alerts: list[Alert] = field(default_factory=list)
@@ -147,7 +195,9 @@ def _int(v: str) -> int | None:
     return int(v) if v.isascii() and v.isdigit() else None
 
 
-def load_snapshot(path: Path, stat_days: int) -> Snapshot:
+def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | None = None) -> Snapshot:
+    """Read the state file. `reuse`: numbers counted a moment ago for the same
+    choice, used again unless the day changed since."""
     now = time.time()
     snap = Snapshot(now=now)
     try:
@@ -160,14 +210,19 @@ def load_snapshot(path: Path, stat_days: int) -> Snapshot:
             snap.mode = s.meta("mode")
             snap.connection = s.meta("connection")
             snap.pending = s.review_counts().get("pending", 0)
-            snap.today = dd.totals(s, dd.local_midnight(0, now))
-            snap.week = dd.totals(s, int(now) - 7 * 86400)
-            snap.days = dd.per_day(s, CHART_DAYS, now)
-            snap.stats = s.stats(stat_days)
+            day = dd.today(now)
+            if reuse is not None and (choice.kind == "custom" or reuse.period.last == day):
+                snap.period = reuse
+            else:
+                started = time.perf_counter()
+                first, known = dd.first_judged(s) if choice.kind == "all" else (None, True)
+                snap.period = dd.period_stats(s, dd.resolve(choice, day, first, known), CHART_WIDTH)
+                snap.period_cost = time.perf_counter() - started
+            snap.stats = snap.period.chats
             snap.feed = s.recent(FEED_ROWS)
             snap.alerts = s.alerts(100)
             snap.problems = dd.chat_problems(s, now)
-    except (sqlite3.Error, OSError, ValueError) as e:  # a locked or half-written file: say so, try again next tick
+    except (sqlite3.Error, OSError, ValueError, OverflowError) as e:  # a locked or half-written file: say so, try again next tick
         snap.error = clean(f"{type(e).__name__}: {e}")
     return snap
 
@@ -213,6 +268,76 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(event.button.id == "confirm-yes")
 
 
+class RangeScreen(ModalScreen["tuple[date, date] | None"]):
+    """Ask for a custom period: from / to as YYYY-MM-DD, both days included.
+    Enter in "from" moves to "to"; Enter in "to" (or Show) checks and closes;
+    Escape or Cancel closes without a change."""
+
+    DEFAULT_CSS = """
+    RangeScreen { align: center middle; }
+    RangeScreen > Vertical {
+        width: 64; height: auto; padding: 1 2;
+        border: thick $primary; background: $surface;
+    }
+    RangeScreen Label { width: 100%; }
+    RangeScreen #range-fields { height: auto; margin-top: 1; }
+    RangeScreen #range-fields Label { width: auto; padding: 1 1 0 0; }
+    RangeScreen Input { width: 18; margin-right: 1; }
+    RangeScreen #range-error { color: $error; height: auto; margin-top: 1; }
+    RangeScreen #range-buttons { height: auto; align-horizontal: right; margin-top: 1; }
+    RangeScreen Button { margin-left: 2; }
+    """
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, first: date, last: date):
+        super().__init__()
+        self.first, self.last = first, last
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Show the numbers for these days (both included, local time):")
+            with Horizontal(id="range-fields"):
+                yield Label("From")
+                yield Input(self.first.isoformat(), placeholder="YYYY-MM-DD", id="range-from", max_length=10)
+                yield Label("to")
+                yield Input(self.last.isoformat(), placeholder="YYYY-MM-DD", id="range-to", max_length=10)
+            yield Static("", id="range-error")
+            with Horizontal(id="range-buttons"):
+                yield Button("Show", id="range-ok", variant="primary")
+                yield Button("Cancel", id="range-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#range-from", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _apply(self) -> None:
+        try:
+            got = dd.parse_range(self.query_one("#range-from", Input).value,
+                                 self.query_one("#range-to", Input).value)
+        except ValueError as e:
+            self.query_one("#range-error", Static).update(Text(str(e)))
+            return
+        self.dismiss(got)
+
+    @on(Input.Submitted)
+    def _submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        if event.input.id == "range-from":
+            self.query_one("#range-to", Input).focus()
+        else:
+            self._apply()
+
+    @on(Button.Pressed)
+    def _pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "range-ok":
+            self._apply()
+        else:
+            self.dismiss(None)
+
+
 # ---------------------------------------------------------------- pane
 
 class DashboardPane(Vertical):
@@ -234,8 +359,11 @@ class DashboardPane(Vertical):
     DashboardPane #view-feed, DashboardPane #view-chats { height: 1fr; }
     DashboardPane #feed { height: 1fr; }
     DashboardPane #feed-detail-box { height: 7; border-top: solid $primary-darken-2; }
-    DashboardPane #days { layout: horizontal; height: auto; border: none; padding: 0; background: transparent; }
-    DashboardPane #days RadioButton { width: auto; margin-right: 2; }
+    DashboardPane #period-row { height: 1; }
+    DashboardPane #period { width: 22; }
+    DashboardPane #period-range { margin-left: 1; min-width: 0; }
+    DashboardPane #period-name { width: 1fr; padding-left: 1; }
+    DashboardPane #chats-period { height: 1; }
     DashboardPane #chat-stats { height: 1fr; }
     DashboardPane #view-alerts { height: 1fr; }
     DashboardPane #view-alerts > Vertical { width: 3fr; height: 1fr; }
@@ -248,13 +376,17 @@ class DashboardPane(Vertical):
         Binding("f", "view('feed')", "Feed", show=False),
         Binding("c", "view('chats')", "Chats", show=False),
         Binding("a", "view('alerts')", "Alerts", show=False),
+        Binding("p", "pick_period", "Period"),
+        Binding("d", "custom_range", "Dates"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self.snapshot: Snapshot | None = None
         self.services: dict[str, str] = {}
-        self.stat_days = 7
+        self.choice = dd.PeriodChoice("7d")
+        # the last numbers counted: (choice, when (monotonic), numbers, seconds it took)
+        self._counted: tuple[dd.PeriodChoice, float, dd.PeriodStats, float] | None = None
         self._sort: tuple[str, bool] = ("total", True)
         self._chat_names: dict[str, str] = {}   # chat name as drawn -> as read, for sorting
         self._busy = False
@@ -276,6 +408,10 @@ class DashboardPane(Vertical):
                     yield Static("", id="svc-name", classes="muted")
                 yield Static("", id="svc-result", classes="muted")
             with Vertical(id="dash-activity"):
+                with Horizontal(id="period-row"):
+                    yield Select([(name, kind) for kind, name in dd.PERIODS], value=self.choice.kind,
+                                 allow_blank=False, compact=True, id="period")
+                    yield Button("Dates…", id="period-range", compact=True)
                 yield Static("", id="totals")
                 yield Static("", id="chart")
         with Horizontal(id="dash-nav"):
@@ -290,10 +426,7 @@ class DashboardPane(Vertical):
                     yield PostView("Select a message to see why it got its verdict.", id="feed-detail",
                                  classes="muted")
             with Vertical(id="view-chats"):
-                with RadioSet(id="days"):
-                    yield RadioButton("1 day", id="days-1")
-                    yield RadioButton("7 days", id="days-7", value=True)
-                    yield RadioButton("30 days", id="days-30")
+                yield Static("", id="chats-period", classes="muted")
                 yield DataTable(id="chat-stats", cursor_type="row", zebra_stripes=True)
             with Horizontal(id="view-alerts"):
                 with Vertical():
@@ -311,7 +444,6 @@ class DashboardPane(Vertical):
         self.query_one("#alerts", DataTable).add_columns("when", "alert")
         self.query_one("#health", DataTable).add_columns("chat", "status", "detail")
         self.query_one("#dash-activity").border_title = "Activity"
-        self.query_one("#dash-activity").border_subtitle = f"judged per day, last {CHART_DAYS} days"
         bot_box = self.query_one("#dash-bot")
         bot_box.border_title = "Bot"
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
@@ -351,7 +483,7 @@ class DashboardPane(Vertical):
 
     def _request_state(self, again: bool = True) -> None:
         """Read the state file, unless a read is already running: a read stuck on
-        a locked file must not pile up threads. With `again` (the days or the
+        a locked file must not pile up threads. With `again` (the period or the
         service changed), one more read follows the running one."""
         if not self._reading:
             self._load_state()
@@ -362,7 +494,15 @@ class DashboardPane(Vertical):
     async def _load_state(self) -> None:
         self._reading = True
         try:
-            snap = await asyncio.to_thread(load_snapshot, self.paths.state, self.stat_days)
+            choice = self.choice
+            reuse = None
+            if self._counted is not None:
+                was, at, numbers, cost = self._counted
+                if was == choice and cost > SLOW_SECONDS and time.monotonic() - at < SLOW_REUSE_SECONDS:
+                    reuse = numbers
+            snap = await asyncio.to_thread(load_snapshot, self.paths.state, choice, reuse)
+            if snap.period is not None and snap.period is not reuse:
+                self._counted = (choice, time.monotonic(), snap.period, snap.period_cost)
         finally:
             self._reading = False
         if self.is_mounted:
@@ -466,23 +606,32 @@ class DashboardPane(Vertical):
     def _show_activity(self, snap: Snapshot) -> None:
         totals = self.query_one("#totals", Static)
         chart = self.query_one("#chart", Static)
-        if not snap.exists or snap.error:
+        box = self.query_one("#dash-activity")
+        note = self.query_one("#chats-period", Static)
+        ps = snap.period
+        if not snap.exists or snap.error or ps is None:
             totals.update(Text("No activity to show.", style="dim"))
             chart.update("")
+            box.border_subtitle = ""
+            note.update("")
             return
+        by = {"day": "by day", "week": "by week", "month": "by month", "year": "by year"}[ps.bucket]
+        box.border_subtitle = f"{ps.period.describe()} · {by}"
+        whole = "   whole days, today included" if ps.period.kind in ("7d", "30d") else ""
+        note.update(Text(f"{ps.period.describe()}{whole}   (p: change the period, d: pick dates)", style="dim"))
+        tot = ps.totals
         t = Text()
-        t.append(f"{'':<8}{'publish':>9}{'review':>8}{'reject':>8}{'forwarded':>11}\n", style="bold")
-        for label, tot in (("today", snap.today), ("7 days", snap.week)):
-            t.append(f"{label:<8}")
-            t.append(f"{tot.publish:>9}", style="green")
-            t.append(f"{tot.review:>8}", style="yellow")
-            t.append(f"{tot.reject:>8}", style="dim")
-            t.append(f"{tot.forwarded:>11}\n", style="bold")
-        totals.update(t.rstrip() or t)
-        if any(d.total for d in snap.days):
-            chart.update(render_chart(snap.days))
+        t.append(f"{'judged':>8}{'publish':>9}{'review':>8}{'reject':>8}{'forwarded':>11}\n", style="bold")
+        t.append(f"{tot.judged:>8}")
+        t.append(f"{tot.publish:>9}", style="green")
+        t.append(f"{tot.review:>8}", style="yellow")
+        t.append(f"{tot.reject:>8}", style="dim")
+        t.append(f"{tot.forwarded:>11}", style="bold")
+        totals.update(t)
+        if tot.judged:
+            chart.update(render_chart(ps.bars, ps.bucket))
         else:
-            chart.update(Text(f"nothing judged in the last {CHART_DAYS} days", style="dim"))
+            chart.update(Text("nothing judged in this period", style="dim"))
 
     def _show_feed(self, snap: Snapshot) -> None:
         table = self.query_one("#feed", DataTable)
@@ -561,10 +710,61 @@ class DashboardPane(Vertical):
         self._sort = (col, not rev) if col == cur else (col, col != "chat")
         self._sort_stats()
 
-    @on(RadioSet.Changed, "#days")
-    def _days_changed(self, event: RadioSet.Changed) -> None:
-        self.stat_days = int(str(event.pressed.id).split("-")[1])
+    # --------------------------------------------------------- period
+
+    def _set_choice(self, choice: dd.PeriodChoice) -> None:
+        """Show `choice` and count it. A custom range gets its own entry in the
+        picker (CUSTOM_SHOWN), so picking "Custom range…" again is a change
+        that opens the dates form."""
+        self.choice = choice
+        sel = self.query_one("#period", Select)
+        options = [(name, kind) for kind, name in dd.PERIODS]
+        value = choice.kind
+        if choice.kind == "custom" and choice.first and choice.last:
+            p = dd.Period("custom", choice.first, choice.last)
+            options.insert(-1, (p.describe(), CUSTOM_SHOWN))
+            value = CUSTOM_SHOWN
+        with sel.prevent(Select.Changed):
+            sel.set_options(options)
+            sel.value = value
         self._request_state()
+
+    @on(Select.Changed, "#period")
+    def _period_changed(self, event: Select.Changed) -> None:
+        event.stop()
+        kind = str(event.value)
+        if kind == CUSTOM_SHOWN or (kind == self.choice.kind and kind != "custom"):
+            return
+        if kind == "custom":
+            self.action_custom_range()
+        else:
+            self._set_choice(dd.PeriodChoice(kind))
+
+    @on(Button.Pressed, "#period-range")
+    def _range_button(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_custom_range()
+
+    def action_pick_period(self) -> None:
+        sel = self.query_one("#period", Select)
+        sel.focus()
+        sel.expanded = True
+
+    def action_custom_range(self) -> None:
+        """Ask for the days; the form starts with the period shown now."""
+        ps = self.snapshot.period if self.snapshot is not None else None
+        if ps is not None:
+            first, last = ps.period.first, ps.period.last
+        else:
+            first = last = dd.today()
+
+        def answered(days: tuple[date, date] | None) -> None:
+            if days is None:   # cancelled: the picker goes back to what is shown
+                self._set_choice(self.choice)
+            else:
+                self._set_choice(dd.PeriodChoice("custom", *days))
+
+        self.app.push_screen(RangeScreen(first, last), answered)
 
     def _show_alerts(self, snap: Snapshot) -> None:
         alerts = self.query_one("#alerts", DataTable)
