@@ -34,7 +34,7 @@ suite "finding job links":
       "LinkedIn job https://www.linkedin.com/jobs/view/4490415622/",
       "LinkedIn post https://www.linkedin.com/posts/husain-a-jassem_share-7466376950174011392-7b04/",
       "lnkd.in short link https://lnkd.in/dGPh986F",
-      "job page (JSON-LD) https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk",
+      "Workable job board https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk",
       "Workable https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12",
       "job page (JSON-LD) https://yadanoo.com/job/4505e77354fb9161",
       "job page (JSON-LD) https://shift-iraq.com/jobs/251f8967-5969-46b0-8184-ab4e1e0ffa24",
@@ -53,6 +53,26 @@ suite "finding job links":
     check findJobLinks("https://jobs.workable.com/search?q=basra").len == 0
     let l = findJobLinks("Apply: apply.workable.com/Digital-Zone/j/87323d1e12")
     check l.len == 1 and l[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
+
+  test "old-style <company>.workable.com/j/<code> links use the same API":
+    let l = findJobLinks("Apply: https://digital-zone.workable.com/j/87323D1E12")
+    check l.len == 1 and l[0].kind == bkWorkableApply and
+      l[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
+    # the same job by both links is one link
+    check findJobLinks("digital-zone.workable.com/j/87323d1e12 apply.workable.com/digital-zone/j/87323D1E12").len == 1
+    for host in ["jobs", "apply", "www", "WWW"]:
+      check findJobLinks("https://" & host & ".workable.com/j/87323D1E12").len == 0
+    check findJobLinks("https://digital-zone.workable.com/j/87323D1E12FF").len == 0
+
+  test "Workable links followed by a query, a bracket or Arabic text; http links":
+    let a = findJobLinks("(https://apply.workable.com/digital-zone/j/87323D1E12?utm_source=tg)للتقديم")
+    check a.len == 1 and a[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
+    let b = findJobLinks("رابط: https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk/hybrid-x?utm=1)للتقديم")
+    check b.len == 1 and b[0].url == "https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk"
+    let c = findJobLinks("(digital-zone.workable.com/j/87323D1E12?x=1)قدم الآن")
+    check c.len == 1 and c[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
+    let d = findJobLinks("http://apply.workable.com/digital-zone/j/87323D1E12 http://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk")
+    check d.len == 2
 
   test "mselect links keep www. (mselect.com alone has no DNS record)":
     let l = findJobLinks("mselect.com/job/drilling-fluids-engineer-5748")
@@ -85,19 +105,41 @@ suite "reading saved pages":
     check "Maysān" in t
     check "5–7 years of relevant experience" in t
 
-  test "Workable job board (JSON-LD) adds the separate requirements section":
-    let t = extract(bkJobPosting, page("workable_job.html"))
+  test "Workable job board (JSON-LD): hybrid Baghdad job, requirements once":
+    let t = extract(bkWorkableBoard, page("workable_job.html"))
     check "Job title: Marketing Lead" in t
-    check "Location: Baghdad" in t
-    check "8–12 years in marketing" in t   # only in requirementsSection
+    var loc = ""
+    for l in t.splitLines:
+      if l.startsWith("Location: "): loc = l
+    # The page says TELECOMMUTE, but the job is hybrid (the API copy says
+    # workplace "hybrid", remote false): no "remote" for the filter.
+    check loc == "Location: Baghdad Baghdad Governorate"
+    check "remote" notin loc.toLowerAscii
+    # The description already holds the requirements: not added twice.
+    check t.count("8–12 years in marketing") == 1
 
-  test "only requirementsSection is appended to a JSON-LD job":
+  test "the hybrid Baghdad Workable job is rejected":
+    let cfg = loadConfig(currentSourcePath.parentDir / "keywords.json")
+    check classify(extract(bkWorkableBoard, page("workable_job.html")), cfg).verdict == vReject
+
+  test "other JSON-LD sites still read TELECOMMUTE as remote":
+    let ld = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "jobLocation": {"address": {"addressLocality": "Erbil"}}, "jobLocationType": "TELECOMMUTE"}</script>"""
+    check "Location: Erbil, remote\n" in extract(bkJobPosting, ld)
+    check "remote" notin extract(bkWorkableBoard, ld)
+
+  test "only requirementsSection is appended to a JSON-LD job, when the description lacks it":
     let ld = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
       "description": "<p>About us</p>", "requirementsSection": "<p>3 years</p>",
       "benefitsSection": "<p>Free lunch</p>", "responsibilitiesSection": "<p>Sell</p>"}</script>"""
     let t = extract(bkJobPosting, ld)
-    check "About us" in t and "3 years" in t
+    check "About us" in t and t.count("3 years") == 1
     check "Free lunch" notin t and "Sell" notin t
+    # Already in the description (other HTML, other spacing): not repeated.
+    let dup = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "description": "<p>About us</p><p><strong>Must</strong></p><p>– 3   years\n of Python</p>",
+      "requirementsSection": "<ul><li>Must</li><li>– 3 years of Python</li></ul>"}</script>"""
+    check extract(bkWorkableBoard, dup).count("of Python") == 1
 
   test "Workable company page (API)":
     let t = extract(bkWorkableApply, page("workable_apply.json"))
@@ -109,6 +151,23 @@ suite "reading saved pages":
     check extract(bkWorkableApply, """{"title": "X", "remote": true, "location": {"city": "Basra"}}""").startsWith(
       "Job title: X\nLocation: Basra, remote\n")
     check extract(bkWorkableApply, """{"title": "X", "workplace": "remote"}""") == "Job title: X\nLocation: remote\n"
+
+  test "Workable API: every place in `locations`, without repeats":
+    let j = """{"title": "Engineer",
+      "location": {"city": "Baghdad", "region": "Baghdad Governorate", "country": "Iraq"},
+      "locations": [{"city": "Baghdad", "region": "Baghdad Governorate", "country": "Iraq"},
+                    {"city": "Basra", "region": "Basra Governorate", "country": "Iraq"}]}"""
+    check extract(bkWorkableApply, j) ==
+      "Job title: Engineer\nLocation: Baghdad, Baghdad Governorate, Iraq, Basra, Basra Governorate\n"
+    # "locations" alone is enough
+    check extract(bkWorkableApply, """{"title": "E", "locations": [{"city": "Basra"}, null, 3]}""") ==
+      "Job title: E\nLocation: Basra\n"
+
+  test "Workable API: null location, remote as a string, numeric title":
+    check extract(bkWorkableApply, """{"title": 1234, "location": null, "remote": "yes"}""") ==
+      "Job title: 1234\nLocation: remote\n"
+    check extract(bkWorkableApply, """{"title": "X", "location": null, "remote": "no"}""") == "Job title: X\n"
+    check extract(bkWorkableApply, """{"title": "X", "locations": null, "remote": null}""") == "Job title: X\n"
 
   test "LinkedIn job: title line with the location, and the description":
     let t = extract(bkLinkedInJob, page("linkedin_job.html"))

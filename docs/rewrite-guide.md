@@ -358,8 +358,8 @@ These were chosen by counting links in the 3,834 latest posts of your channels o
 | LinkedIn post | `linkedin.com/posts/<slug>` | the post's own text plus, for a reshare, the reshared post. **Never comments**: anyone can write a comment, and a long one used to replace the post |
 | `lnkd.in` | `lnkd.in/<code>` | resolved first, then read if the target is supported |
 | JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, `mselect.com/job/<slug>-<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
-| Workable job board | `jobs.workable.com/view/<id>/<slug>` | the page's `JobPosting` block, plus its separate `requirementsSection` (where Workable puts "N years of experience") |
-| Workable company page | `apply.workable.com/<company>/j/<shortcode>` | Workable's JSON API: title, location (+ "remote"), description, requirements, benefits. Links without the company (`apply.workable.com/j/<code>`) are skipped: the API needs it |
+| Workable job board | `jobs.workable.com/view/<id>/<slug>` | the page's `JobPosting` block, plus its separate `requirementsSection` only when the description doesn't already contain it. Its `jobLocationType` is ignored: Workable says `TELECOMMUTE` even for hybrid jobs, and a "remote" in the Location line would let a Baghdad job through |
+| Workable company page | `apply.workable.com/<company>/j/<shortcode>`, old-style `<company>.workable.com/j/<shortcode>` | Workable's JSON API: title, every place in `location` and `locations` (+ "remote"), description, requirements, benefits. Links without the company (`apply.workable.com/j/<code>`) are skipped: the API needs it |
 
 The scraped text starts with `Job title: …` and `Location: …` lines, which the filter's title and location rules understand.
 
