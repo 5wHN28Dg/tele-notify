@@ -357,13 +357,16 @@ These were chosen by counting links in the 3,834 latest posts of your channels o
 | LinkedIn job | `linkedin.com/jobs/view/<id>` | page title (it includes the location) + the `description__text` block |
 | LinkedIn post | `linkedin.com/posts/<slug>` | the post's own text plus, for a reshare, the reshared post. **Never comments**: anyone can write a comment, and a long one used to replace the post |
 | `lnkd.in` | `lnkd.in/<code>` | resolved first, then read if the target is supported |
-| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
+| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, `mselect.com/job/<slug>-<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
+| Workable job board | `jobs.workable.com/view/<id>/<slug>` | the page's `JobPosting` block, plus its separate `requirementsSection` (where Workable puts "N years of experience") |
+| Workable company page | `apply.workable.com/<company>/j/<shortcode>` | Workable's JSON API: title, location (+ "remote"), description, requirements, benefits. Links without the company (`apply.workable.com/j/<code>`) are skipped: the API needs it |
 
 The scraped text starts with `Job title: …` and `Location: …` lines, which the filter's title and location rules understand.
 
 **Gone:**
 - **Iraq Jobs Scout**: `iqjscout.com` now redirects to Yadanoo's home page, so old IJS links are dead; new posts link to Yadanoo directly.
-- **Workable and mselect**: zero links in the 3,834 recent posts, so there was no real page to test against. Adding a board back means a `BoardKind`, a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`.
+
+**Workable and mselect** came back on 2026-11-18 (issue #31) with pages saved that day. Adding a board means a `BoardKind` (or a site in the JSON-LD list), a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`. `mselect.com` without `www.` has no DNS record, so mselect links are always downloaded from `www.mselect.com`.
 
 **Why "JSON-LD only" for Yadanoo-style sites.** A Yadanoo job page also contains a city picker listing *every* city, Basra included. Reading the whole page would make every job look like a Basra job. A test checks that a Duhok job's text never contains "Basrah".
 

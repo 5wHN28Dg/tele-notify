@@ -17,12 +17,15 @@
 ## | LinkedIn job | linkedin.com/jobs/view/<id> | page `<title>` + `description__text` block |
 ## | LinkedIn post | linkedin.com/posts/<slug> | the post's own text (+ the reshared post's), never comments |
 ## | lnkd.in | lnkd.in/<code> | resolved to its target, which is then read if supported |
-## | Sites with schema.org JobPosting | yadanoo.com/job/<id>, shift-iraq.com/jobs/<id>, + `extra_job_sites` | the page's JSON-LD `JobPosting` block only |
+## | Sites with schema.org JobPosting | yadanoo.com/job/<id>, shift-iraq.com/jobs/<id>, mselect.com/job/<slug>-<id>, + `extra_job_sites` | the page's JSON-LD `JobPosting` block only |
+## | Workable job board | jobs.workable.com/view/<id>/<slug> | the page's JSON-LD `JobPosting` block (+ its `requirementsSection`) |
+## | Workable company page | apply.workable.com/<company>/j/<shortcode> | JSON API (title, location, description, requirements, benefits) |
+##
+## Bare apply.workable.com/j/<shortcode> links (no company) are skipped:
+## the API needs the company's name.
 ##
 ## Not supported any more: Iraq Jobs Scout (iqjscout.com now redirects to
-## Yadanoo's home page), Workable and mselect (no links in recent posts, so
-## no real page to test against; adding one back is a new `BoardKind`, a
-## pattern in `findJobLinks` and a branch in `extract`).
+## Yadanoo's home page).
 ##
 ## Why JSON-LD only for those sites: a Yadanoo page also contains a city
 ## picker listing *every* city, Basra included. Reading the whole page
@@ -40,12 +43,17 @@ type
     bkLinkedInPost = "LinkedIn post"
     bkShortLink = "lnkd.in short link"
     bkJobPosting = "job page (JSON-LD)"
+    bkWorkableApply = "Workable"
 
   JobLink* = object
     kind*: BoardKind
     url*: string        ## what to download (an API URL or a clean page URL)
 
-const defaultJobPostingSites* = ["yadanoo.com", "shift-iraq.com"]
+const defaultJobPostingSites* = ["yadanoo.com", "shift-iraq.com", "mselect.com"]
+
+const wwwOnlyHosts = ["mselect.com"]
+  ## Sites whose bare name has no DNS record: links are read without
+  ## "www.", so it is put back before downloading.
 
 let
   # URL characters: stop at spaces, quotes, brackets and the invisible
@@ -56,6 +64,12 @@ let
   liJob = re2(r"(?i)linkedin\.com/(?:comm/)?jobs/view/(?:[A-Za-z0-9%_-]*-)?(\d{6,})")
   liPost = re2(r"(?i)linkedin\.com/posts/([A-Za-z0-9%_-]+)")
   shortLink = re2(r"(?i)lnkd\.in/([A-Za-z0-9_-]+)")
+  # Workable: the job board (jobs.workable.com, JSON-LD in the page; the
+  # path's last part is a slug without digits, so the generic JSON-LD
+  # pattern can't see it) and company pages (apply.workable.com, a
+  # JavaScript shell: read through the API instead).
+  wkView = re2(r"(?i)jobs\.workable\.com/view/([A-Za-z0-9]{16,24})(?![A-Za-z0-9])")
+  wkApply = re2(r"(?i)apply\.workable\.com/([a-z0-9][a-z0-9_-]*)/j/([0-9a-f]{10})(?![A-Za-z0-9])")
   # Links end at the first non-ASCII character (Arabic text or punctuation
   # glued to the link, "yadanoo.com/job/55،للتقديم") or at quotes/brackets.
   anyUrl = re2(r"(?i)(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[!#-&*-;=?-Z^-~]*)?")
@@ -90,11 +104,18 @@ proc findJobLinks*(text: string, jobSites: openArray[string] = defaultJobPosting
     result.addUnique JobLink(kind: bkLinkedInPost, url: "https://www.linkedin.com/posts/" & text[m.group(0)] & "/")
   for m in text.findAll(shortLink):
     result.addUnique JobLink(kind: bkShortLink, url: "https://lnkd.in/" & text[m.group(0)])
+  for m in text.findAll(wkView):
+    # The slugless URL redirects to the full one; the ID alone is enough.
+    result.addUnique JobLink(kind: bkJobPosting, url: "https://jobs.workable.com/view/" & text[m.group(0)])
+  for m in text.findAll(wkApply):
+    result.addUnique JobLink(kind: bkWorkableApply, url: "https://apply.workable.com/api/v2/accounts/" &
+      text[m.group(0)].toLowerAscii & "/jobs/" & text[m.group(1)].toUpperAscii)
   for m in text.findAll(anyUrl):
     let start = m.boundaries.a
     if start > 0 and text[start - 1] in {'@', '.', '-', '_'} + Letters + Digits:
       continue   # part of an e-mail address or a longer host name
-    let host = text[m.group(0)].toLowerAscii
+    var host = text[m.group(0)].toLowerAscii
+    if host in wwwOnlyHosts: host = "www." & host
     for site in jobSites:
       if (host == site or host.endsWith("." & site)) and m.group(1).a >= 0:
         let path = text[m.group(1)].split({'?', '#'})[0].strip(leading = false, chars = {'/', '.', ','})
@@ -165,8 +186,24 @@ proc jobPostingFromLd(body: string): string =
       let exp = c.str("experienceRequirements", "monthsOfExperience")
       if exp != "": r.add line("Experience", exp & " months")
       r.add c.str("description").htmlFragmentToText
+      # Workable keeps the requirements ("3+ years of ...") apart.
+      let req = c.str("requirementsSection")
+      if req != "": r.add "\n" & req.htmlFragmentToText
       return r
   ""
+
+proc extractWorkableApply(body: string): string =
+  let j = parseJson(body)
+  if j.kind != JObject or j.str("title") == "": return ""
+  var places: seq[string]
+  for k in ["city", "region", "country"]:
+    let p = j.str("location", k)
+    if p != "" and p notin places: places.add p
+  if j{"remote"}.getBool(false) or j.str("workplace") == "remote": places.add "remote"
+  result = line("Job title", j.str("title")) & line("Location", places.join(", "))
+  for k in ["description", "requirements", "benefits"]:
+    let t = j.str(k).htmlFragmentToText
+    if t.strip != "": result.add t & "\n"
 
 proc extractLinkedInJob(body: string): string =
   let doc = parsePage(body)
@@ -201,6 +238,7 @@ proc extract*(kind: BoardKind, body: string): string =
     of bkLinkedInJob: extractLinkedInJob(body)
     of bkLinkedInPost: extractLinkedInPost(body)
     of bkJobPosting: jobPostingFromLd(body)
+    of bkWorkableApply: extractWorkableApply(body)
     of bkShortLink: ""
   except CatchableError:
     ""

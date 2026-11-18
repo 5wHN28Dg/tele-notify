@@ -1,5 +1,7 @@
 ## Job-board links and extractors, tested on real pages saved on
-## 2026-11-17 (tests/fixtures/, scripts and styles removed).
+## 2026-11-17 (tests/fixtures/, scripts and styles removed). Workable and
+## mselect pages were saved on 2026-11-18 (mselect_job.html keeps only the
+## page's title and JSON-LD block: the real page is 1.4 MB).
 
 import std/[unittest, os, strutils]
 import telenotify/[boards, config, classify]
@@ -18,7 +20,10 @@ suite "finding job links":
       https://www.linkedin.com/posts/husain-a-jassem_share-7466376950174011392-7b04/?utm_source=x
       https://lnkd.in/dGPh986F⁠
       https://yadanoo.com/job/4505e77354fb9161
-      https://shift-iraq.com/jobs/251f8967-5969-46b0-8184-ab4e1e0ffa24?utm_source=whatsapp""")
+      https://shift-iraq.com/jobs/251f8967-5969-46b0-8184-ab4e1e0ffa24?utm_source=whatsapp
+      https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk/hybrid-marketing-lead-in-baghdad-at-digital-zone
+      https://apply.workable.com/digital-zone/j/87323D1E12/
+      https://www.mselect.com/job/drilling-fluids-engineer-5748""")
     var urls: seq[string]
     for l in links: urls.add $l.kind & " " & l.url
     check urls == @[
@@ -29,13 +34,29 @@ suite "finding job links":
       "LinkedIn job https://www.linkedin.com/jobs/view/4490415622/",
       "LinkedIn post https://www.linkedin.com/posts/husain-a-jassem_share-7466376950174011392-7b04/",
       "lnkd.in short link https://lnkd.in/dGPh986F",
+      "job page (JSON-LD) https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk",
+      "Workable https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12",
       "job page (JSON-LD) https://yadanoo.com/job/4505e77354fb9161",
-      "job page (JSON-LD) https://shift-iraq.com/jobs/251f8967-5969-46b0-8184-ab4e1e0ffa24"]
+      "job page (JSON-LD) https://shift-iraq.com/jobs/251f8967-5969-46b0-8184-ab4e1e0ffa24",
+      "job page (JSON-LD) https://www.mselect.com/job/drilling-fluids-engineer-5748"]
 
   test "unsupported links are ignored, extra JSON-LD sites can be added":
     check findJobLinks("https://forms.gle/abc https://t.me/x/1 https://iqjscout.com/jobs/x/").len == 0
     check findJobLinks("https://careers.example.iq/job/7", @["example.iq"]).len == 1
     check findJobLinks("taeen.iq/ar/jobs?categoryId=970e5241").len == 0 # a search page, not a job
+
+  test "Workable links: bare apply links and partial IDs are skipped":
+    check findJobLinks("https://apply.workable.com/j/87323D1E12").len == 0   # no company: no API
+    check findJobLinks("https://apply.workable.com/digital-zone/").len == 0
+    check findJobLinks("https://apply.workable.com/digital-zone/j/87323D1E12FF").len == 0
+    check findJobLinks("https://jobs.workable.com/view/rBwyYa9DZC").len == 0 # too short
+    check findJobLinks("https://jobs.workable.com/search?q=basra").len == 0
+    let l = findJobLinks("Apply: apply.workable.com/Digital-Zone/j/87323d1e12")
+    check l.len == 1 and l[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
+
+  test "mselect links keep www. (mselect.com alone has no DNS record)":
+    let l = findJobLinks("mselect.com/job/drilling-fluids-engineer-5748")
+    check l.len == 1 and l[0].url == "https://www.mselect.com/job/drilling-fluids-engineer-5748"
 
 suite "reading saved pages":
   test "Khana API":
@@ -57,6 +78,37 @@ suite "reading saved pages":
 
   test "Shift (JSON-LD)":
     check "Job title:" in extract(bkJobPosting, page("shift_job.html"))
+
+  test "mselect (JSON-LD)":
+    let t = extract(bkJobPosting, page("mselect_job.html"))
+    check "Job title: Drilling Fluids Engineer" in t
+    check "Maysān" in t
+    check "5–7 years of relevant experience" in t
+
+  test "Workable job board (JSON-LD) adds the separate requirements section":
+    let t = extract(bkJobPosting, page("workable_job.html"))
+    check "Job title: Marketing Lead" in t
+    check "Location: Baghdad" in t
+    check "8–12 years in marketing" in t   # only in requirementsSection
+
+  test "only requirementsSection is appended to a JSON-LD job":
+    let ld = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "description": "<p>About us</p>", "requirementsSection": "<p>3 years</p>",
+      "benefitsSection": "<p>Free lunch</p>", "responsibilitiesSection": "<p>Sell</p>"}</script>"""
+    let t = extract(bkJobPosting, ld)
+    check "About us" in t and "3 years" in t
+    check "Free lunch" notin t and "Sell" notin t
+
+  test "Workable company page (API)":
+    let t = extract(bkWorkableApply, page("workable_apply.json"))
+    check "Job title: Marketing Lead" in t
+    check "Location: Baghdad, Baghdad Governorate, Iraq\n" in t   # hybrid, not remote
+    check "8–12 years in marketing" in t
+    check "compensation packages" in t
+    check "<p>" notin t
+    check extract(bkWorkableApply, """{"title": "X", "remote": true, "location": {"city": "Basra"}}""").startsWith(
+      "Job title: X\nLocation: Basra, remote\n")
+    check extract(bkWorkableApply, """{"title": "X", "workplace": "remote"}""") == "Job title: X\nLocation: remote\n"
 
   test "LinkedIn job: title line with the location, and the description":
     let t = extract(bkLinkedInJob, page("linkedin_job.html"))
