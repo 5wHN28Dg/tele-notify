@@ -1,7 +1,7 @@
 # UI and UX policy: the terminal screen
 
-Status: adopted 2026-11-18 by the owner, after a blind and an adversarial review. Revision under review in PR #50
-(owner's critique: owner sign-off, tab table, R13, R14, scope and loophole fixes).
+Status: adopted 2026-11-18 by the owner, after a blind and an adversarial review. Revised 2026-11-18 in PR #50
+(owner's critique: owner sign-off, tab table, R13, R14, scope and loophole fixes), approved by the owner.
 
 This policy says what the terminal screen (`tui/`, the Textual app `telenotify-tui`) must do, and how a change to it is
 checked. It is modelled on the owner's kks-explorer policy, cut down to a one-person terminal app: the method

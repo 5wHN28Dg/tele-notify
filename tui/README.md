@@ -13,7 +13,7 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 
 ### The tab table
 
-What each tab is for, used by the [UI and UX policy](../docs/UI-UX-POLICY.md) (rules R1, R2, R13 and R14). Draft: the owner approves it. Rows say what must be true; today's gaps are listed in the first audit.
+What each tab is for, used by the [UI and UX policy](../docs/UI-UX-POLICY.md) (rules R1, R2, R13 and R14). Approved by the owner on 2026-11-18. Rows say what must be true; today's gaps are listed in the first audit.
 
 | Tab | Main tasks | Must be visible at 80 × 24 (no scrolling, no focus change) | Main action: key / click |
 |---|---|---|---|
