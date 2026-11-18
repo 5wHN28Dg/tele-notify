@@ -4,12 +4,20 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 
 | Tab | Key | What it does |
 |---|---|---|
-| Dashboard | `1` | Is the bot running and connected, dry run or real; start / stop / restart it; posts judged today and this week; a 14-day chart; numbers per channel; a live feed of what it just judged; alerts; channels that blocked you or went silent |
+| Dashboard | `1` | Is the bot running and connected, dry run or real; start / stop / restart it; how many posts were judged, published, sent for review, rejected and forwarded over a period you pick, with a chart and the numbers per channel (see below); a live feed of what it just judged; alerts; channels that blocked you or went silent |
 | Review | `2` | The review queue: read each unsure post and send (`s`) or discard (`d`) it (for a moment after a post appears these keys wait, so a double tap can't decide the next post unread); `u` undoes the last choice unless the bot already sent the post; `o` opens the link, `r` shows what the filter read from links. Every choice is also saved as a test label (`~/.local/share/tele-notify-corpus/review-labels.jsonl`) |
 | Search | `3` | Search everything the bot judged and see why; re-judge a post with the current settings (`j`, or `J` to follow links); paste any post to try it (`p`) |
 | Settings | `4` | Edit keywords, places, watched chats (by name), the target chat and the bot options; test a change on the corpus before saving (`t`); save (`ctrl+s`) with a backup, then restart the bot to apply it (offered only while it runs) |
 
 `ctrl+r` refreshes the tab, `ctrl+q` quits (it asks first if Settings has unsaved changes).
+
+### Numbers over a period
+
+The Activity box on the Dashboard counts posts over a period: today, the last 7 days (the default), the last 30 days, this month, this year, all time (since the first post the bot judged; the date is shown under the box) or a custom range. Press `p` (or click the picker) to choose one; press `d` (or click `Dates…`, or pick "Custom range…") to type a start and end day as `YYYY-MM-DD`. Both days are included, whole, in local time. The per-channel table (`c`) follows the same period.
+
+"Forwarded" is what reached your channel: posts published straight away plus reviews you approved once the bot has sent them (not pending, discarded or only kept ones). A dry run forwards nothing. An album counts as one post.
+
+The chart shows one bar per day while the period fits (up to 46 days), then per week, month or year. The numbers come from the bot's state file, which keeps a row for every judged post for good (only the post text is cleared after `keep_text_days`), so they survive restarts. Over a long period on a very large state file (a million posts takes about a second) the numbers are counted again at most once a minute instead of every few seconds.
 
 ## Install and run
 

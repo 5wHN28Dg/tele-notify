@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-from textual.widgets import DataTable, Static, TabbedContent
+from textual.widgets import DataTable, Select, Static, TabbedContent
 
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
@@ -90,11 +90,13 @@ async def test_totals(paths):
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
         lines = text(app, "#totals").splitlines()
-        assert lines[1].split() == ["today", "1", "1", "1", "1"]
-        assert lines[2].split() == ["7", "days", "1", "1", "2", "1"]
+        # judged, publish, review, reject, forwarded over the last 7 days (the default)
+        assert lines[0].split() == ["judged", "publish", "review", "reject", "forwarded"]
+        assert lines[1].split() == ["4", "1", "1", "2", "1"]
+        assert "Last 7 days" in str(app.query_one("#dash-activity").border_subtitle)
 
 
-async def test_per_chat_table_and_day_selector(paths):
+async def test_per_chat_table_follows_the_period(paths):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
@@ -104,19 +106,19 @@ async def test_per_chat_table_and_day_selector(paths):
         got = {r[0]: r[1:] for r in rows(table)}
         # chat: total, publish, review, reject, forwarded (7 days by default)
         assert got == {"Basra Jobs": ["2", "1", "1", "0", "1"], "Iraq Jobs": ["2", "0", "0", "2", "0"]}
+        assert "Last 7 days" in text(app, "#chats-period")
 
-        await pilot.click("#days-1")
+        app.query_one("#period", Select).value = "today"
         await settle(app, pilot)
         got = {r[0]: r[1:] for r in rows(table)}
         assert got["Iraq Jobs"] == ["1", "0", "0", "1", "0"]  # the 3-day-old reject drops out
+        assert "Today" in text(app, "#chats-period")
 
 
 async def test_slow_reads_never_pile_up(paths, monkeypatch, fake_systemctl):
     """A state file the bot keeps locked: day changes, refreshes and service
     actions while a read is stuck wait for it instead of starting more threads."""
     import threading
-
-    from textual.widgets import RadioButton
 
     from telenotify_tui.screens import dashboard as dash
 
@@ -125,17 +127,17 @@ async def test_slow_reads_never_pile_up(paths, monkeypatch, fake_systemctl):
     guard = threading.Lock()
     running: list[int] = []
     peak = [0]
-    days_read: list[int] = []
+    days_read: list[str] = []
 
-    def slow(path, days):
+    def slow(path, choice, reuse=None):
         with guard:
-            running.append(days)
+            running.append(choice.kind)
             peak[0] = max(peak[0], len(running))
         gate.wait(10)
         with guard:
-            running.remove(days)
-        days_read.append(days)
-        return real(path, days)
+            running.remove(choice.kind)
+        days_read.append(choice.kind)
+        return real(path, choice, reuse)
 
     monkeypatch.setattr(dash, "load_snapshot", slow)
     app = TeleNotifyApp(paths, refresh_seconds=0)
@@ -148,9 +150,9 @@ async def test_slow_reads_never_pile_up(paths, monkeypatch, fake_systemctl):
             assert running, "the first read never started"
             pane = app.query_one(DashboardPane)
             await pilot.press("c")
-            app.query_one("#days-1", RadioButton).value = True
+            app.query_one("#period", Select).value = "today"
             await pilot.pause()
-            app.query_one("#days-30", RadioButton).value = True
+            app.query_one("#period", Select).value = "30d"
             await pilot.pause()
             pane.reload()
             pane._run_service("restart")
@@ -160,7 +162,7 @@ async def test_slow_reads_never_pile_up(paths, monkeypatch, fake_systemctl):
             await settle(app, pilot)
             await settle(app, pilot)
             assert peak[0] == 1
-            assert days_read[-1] == 30 and pane.snapshot is not None and pane.stat_days == 30
+            assert days_read[-1] == "30d" and pane.snapshot is not None and pane.choice.kind == "30d"
             assert len(days_read) <= 3
     finally:
         gate.set()
@@ -291,10 +293,10 @@ async def test_empty_tables(paths):
 
 def test_data_helpers(paths, now):
     with Store(paths.state) as s:
-        days = dd.per_day(s, 14, now)
-        assert len(days) == 14 and days[-1].total == 3
-        assert sum(d.total for d in days) == 4
-        week = dd.totals(s, now - 7 * 86400)
+        ps = dd.period_stats(s, dd.resolve(dd.PeriodChoice("7d"), dd.today(now)), 46)
+        assert ps.bucket == "day" and len(ps.bars) == 7 and ps.bars[-1].total == 3
+        assert sum(d.total for d in ps.bars) == 4
+        week = ps.totals
         assert (week.publish, week.review, week.reject, week.forwarded) == (1, 1, 2, 1)
         # Iraq Jobs goes silent once its newest post is older than the window
         problems = dd.chat_problems(s, now + 8 * 86400)
