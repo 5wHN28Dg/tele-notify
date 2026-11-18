@@ -264,3 +264,41 @@ suite "found on the first real run (stage 4)":
       check verdict(fg & t) == vReview
     for t in ["اولا: خبرة واسعة", "مثلا خبرة واسعة في المجال", "مشروع صغير\nخبرة واسعة", "خبرة سابقة واسعة"]:
       check verdict(ar & t) == vReview
+
+suite "corpus false publishes (Nov 2026)":
+  test "training only for current students is not published":
+    check verdict("""الاعلان عن فرصة تدريب صيفي في شركة نفطية
+شروط القبول:
+- ان يكون احد طلبة الجامعة في قسم هندسة السيطرة
+- ان يكون احد طلبة المرحلة الثانية او الثالثة
+- من سكنة محافظة البصرة""") == vReview
+    check verdict("""Summer training opportunity at an oil company in Basra
+Open to current students of electrical engineering only""") == vReview
+
+  test "training for students and graduates still publishes":
+    check verdict("""فرصة تدريب صيفي في شركة نفطية في البصرة
+للطلبة والخريجين من قسم هندسة السيطرة""") == vPublish
+
+  test "a CV posted by a job seeker is rejected":
+    # "get the job done" was the only job wording in the real one
+    check verdict("""AHMED ALI
+Basra, Iraq
+
+WHO AM I?
+I'm a cybersecurity volunteer who gets the job done.""") == vReject
+    check verdict("""ABOUT ME
+Cybersecurity volunteer in Basra. I get the job done.""") == vReject
+
+  test "a seniority word on the title line holds back a field-only match":
+    check verdict("""RSK Iraq – HSE Lead (Basra)
+We are looking for an HSE Lead to serve as our on-site authority.
+Education: Degree in Electrical Engineering, graduate preferred.""") == vReview
+
+  test "a graduate programme named like a senior title still publishes":
+    # Baker Hughes calls its graduate scheme "LEAD"
+    check verdict("""LEAD Field Engineering
+Development Program – 2027
+Location: Basra, Iraq
+Position: Field Engineer I
+- Bachelor's degree in Engineering in any discipline.
+- Graduated within the last 12 months.""") == vPublish

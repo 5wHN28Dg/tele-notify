@@ -203,14 +203,15 @@ proc mandatoryCert(lines: seq[string], cfg: Config): string =
         (flat.contains("certif") or flat.contains("شهاد") or flat.contains("licen"))
   ""
 
-proc anySeniorityOnTitleLines(lines: seq[string], cfg: Config): bool =
-  ## Stricter check used only by `publish_when_unsure`: with no positive
-  ## evidence at all, any seniority word on a title line ("Project Lead",
-  ## "Cybersecurity Specialist – experienced") is enough to hold the post back.
+proc seniorTitleLine(lines: seq[string], cfg: Config): string =
+  ## The first title line with any seniority word ("RSK Iraq – HSE Lead"),
+  ## or "". Unlike the role check, the seniority word doesn't have to be next
+  ## to one of your roles: when your role only shows up as a field in the
+  ## requirements ("Degree in Engineering"), the title is the job.
   let isTitle = titleLines(lines, cfg)
   for i, line in lines:
-    if isTitle[i] and line.flatten.contains(cfg.seniority): return true
-  false
+    if isTitle[i] and line.flatten.contains(cfg.seniority): return line.strip
+  ""
 
 # --------------------------------------------------------------- blocks
 
@@ -292,9 +293,17 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
                 # the normal text: `flatten` turns ". : ," into spaces, and the
                 # rule needs sentence boundaries
                 else: (b.lines & header.lines).join("\n").toLowerAscii.replace("-", " ").strongExperienceAsked)
+  # "ان يكون احد طلبة المرحلة الثالثة": you've graduated, so a post only for
+  # current students is held back, unless it also mentions graduates.
+  let studentsOnly = flatAll.contains(cfg.studentsOnly) and not flatAll.contains(cfg.graduateWords)
+  if senior == "" and best.kind == rkField and not flatAll.contains(cfg.programmes):
+    senior = seniorTitleLine(b.lines, cfg).short(50)
   if positive:
     if strong != "":
       result.reasons.add "but asks for '" & strong & "'"
+      result.verdict = vReview
+    elif studentsOnly:
+      result.reasons.add "but only for current students"
       result.verdict = vReview
     elif senior != "":
       # "KBR is hiring an IT Support Lead" + "IT support" again lower down
@@ -303,7 +312,7 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
     else:
       result.verdict = vPublish
   elif cfg.publishWhenUnsure and best.kind != rkField and senior == "" and strong == "" and
-      not anySeniorityOnTitleLines(b.lines, cfg):
+      not studentsOnly and seniorTitleLine(b.lines, cfg) == "":
     result.verdict = vPublish
     result.reasons.add "no sign of level either way (publish_when_unsure)"
   else:

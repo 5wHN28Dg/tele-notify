@@ -174,6 +174,29 @@ const
     "اريد اشتغل", "اريد اعمل", "اريد عمل", "ابحث عن فرصه", "راسلوني",
     "اني مهندس", "انا مهندس", "اني خريج", "انا خريج", "انا خريجه",
     "i am a fresh graduate", "i'm a fresh graduate", "my name is", "اسمي",
+    # CV section headings
+    "who am i", "about me",
+  ]
+
+  ## Wording that limits a post to people who are still studying ("ان يكون
+  ## احد طلبة المرحلة الثالثة"). Such a post is held for review unless it
+  ## also mentions graduates (`graduateWords`).
+  studentsOnlyPhrases* = [
+    "احد طلبه", "احد طلاب", "طلبه المرحله", "طلاب المرحله", "لطلاب البكالوريوس",
+    "لطلبه البكالوريوس", "current students", "currently enrolled", "students only",
+    "only for students", "enrolled students",
+  ]
+  ## Graduate schemes, often named like a senior title ("LEAD",
+  ## "Future Leaders"), so a seniority word on their title line means nothing.
+  programmeWords* = [
+    "development program", "development programme", "graduate program",
+    "graduate programme", "leadership program", "leadership programme",
+    "leaders program", "leaders programme", "trainee program", "برنامج تطوير",
+    "برنامج الخريجين", "برنامج القاده",
+  ]
+  graduateWords* = [
+    "خريج", "خريجه", "خريجين", "خريجي", "الخريجين", "والخريجين", "للخريجين",
+    "التخرج", "graduate", "graduates", "graduated", "alumni",
   ]
 
   ## Phrases only an employer writes.

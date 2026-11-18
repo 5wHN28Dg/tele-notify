@@ -537,6 +537,16 @@ Some channels post "job ad coming soon" and edit the real ad in later. When a me
 
 It reads the text with its punctuation, so "Contract No. 12. Strong experience required" isn't cancelled by the "No" of another sentence. It's a heuristic: wordings it doesn't know ("extensive oil and gas experience", "خبرة كافية") still publish, as before. The corpus numbers didn't change (it was a case the corpus didn't have); the post from the first run now goes to review.
 
+### Four false publishes from the corpus
+
+The corpus still had four posts the filter published wrongly. Each became a rule, with a test of an invented post like it:
+
+- **Training only for current students** ("ان يكون احد طلبة المرحلة الثانية او الثالثة"). You've graduated, so a post limited to students goes to review, unless it also mentions graduates ("للطلبة والخريجين" still publishes). The wordings are `studentsOnlyPhrases` and `graduateWords` in `defaults.nim`.
+- **A CV.** A 15-year-old's CV got through because "get the job done" counted as job wording and "volunteer" as entry level. CV headings ("who am i", "about me") now mark a job seeker, like "my name is" already did.
+- **"HSE Lead".** Your role only appeared as a field in the requirements ("Degree in Engineering"), so the old senior-title check, which looks for a seniority word *next to your role*, saw nothing. Now, when the match is only a field, any seniority word on a title line holds the post back. Graduate schemes are exempt: Baker Hughes calls its scheme "LEAD", and "Future Leaders Programme" is common (`programmeWords`).
+
+Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
+
 ### The switch (needs you)
 
 1. Look at `telenotify compare` after the week, and at `telenotify review --dry-run`.

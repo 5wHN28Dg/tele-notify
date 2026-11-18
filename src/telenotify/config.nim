@@ -48,6 +48,7 @@ type
     streetBefore*, streetAfter*, locationMarkers*: KeywordList
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
+    studentsOnly*, graduateWords*, programmes*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -110,6 +111,9 @@ proc parseConfig*(j: JsonNode): Config =
   result.titleMarkers = toKeywords(titleMarkers)
   result.seekerPhrases = toKeywords(seekerPhrases)
   result.employerPhrases = toKeywords(employerPhrases)
+  result.studentsOnly = toKeywords(studentsOnlyPhrases)
+  result.graduateWords = toKeywords(graduateWords)
+  result.programmes = toKeywords(programmeWords)
   result.notAPlaceAfter = toKeywords(notAPlaceAfter)
   result.jobNouns = toKeywords(jobNouns)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))
