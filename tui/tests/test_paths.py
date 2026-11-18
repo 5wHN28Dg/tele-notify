@@ -93,7 +93,7 @@ def test_tui_main_uses_the_default_config(tmp_path, monkeypatch):
     assert seen["config"] == std.resolve()
 
 
-def test_binary_on_path_wins_over_next_to_config(tmp_path, monkeypatch):
+def test_binary_next_to_config_wins_over_path(tmp_path, monkeypatch):
     from telenotify_tui.paths import find_binary
     monkeypatch.delenv("TELENOTIFY_BIN", raising=False)
     bindir = tmp_path / "bin"
@@ -102,6 +102,5 @@ def test_binary_on_path_wins_over_next_to_config(tmp_path, monkeypatch):
         p.write_text("#!/bin/sh\n")
         p.chmod(0o755)
     monkeypatch.setenv("PATH", str(bindir))
-    assert find_binary(tmp_path / "config.json") == bindir / "telenotify"
-    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    assert find_binary(tmp_path / "config.json") == tmp_path / "telenotify"
+    assert find_binary(tmp_path / "config.json") == tmp_path / "telenotify"      # a build being tried out
+    assert find_binary(tmp_path / "cfg" / "config.json") == bindir / "telenotify"  # nothing there: the installed one

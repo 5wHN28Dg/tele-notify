@@ -47,9 +47,9 @@ rm -rf "$repo/tui/build"
 rm -rf "$repo/tui/build"
 ln -sf "$lib/tui-venv/bin/telenotify-tui" "$bin/telenotify-tui"
 
-# The service only changes when the config it will use is there, so an
-# update never restarts the bot into "config not found".
-if [ -f "$cfgdir/config.json" ]; then
+# The service only changes when the config and TDLib it will use are there,
+# so an update never restarts the bot into "config not found" or "no TDLib".
+if [ -f "$cfgdir/config.json" ] && { [ -f "$lib/libtdjson.so" ] || grep -q '"tdlib_path" *: *"[^"]' "$cfgdir/config.json"; }; then
   install -m 644 "$repo/deploy/tele-notify.service" "$unitdir/tele-notify.service"
   systemctl --user daemon-reload
   if systemctl --user is-active -q tele-notify; then
@@ -57,7 +57,8 @@ if [ -f "$cfgdir/config.json" ]; then
     echo "restarted the bot"
   fi
 else
-  echo "next: put your config.json in $cfgdir/ (chmod 600) and run this script again;" >&2
+  [ -f "$cfgdir/config.json" ] || echo "next: put your config.json in $cfgdir/ (chmod 600) and run this script again;" >&2
+  [ -f "$cfgdir/config.json" ] && echo "next: no TDLib: run deploy/build-tdlib.sh, then this script again;" >&2
   echo "      the service was left as it is. A new setup then needs 'telenotify login'" >&2
   echo "      and 'systemctl --user enable --now tele-notify'." >&2
 fi

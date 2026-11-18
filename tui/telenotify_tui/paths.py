@@ -41,16 +41,15 @@ def default_config() -> Path:
 
 
 def find_binary(config: Path) -> Path | None:
-    """The telenotify program: $TELENOTIFY_BIN, $PATH (~/.local/bin after
-    deploy/install.sh), or next to the config."""
+    """The telenotify program: $TELENOTIFY_BIN, next to the config (a build
+    you're trying out in a checkout), or $PATH (~/.local/bin after
+    deploy/install.sh)."""
     env = os.environ.get("TELENOTIFY_BIN")
-    if env and Path(env).is_file() and os.access(env, os.X_OK):
-        return Path(env)
+    for c in ([Path(env)] if env else []) + [config.parent / "telenotify"]:
+        if c.is_file() and os.access(c, os.X_OK):
+            return c
     found = shutil.which("telenotify")
-    if found:
-        return Path(found)
-    c = config.parent / "telenotify"
-    return c if c.is_file() and os.access(c, os.X_OK) else None
+    return Path(found) if found else None
 
 
 def data_dir_from(cfg_path: Path, value: object) -> Path:

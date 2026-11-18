@@ -80,7 +80,7 @@ TELENOTIFY_BIDI=words .venv/bin/telenotify-tui --config:/path/to/config.json   #
 - Selecting a post with the mouse and copying it gives the text as stored (reading order, plain letters), not the drawn order. Short values in tables and headers copy as drawn.
 - Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
 
-It finds the `telenotify` program at `$TELENOTIFY_BIN`, on `$PATH` (`~/.local/bin` after `deploy/install.sh`), or next to the config. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
+It finds the `telenotify` program at `$TELENOTIFY_BIN`, next to the config (a build you're trying out), or on `$PATH` (`~/.local/bin` after `deploy/install.sh`). Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
 
 ## How it fits with the bot
 
