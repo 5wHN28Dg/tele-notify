@@ -3,7 +3,7 @@
 This document explains what was built, why it looks the way it does, and how to keep working on it, so you don't have to reverse-engineer anything. Read it top to bottom once; after that, use the headings as a reference.
 
 - **Problems report** (what was wrong with the Python version and why): [`problems-report.md`](problems-report.md)
-- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4's code is done (albums, edits, `telenotify compare`; [section 9](#9-stage-4-side-by-side-with-the-python-bot)); what's left is a week of running next to the Python bot, then the switch. See [Roadmap](#roadmap).
+- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4 is done: after a week next to the Python bot ([section 9](#9-stage-4-side-by-side-with-the-python-bot)), the Nim bot took over on 2026-11-18 and the Python bot is retired in `legacy/`. Stage 5, the terminal screen, is done too ([section 10](#10-the-terminal-screen)). See [Roadmap](#roadmap).
 
 ---
 
@@ -357,13 +357,18 @@ These were chosen by counting links in the 3,834 latest posts of your channels o
 | LinkedIn job | `linkedin.com/jobs/view/<id>` | page title (it includes the location) + the `description__text` block |
 | LinkedIn post | `linkedin.com/posts/<slug>` | the post's own text plus, for a reshare, the reshared post. **Never comments**: anyone can write a comment, and a long one used to replace the post |
 | `lnkd.in` | `lnkd.in/<code>` | resolved first, then read if the target is supported |
-| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
+| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, `mselect.com/job/<slug>-<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block. Place names lose their Latin accents and a leading "Muhafazat" (mselect writes "Muḩāfaz̧at Maysān"; the filter knows "Maysan"). mselect paths are lowercased so case variants are one link |
+| Workable job board | `jobs.workable.com/view/<id>/<slug>` | the page's `JobPosting` block, plus its separate `requirementsSection` only when the description doesn't already contain it. Its `jobLocationType` is ignored: Workable says `TELECOMMUTE` even for hybrid jobs, and a "remote" in the Location line would let a Baghdad job through |
+| Workable company page | `apply.workable.com/<company>/j/<shortcode>`, old-style `<company>.workable.com/j/<shortcode>` | Workable's JSON API: title, every place in `location` and `locations` (+ "remote", but only when the job's country is Iraq or not given: a remote job in Texas is not for us), description, requirements, benefits. Links without the company (`apply.workable.com/j/<code>`) are skipped: the API needs it. When a post has one `jobs.workable.com` link and one `apply.workable.com` link, only the API one is kept (almost always the same job, and a post's link is read only when it has just one) |
+
+Workable patterns need a link boundary before the host (start of text, a space or other non-URL character, or `//`), so `notjobs.workable.com/...` or `evil.com/?x=acme.workable.com/j/...` are not links.
 
 The scraped text starts with `Job title: …` and `Location: …` lines, which the filter's title and location rules understand.
 
 **Gone:**
 - **Iraq Jobs Scout**: `iqjscout.com` now redirects to Yadanoo's home page, so old IJS links are dead; new posts link to Yadanoo directly.
-- **Workable and mselect**: zero links in the 3,834 recent posts, so there was no real page to test against. Adding a board back means a `BoardKind`, a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`.
+
+**Workable and mselect** came back on 2026-11-18 (issue #31) with pages saved that day. Adding a board means a `BoardKind` (or a site in the JSON-LD list), a pattern in `findJobLinks`, a branch in `extract` and a saved page in `tests/fixtures/`. `mselect.com` without `www.` has no DNS record, so mselect links are always downloaded from `www.mselect.com`.
 
 **Why "JSON-LD only" for Yadanoo-style sites.** A Yadanoo job page also contains a city picker listing *every* city, Basra included. Reading the whole page would make every job look like a Basra job. A test checks that a Duhok job's text never contains "Basrah".
 
@@ -394,8 +399,8 @@ LinkedIn is the most likely to change: it shows logged-out visitors a simplified
 | 1 | Filter core + tests + eval against the corpus | ✅ done |
 | 2 | Text gathering: async OCR (fixes #30), job-board readers with saved pages as tests (fixes #34, report 4.1–4.5) | ✅ done |
 | 3 | Listener on TDLib: unread bootstrap with the real read marker, one processing queue, state and stats in SQLite, downtime alerts (#3, #16), systemd unit (#6), review queue with `telenotify review` (send / discard) | ✅ done |
-| 4 | Albums and edits; `telenotify compare`; run `telenotify run --dry-run` next to the Python bot for about a week and compare; then switch: stop the Python bot, start the Nim service, move the Python files to `legacy/` | in progress: code done, the side-by-side week next |
-| 5 | The nice CLI dashboard (#10–#15): live counts, review queue with keys, highlighted events, on top of the SQLite state that now exists. Plus `telenotify export` so review decisions become corpus labels | after 4 |
+| 4 | Albums and edits; `telenotify compare`; run `telenotify run --dry-run` next to the Python bot for about a week and compare; then switch: stop the Python bot, start the Nim service, move the Python files to `legacy/` | ✅ done (switched 2026-11-18) |
+| 5 | The nice CLI dashboard (#10–#15): live counts, review queue with keys, highlighted events, on top of the SQLite state that now exists. Review decisions become corpus labels | ✅ done (the terminal screen, `tui/`) |
 
 
 ---
@@ -461,8 +466,8 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 |---|---|
 | `processed` | every judged message with verdict, role, reasons and action |
 | `published` | what was published, for duplicate checks |
-| `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`). Those decisions are labels for the corpus: stage 5 adds an export |
-| `meta` | the heartbeat |
+| `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`, or `kept`: a match the terminal screen marked "don't send", because it already reached the channel; the bot never sends it or counts it as forwarded). Those decisions are labels for the corpus: stage 5 adds an export |
+| `meta` | the heartbeat, and which watched chats you lost access to (`chat_access:<chat id>`) |
 
 `config.json` is now only *read*. The old bot rewrote it on every forward, which could throw away your edits.
 
@@ -471,6 +476,10 @@ Open it with `sqlite3 ~/.local/share/tele-notify/state.sqlite3`. For example, `S
 ### Downtime alerts (#3, #16)
 
 Every minute the bot saves a heartbeat. At start-up, a heartbeat older than `alert_after_minutes` (default 10) means it was down. When TDLib reports the connection back after a long gap, that counts too. Either way you get a message in Saved Messages, e.g. "⚠️ tele-notify: was not running for 2h 6m (since 2026-11-18 02:17). Back now." Set `"alerts": false` to only log them.
+
+### Chats you can't read any more (#16)
+
+A channel or group that bans you (or that you leave) simply stops sending you its posts; nothing fails, so the bot used to go quiet about it. Now, for every chat in `chats`, you get an alert when this account was banned, is no longer a member, the chat can't be opened or read at all (TDLib errors such as `CHANNEL_PRIVATE` or "Chat not found"; a timeout or a lost connection doesn't count), or a basic group became a supergroup with a new id (the alert gives the id to put in `config.json`). It's checked at start-up (`getChat`, then `getSupergroup` / `getBasicGroup` for this account's member status), on TDLib's live `updateSupergroup` / `updateBasicGroup`, and whenever a backlog read fails. TDLib repeats those updates on every start, so the last state alerted per chat is kept in the `meta` table (`chat_access:<chat id>`): one alert per change, also across restarts. When you can read the chat again (a member again, or its backlog was read), the state is cleared and the log says "can read X again".
 
 ### Building TDLib and running as a service
 
@@ -537,7 +546,26 @@ Some channels post "job ad coming soon" and edit the real ad in later. When a me
 
 It reads the text with its punctuation, so "Contract No. 12. Strong experience required" isn't cancelled by the "No" of another sentence. It's a heuristic: wordings it doesn't know ("extensive oil and gas experience", "خبرة كافية") still publish, as before. The corpus numbers didn't change (it was a case the corpus didn't have); the post from the first run now goes to review.
 
-### The switch (needs you)
+### Four false publishes from the corpus
+
+The corpus still had four posts the filter published wrongly. Each became a rule, with a test of an invented post like it:
+
+- **Training only for current students** ("ان يكون احد طلبة المرحلة الثانية او الثالثة"). You've graduated, so a post limited to students goes to review, unless it also mentions graduates ("للطلبة والخريجين" still publishes). Only wording for people who *have* graduated counts: "expected to graduate in 2027" and "مشروع التخرج" are about students. "Current students are not eligible", "not open to current students" and "يستثنى الطلبة الحاليين" are the opposite and don't count. Wordings that also describe the work ("help university students with their laptops") aren't in the list. The wordings are `studentsOnlyPhrases` and `graduateWords` in `defaults.nim`.
+- **A CV.** A 15-year-old's CV got through because "get the job done" counted as job wording and "volunteer" as entry level. A line that is only a CV heading ("WHO AM I?", "Career objective:", "نبذه عني") now marks a job seeker, like "my name is" already did. Only as a line of its own: "Who am I looking for?" and "include a career objective in your CV" are employers.
+- **"HSE Lead".** Your role only appeared as a field in the requirements ("Degree in Engineering"), so the old senior-title check, which looks for a seniority word *next to your role*, saw nothing. Now, when the match is only a field, a seniority word on the **headline** (the first line) holds the post back. Only the headline: lower lines say "support the project manager", and "الوجبة الاولى" ("first batch") isn't "senior". It doesn't apply when the post explicitly welcomes fresh graduates: then the senior word on the headline is someone else's (a "Senior Talent Acquisition Partner" posting it, "مكتب المدير العام" announcing it). Graduate schemes are exempt too, when the top three lines say "development/graduate programme" or the headline itself says "Program": Baker Hughes calls its scheme "LEAD". "Part of the expansion programme" doesn't count.
+
+Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
+
+### Multi-job posts, backlog progress, retries, stats (#29, #11, #5, #13)
+
+- **Multi-job posts (#29).** The second sample in the issue (nine numbered jobs from "Iraq Jobs Foundation") wasn't split at all: your field ("هندسة كهرباء") only appeared as job 3's degree requirement, and only *title* keywords started a job block. Now a numbered item whose first line names some job ("3. Commissioning Engineer") and that mentions one of your fields is a job block too. Two smaller fixes came out of it: "• 5+ years" is a quantity, not a list number (only "🔹 1-" with a list mark counts), and the requirements of a job that isn't yours are dropped with it instead of becoming shared by every job. Job nouns also match in the plural ("Project Managers"). The sample is now rejected for the right reason: job 3 itself asks for 5+ years.
+- **Backlog progress (#11).** A progress bar doesn't suit a service whose output goes to the journal, so the bot logs `backlog: 25/187 checked` every 25 messages and once at the end.
+- **Retry chats that failed at startup (#5).** If a chat's unread messages couldn't be read at startup (no connection yet, a timeout), they used to wait for the next restart. Now such chats are tried again about every minute until it works; anything handled live meanwhile is skipped as already seen.
+- **Approved reviews count as forwarded (#13).** `telenotify stats` counted only posts the bot forwarded itself. A post you approve in `telenotify review` now counts too, once it has been sent.
+
+### The switch (done 2026-11-18)
+
+The owner approved the switch after checking the terminal screen. The last 7 days of `telenotify compare` before it: no post only the Python bot published that Nim lost (its one Python-only post was in Nim's review queue), and 3 Basra oil-sector posts for fresh graduates that only Nim found. These were the steps:
 
 1. Look at `telenotify compare` after the trial, and at `telenotify review --dry-run`.
 2. Stop the Python bot (Ctrl-C in its terminal). Don't run both for real: each would forward the same posts.
@@ -547,4 +575,31 @@ It reads the text with its punctuation, so "Contract No. 12. Strong experience r
 6. Merge the `legacy/` move (the Python files go to `legacy/`; the READMEs say the Nim bot is the one that runs).
 
 To go back: `systemctl --user disable --now tele-notify`, then start the Python bot from `legacy/` as before.
+
+## 10. The terminal screen (`tui/`, issue #10)
+
+A live screen you open from a terminal when you want it: `tui/.venv/bin/telenotify-tui --config:config.json` (add `--dry-run` for the dry run). Four tabs: **Dashboard**, **Review**, **Search** and **Settings**; `tui/README.md` lists the keys.
+
+**Why Python and Textual, next to a Nim bot.** You picked [Textual](https://github.com/Textualize/textual): it has real widgets (tables, tabs, dialogs), mouse support and good-looking defaults, and Nim has nothing close (illwill is low-level; nimwave hasn't been updated since 2023). The cost is a second language, so the line between them is kept sharp:
+
+- The **bot** does all the work and owns the state database.
+- The **screen** only reads the database, writes your review decisions (exactly as `telenotify review` does: `pending` → `to_send` or `discarded`, and only if it's still pending, so nothing is approved twice; plus `kept`, a match it must not send because it already reached the channel), edits `config.json`, and runs the `telenotify` program for anything that needs the filter (explain, re-judge, test settings on the corpus). There is only one filter, so the screen and the bot can't disagree.
+
+**What the bot shares for it** (all in `state.sqlite3`):
+
+| Where | What |
+|---|---|
+| `alerts` table | every alert also sent to Saved Messages (newest 500) |
+| `chats` table | your chats with name, kind, whether watched, and access status (#16); refreshed in the background after start-up |
+| `meta` | `mode` (real / dry-run), `started_at`, `connection` (starting, ready, connecting, stopped…) and the heartbeat `last_alive` |
+| `processed.raw_text` | the text of each post, for searching; cleared after `keep_text_days` (default 90; never in a dry run, `compare` needs it). The file is private to you (0600) |
+
+**Things the reviews caught** (each is a test now):
+
+- Text from Telegram is written by strangers. In a table cell it was read as formatting (`[/]` crashed the app), and terminal escape codes in it reached your real terminal. Everything from the database is cleaned before it's shown, and table cells are plain text.
+- The "what did the filter read" view parsed the *first* `verdict:` line, so a post containing "verdict: publish" could fake its own verdict. It now reads the last one.
+- Pressing `s` twice, or holding it, approved the next post unread. Decisions are ignored for a moment after a new post appears, and `u` undoes the last one if the bot hasn't sent it yet.
+- The screen and the bot have to agree on which database: `dry_run` in config.json and `data_dir` (`~`, relative paths, which count from config.json's folder) follow the same rules in both.
+- Arabic posts showed with their words in the wrong order: Textual draws every line left to right in stored order. The screen now shapes and reorders right-to-left text itself (`tui/telenotify_tui/rtl.py`, with `python-bidi` and `arabic-reshaper`), one wrapped line at a time so a long post's lines stay in order, and switches VTE terminals to explicit bidi mode while it runs so they don't reverse it again. kitty draws each Arabic word right to left itself but keeps words in stored order, so in kitty only the word order is changed (the `words` mode, picked by itself). `TELENOTIFY_BIDI=full|words|off` or `--bidi=` chooses; `--no-bidi` turns it off. Copying a post gives the stored text. Bidi control characters in a post are dropped, so a post can't reorder anything but its own words.
+- Saving settings makes a timestamped backup, writes atomically, keeps keys it doesn't know and your API keys, refuses values the bot couldn't read back, and only offers a restart if the bot is running.
 

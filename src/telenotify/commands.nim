@@ -33,13 +33,43 @@ proc cmdLogin*(cfg: Config) {.async.} =
     echo &"{id:>16}  {title}"
   await s.client.close()
 
+proc saveChatList(s: Session, st: State, cfg: Config, titles: Table[int64, string],
+                  l: Listener) {.async.} =
+  ## Never raises.
+  try:
+    var rows: seq[ChatRow]
+    for (id, title, kind) in await s.chatRows(timeoutMs = 10_000):
+      rows.add ChatRow(id: id, title: title, kind: kind)
+    st.saveChats(rows, cfg.chats, titles)
+  except CatchableError as e:
+    l.log "   could not save the chat list: " & e.msg.splitLines()[0]
+
+proc corpusId*(j: JsonNode): string =
+  ## A corpus line's id as text: numbers in the Saved Messages corpus,
+  ## "chat:msg" in the labels the terminal screen writes, "?" if missing.
+  let id = j{"id"}
+  if id == nil: "?"
+  elif id.kind == JString: id.getStr
+  elif id.kind == JInt: $id.getBiggestInt
+  else: $id
+
 proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   let dry = dryRunFlag or cfg.dryRun
   let st = openState(statePath(cfg, dry))
+  # for the terminal screen, at once: the last run's "stopped" / "ready" mustn't
+  # show while this one logs in (connection updates before the listener exists
+  # are dropped)
+  try:
+    st.setMeta("mode", if dry: "dry-run" else: "real")
+    st.setMeta("started_at", $getTime().toUnix)
+    st.setMeta("connection", "starting")
+  except CatchableError as e:
+    echo "   could not update the state database: ", e.msg
   var l: Listener
   var sessionLost = ""
   var titles = initTable[int64, string]()
   let watched = cfg.chats
+  var accessReady = false   # the start-up check reads the current state first
   let s = await connect(cfg, interactive = false, onUpdate =
     proc (u: JsonNode) {.closure, gcsafe.} =
       if l == nil: return
@@ -68,6 +98,13 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
               l.enqueue m
             except CatchableError: discard   # deleted meanwhile, etc.
           asyncCheck refetch()
+      of "updateSupergroup", "updateBasicGroup":
+        # banned from / left a watched channel or group (#16). TDLib sends
+        # these for every chat while starting up: until the start-up check
+        # has run (and the titles are known) they're left to it.
+        if not accessReady: return
+        let (chat, access) = parseAccessUpdate(u)
+        if chat in watched: asyncCheck l.onChatAccess(chat, access, live = true)
       of "updateConnectionState":
         l.onConnectionState(u{"state", "@type"}.getStr)
       of "updateAuthorizationState":
@@ -102,11 +139,19 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
+  l.titles = titles
+  accessReady = true
+  await l.checkWatchedChats()
   asyncCheck l.heartbeat()
   await l.bootstrap()
   if not stopRequested[]: l.log &"watching {titles.len} chats"
+  # your chats by name, for the terminal screen's settings: after the
+  # backlog, so a slow TDLib answer here never holds the bot up
+  asyncCheck saveChatList(s, st, cfg, titles, l)
   await l.worker()
   l.log "stopping"
+  try: st.setMeta("connection", "stopped")
+  except CatchableError: discard
   await s.client.close()
   st.close()
   if sessionLost != "":

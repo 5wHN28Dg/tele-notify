@@ -1,7 +1,5 @@
 <div align="center">
 
-[🇮🇶 العربية](README.ar.md)
-
 # tele-notify
 
 **Watches Telegram job channels and forwards only the posts that fit you.**
@@ -40,7 +38,7 @@ Every post gets one of three verdicts, **with the reasons**:
 Before deciding, it gathers everything there is to read:
 - the post text;
 - text in its pictures (OCR, Arabic and English);
-- the job page when the post links to exactly one job on a known job board: Khana, Taeen, Yadanoo, LinkedIn, Shift. With several links it's usually several jobs, so none is followed.
+- the job page when the post links to exactly one job on a known job board: Khana, Taeen, Yadanoo, LinkedIn, Shift, Workable, mselect. With several links it's usually several jobs, so none is followed.
 
 Posts listing several jobs are split, and each job is judged on its own.
 
@@ -97,8 +95,19 @@ What's different from the Python bot:
 - Every message is remembered (in `~/.local/share/tele-notify/state.sqlite3`), so nothing is judged or forwarded twice, even across restarts.
 - Duplicates are checked against everything published in the last 14 days, by link and by text.
 - If the bot was down or offline for more than 10 minutes, it tells you in Saved Messages when it's back.
+- If a watched channel or group bans you, you leave it, or it can't be read any more, it tells you in Saved Messages (once), since that chat's posts would otherwise just stop.
 
 To start it automatically, see [`deploy/tele-notify.service`](deploy/tele-notify.service).
+
+To watch it and manage it (dashboard, review queue, search, settings), open the terminal screen: [`tui/`](tui/README.md).
+
+![The dashboard: bot status, numbers for a chosen period and a live feed of what was judged](docs/screenshots/dashboard.png)
+
+![The review queue: unsure posts to send, discard or keep](docs/screenshots/review.png)
+
+![Search: every judged post and why it got its verdict](docs/screenshots/search.png)
+
+*Screenshots use made-up posts and chats.*
 
 ## The old Python bot
 

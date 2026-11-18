@@ -10,11 +10,11 @@
 ## | `processed` | every message judged: chat, id, verdict, role, reasons, when. Lets the bot skip messages it has already seen (restarts, the startup backlog overlapping live updates) and gives the numbers for `telenotify stats` (#12–#15) |
 ## | `published` | the text of what was published, for duplicate detection |
 ## | `reviews` | the review queue: unclear posts waiting for you to send or discard them (`telenotify review`). Your decisions double as labels for the test corpus |
-## | `meta` | small values, e.g. the last heartbeat (for downtime alerts) |
+## | `meta` | small values: the last heartbeat (downtime alerts), the watched chats you lost access to (`chat_access:<chat>`) |
 ##
 ## You can open the file with any SQLite tool (`sqlite3 state.sqlite3`).
 
-import std/[times, strutils, os]
+import std/[times, strutils, os, tables]
 import db_connector/db_sqlite
 
 type
@@ -36,6 +36,9 @@ proc openState*(path: string): State =
     # the same folder holds your Telegram login (session.nim)
     setFilePermissions(path.parentDir, {fpUserRead, fpUserWrite, fpUserExec})
   result = State(db: open(path, "", "", ""))
+  # it now keeps the text of every post judged: yours only
+  try: setFilePermissions(path, {fpUserRead, fpUserWrite})
+  except OSError: discard
   let db = result.db
   db.exec(sql"PRAGMA journal_mode=WAL")
   # `telenotify review` writes while the bot runs: wait for the other
@@ -51,13 +54,18 @@ proc openState*(path: string): State =
     reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER,
     decided_at INTEGER, UNIQUE (chat_id, msg_id))""")
   db.exec(sql"CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+  # for the terminal screen (tui/): the alerts sent to Saved Messages, and
+  # this account's chats with their names and whether they can be read
+  db.exec(sql"CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY, at INTEGER, text TEXT)")
+  db.exec(sql"""CREATE TABLE IF NOT EXISTS chats (
+    id INTEGER PRIMARY KEY, title TEXT, kind TEXT, watched INTEGER, status TEXT, updated_at INTEGER)""")
   # stage 4: what the Python bot sent to your channel during a dry run
   db.exec(sql"""CREATE TABLE IF NOT EXISTS other_bot (
     id INTEGER PRIMARY KEY, at INTEGER, msg_id INTEGER, origin_chat INTEGER,
     origin_msg INTEGER, text TEXT, UNIQUE (msg_id))""")
   # columns added in stage 4 (older state files get them here):
   #   processed.text_hash  a fingerprint of the text judged (edits)
-  #   processed.raw_text   the message text, dry run only (compare)
+  #   processed.raw_text   the message text (compare; search in the terminal screen)
   #   reviews.album_ids    every message of an album, so approving sends it all
   #   other_bot.album_id   pictures of one album count as one post
   #   processed.album_id   so a late picture of an album counts as handled
@@ -145,7 +153,9 @@ proc approvedReviews*(s: State): seq[Review] =
 
 proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"): bool =
   ## Move a review from `fromStatus` to `status`: "to_send" (you approved
-  ## it; the bot will send it), "sent" (published) or "discarded". Does
+  ## it; the bot will send it), "sent" (published), "discarded" or "kept"
+  ## (a match you don't want sent, e.g. the old bot already forwarded it;
+  ## set by the terminal screen, never sent or counted as forwarded). Does
   ## nothing and returns false if it's no longer in `fromStatus` (e.g.
   ## another `review` window already decided it), so a post is never
   ## approved, and sent, twice.
@@ -171,11 +181,13 @@ type StatRow* = object
 
 proc stats*(s: State, days: int): seq[StatRow] =
   ## Per chat over the last `days` days: how many messages got each verdict
-  ## and how many were actually forwarded (#12, #13, #15).
+  ## and how many were actually forwarded (#12, #13, #15), including posts
+  ## you approved in `telenotify review` once they've been sent.
   # An album is one post, however many pictures: count its first row only.
   for r in s.db.fastRows(sql"""SELECT chat_title,
       SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
-      SUM(action = 'forwarded' OR action = 'linked')
+      SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
+        WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent'))
       FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
         (SELECT MIN(msg_id) FROM processed q WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))
       GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):
@@ -193,7 +205,7 @@ type
   ProcessedRow* = object
     chatId*, msgId*, at*: int64
     chatTitle*, verdict*, role*, reasons*, action*: string
-    rawText*: string   ## dry run only
+    rawText*: string   ## the post's text (cleared after `keep_text_days`)
 
 proc addOtherBot*(s: State, msgId, originChat, originMsg: int64, text: string, albumId = 0'i64) =
   ## A post the other (Python) bot sent to your channel.
@@ -225,3 +237,81 @@ proc processedRow*(s: State, chat, msg: int64): (bool, ProcessedRow) =
 
 proc publishedText*(s: State, chat, msg: int64): string =
   s.db.getValue(sql"SELECT text FROM published WHERE chat_id = ? AND msg_id = ? LIMIT 1", chat, msg)
+
+# ------------------------------------------- the terminal screen (tui/)
+
+proc addAlert*(s: State, text: string) =
+  ## Keep an alert so the terminal screen can list it. Only the newest 500.
+  s.db.exec(sql"INSERT INTO alerts (at, text) VALUES (?, ?)", now(), text)
+  s.db.exec(sql"DELETE FROM alerts WHERE id <= (SELECT MAX(id) FROM alerts) - 500")
+
+proc alertTexts*(s: State, limit = 50): seq[string] =
+  ## Newest first.
+  for r in s.db.fastRows(sql"SELECT text FROM alerts ORDER BY id DESC LIMIT ?", limit):
+    result.add r[0]
+
+type ChatRow* = object
+  id*: int64
+  title*, kind*: string
+
+proc chatStatusFromMeta(s: State, id: int64): string =
+  ## The #16 access state as the chat list shows it: a public channel you
+  ## never joined ("left-public") is readable, so "ok".
+  let st = s.getMeta("chat_access:" & $id)
+  if st in ["", "left-public"]: "ok" else: st
+
+proc saveChats*(s: State, chats: seq[ChatRow], watched: seq[int64],
+                titles = initTable[int64, string]()) =
+  ## Replace the chat list (names for the terminal screen's settings). A
+  ## chat's access status comes from the "chat_access:<id>" meta value
+  ## (#16). Watched chats missing from your chat lists (a public channel
+  ## you never joined isn't in them) keep their title from `titles`.
+  s.db.exec(sql"BEGIN")
+  try:
+    s.db.exec(sql"DELETE FROM chats")
+    var seenIds: seq[int64]
+    for c in chats:
+      s.db.exec(sql"INSERT OR REPLACE INTO chats VALUES (?, ?, ?, ?, ?, ?)", c.id, c.title, c.kind,
+                (if c.id in watched: 1 else: 0), s.chatStatusFromMeta(c.id), now())
+      seenIds.add c.id
+    for w in watched:
+      if w notin seenIds:
+        let title = titles.getOrDefault(w, "")
+        # a watched chat Telegram couldn't even open has no title either
+        let st = if title == "" and s.getMeta("chat_access:" & $w) == "": "unavailable"
+                 else: s.chatStatusFromMeta(w)
+        s.db.exec(sql"INSERT OR REPLACE INTO chats VALUES (?, ?, ?, ?, ?, ?)", w, title, "", 1,
+                  st, now())
+    s.db.exec(sql"COMMIT")
+  except CatchableError:
+    try: s.db.exec(sql"ROLLBACK")
+    except CatchableError: discard        # keep the first error
+    raise
+
+proc setChatStatus*(s: State, id: int64, status: string) =
+  s.db.exec(sql"UPDATE chats SET status = ?, updated_at = ? WHERE id = ?",
+            (if status == "": "ok" else: status), now(), id)
+
+proc chatStatus*(s: State, id: int64): string =
+  s.db.getValue(sql"SELECT status FROM chats WHERE id = ?", id)
+
+proc rawTextOf*(s: State, chat, msg: int64): string =
+  ## The text a message had when it was judged ("" if not kept).
+  s.db.getValue(sql"SELECT COALESCE(raw_text, '') FROM processed WHERE chat_id = ? AND msg_id = ?", chat, msg)
+
+proc forgetOldTexts*(s: State, days: int) =
+  ## Clear the kept post text of messages judged more than `days` days ago
+  ## (verdicts and reasons stay). 0 keeps everything.
+  if days <= 0: return
+  s.db.exec(sql"UPDATE processed SET raw_text = NULL WHERE raw_text IS NOT NULL AND at < ?",
+            now() - days * 86400)
+
+proc chatTitle*(s: State, id: int64): string =
+  s.db.getValue(sql"SELECT title FROM chats WHERE id = ?", id)
+
+proc alertCount*(s: State): int =
+  parseInt(s.db.getValue(sql"SELECT COUNT(*) FROM alerts"))
+
+proc ageProcessed*(s: State, chat: int64, days: int) =
+  ## Tests: pretend a chat's messages were judged `days` days earlier.
+  s.db.exec(sql"UPDATE processed SET at = at - ? WHERE chat_id = ?", days * 86400, chat)

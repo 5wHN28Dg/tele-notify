@@ -55,3 +55,34 @@ suite "session":
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"
     check statePath(cfg, true).endsWith "state-dryrun.sqlite3"
+
+suite "chat kinds":
+  test "channel, group or private, from TDLib's chat type":
+    check chatKind(%*{"type": {"@type": "chatTypeSupergroup", "is_channel": true}}) == "channel"
+    check chatKind(%*{"type": {"@type": "chatTypeSupergroup", "is_channel": false}}) == "group"
+    check chatKind(%*{"type": {"@type": "chatTypeBasicGroup"}}) == "group"
+    check chatKind(%*{"type": {"@type": "chatTypePrivate"}}) == "private"
+    check chatKind(%*{}) == ""
+
+suite "corpus ids":
+  test "numbers, text ids, and a missing id (review)":
+    check corpusId(%*{"id": 194637}) == "194637"
+    check corpusId(%*{"id": "-1:11"}) == "-1:11"
+    check corpusId(%*{"text": "x"}) == "?"
+
+suite "config":
+  test "an empty data_dir means the default folder (review)":
+    var j2 = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j2["data_dir"] = %""
+    check parseConfig(j2).dataDir == getHomeDir() / ".local" / "share" / "tele-notify"
+
+  test "data_dir: ~ is your home, a relative path is next to config.json (review)":
+    let d = getTempDir() / "tn-cfg-paths"
+    createDir(d)
+    var j3 = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j3["data_dir"] = %"bot-state"
+    writeFile(d / "config.json", $j3)
+    check loadConfig(d / "config.json").dataDir == d / "bot-state"
+    j3["data_dir"] = %"  ~/tn-data  "
+    writeFile(d / "config.json", $j3)
+    check loadConfig(d / "config.json").dataDir == getHomeDir() / "tn-data"

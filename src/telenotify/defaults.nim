@@ -176,6 +176,71 @@ const
     "i am a fresh graduate", "i'm a fresh graduate", "my name is", "اسمي",
   ]
 
+  ## CV section headings. Only count as a line of their own ("WHO AM I?"):
+  ## inside a sentence they're an employer's ("Who am I looking for?",
+  ## "include a short career objective in your CV").
+  cvHeadings* = [
+    "who am i", "about me", "career objective", "personal information",
+    "نبذه عني", "من انا", "المعلومات الشخصيه",
+  ]
+
+  ## Wording that limits a post to people who are still studying ("ان يكون
+  ## احد طلبة المرحلة الثالثة"). Such a post is held for review unless it
+  ## also mentions graduates (`graduateWords`).
+  studentsOnlyPhrases* = [
+    "احد طلبه", "احد طلاب", "طلبه المرحله", "طلاب المرحله", "طلبه المراحل",
+    "لطلاب البكالوريوس", "لطلبه البكالوريوس", "ان يكون طالبا", "ان يكون طالب",
+    "ان تكون طالبه", "طالب في المرحله", "طالبه في المرحله", "للطلبه فقط",
+    "للطلاب فقط", "الطلبه الحاليين", "الطلاب الحاليين", "current students",
+    "currently enrolled", "students only", "only for students", "open only to students",
+    "final year students", "students in their final year",
+    # not "university students" / "undergraduates": they also describe the
+    # work ("help university students with their laptops")
+  ]
+
+  ## Graduate schemes, often named like a senior title ("LEAD",
+  ## "Future Leaders"). Only looked for near the top of the post: "we offer a
+  ## development program" further down doesn't make a senior job junior.
+  programmeWords* = [
+    "development program", "development programme", "graduate program",
+    "graduate programme", "graduate scheme", "leadership program",
+    "leadership programme", "leaders program", "leaders programme",
+    "trainee program", "trainee programme", "internship program",
+    "early careers", "برنامج تطوير", "برنامج الخريجين", "برنامج القاده",
+  ]
+  ## A bare "Program" counts only on the headline itself ("LEAD Program 2027");
+  ## lower down it's "part of the expansion programme".
+  headlineProgrammeWords* = ["program", "programme", "scheme", "برنامج"]
+
+  ## Wording that means people who have already graduated. Not "graduate"
+  ## or "التخرج" alone: "expected to graduate", "مشروع التخرج" are students.
+  graduateWords* = [
+    "خريج", "خريجه", "خريجين", "خريجي", "متخرج", "متخرجه", "متخرجين",
+    "حديث التخرج", "حديثي التخرج", "حديثه التخرج", "graduates", "graduated",
+    "fresh graduate", "fresh grads", "recent graduate", "new graduate", "alumni",
+  ]
+
+  ## An explicit welcome for fresh graduates. With one, a senior word on the
+  ## headline is someone else's ("Senior Talent Acquisition Partner at KBR"
+  ## posting it, "مكتب المدير العام" announcing it, a company called
+  ## "Expert Solutions").
+  freshGradWelcome* = [
+    "fresh graduate", "fresh graduates", "fresh grads", "recent graduates",
+    "new graduates", "no experience required", "حديث التخرج", "حديثي التخرج",
+    "حديثه التخرج", "خريجين جدد", "الخريجين الجدد", "خريج جديد",
+    "لا يشترط خبره", "لا تشترط خبره",
+  ]
+
+  ## Words that start a requirement. In a numbered item, a job noun after
+  ## one of these is part of the requirement ("2- خبرة 7 سنوات كمهندس",
+  ## "2. Minimum 5 years as a site engineer"), not another job.
+  requirementWords* = [
+    "خبره", "سنوات", "سنه", "سنين", "سنتين", "لا تقل", "لا يقل", "حاصل", "بكالوريوس",
+    "شهاده", "القدره", "تحمل", "اجاده", "معرفه", "العمل مع", "experience", "years",
+    "year", "minimum", "at least", "degree", "bachelor", "b sc", "bsc", "must", "ability",
+    "knowledge", "proficiency", "work with", "working with", "reporting to", "report to",
+  ]
+
   ## Phrases only an employer writes.
   employerPhrases* = [
     "we are hiring", "is hiring", "hiring", "we are looking for", "join our team",

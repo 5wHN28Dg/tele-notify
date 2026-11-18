@@ -108,6 +108,92 @@ suite "multi-job posts (3.8, #29)":
 1- بكالوريوس هندسة كهرباء
 2- خبرة لا تقل عن 5 سنوات""") == vReject
 
+  test "a listed job that matches only by its degree is judged alone (#29 sample 2)":
+    check verdict("""وظائف جديدة – البصرة
+1. Coordinators & Project Managers – جنوب العراق
+📍 Basra
+• 5+ سنوات خبرة في ادارة المشاريع.
+
+2. Bureau Veritas – Commissioning Engineer
+📍 Basra – On-site
+Requirements:
+• بكالوريوس هندسة كهرباء.
+• حديث التخرج.
+
+3. Technical Sales Engineer
+📍 Basrah
+• 5+ سنوات في Technical Sales.""") == vPublish
+
+  test "another job named in the plural doesn't share its requirements":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+1. Project Managers
+• 5+ سنوات خبرة.
+2. مهندس كهرباء حديث التخرج""") == vPublish
+
+  test "a job word inside a numbered requirement doesn't make it another job":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+1. Commissioning Engineer
+• بكالوريوس هندسة كهرباء.
+• 5+ سنوات خبرة، وخبرة مع EPC/Developer.""") == vReject
+
+  test "a bullet with a number before a list mark is still a list item":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+🔹 1- محاسب خبرة 5 سنوات
+🔹 2- مهندس كهرباء حديث التخرج""") == vPublish
+
+  test "requirements after a look-alike job line still count (review of #29 fix)":
+    check verdict("""مطلوب للعمل في شركة نفطية في البصرة
+1- مهندس كهرباء
+2- تحمل المسؤولية والعمل تحت الضغط
+3- خبرة لا تقل عن 10 سنوات""") == vReject
+    check verdict("""شركة نفطية في البصرة بحاجة الى مهندس حديث التخرج
+الشروط:
+1- خريج معهد فني او بكالوريوس هندسة كهرباء
+2- القدرة على تحمل المسؤولية
+3- خبرة لا تقل عن 8 سنوات في المشاريع النفطية""") == vReject
+    check verdict("""شركة في البصرة تعلن عن فرص عمل للخريجين الجدد
+1- مهندس كهرباء
+الشروط: بكالوريوس هندسة كهرباء
+2- محاسب
+خبرة سنتين
+━━━━━━
+شروط عامة لجميع الوظائف: خبرة لا تقل عن 6 سنوات""") == vReject
+    check verdict("""We are hiring in Basra - fresh graduates welcome
+1. Electrical Engineer
+2. Must work closely with site managers and technicians
+3. Minimum 10 years of experience""") == vReject
+
+  test "adversarial review of the #29 fix":
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- محاسبة خبرة 5 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- مندوبة مبيعات خبرة 5 سنوات
+3- مشرفين مواقع خبرة 10 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- مبرمجة خبرة 5 سنوات
+3- مساعدة مدير خبرة 4 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+🔸 1 محاسب خبرة 5 سنوات
+🔸 2 مهندس كهرباء حديث التخرج""") == vPublish
+    check verdict("""We are hiring - Location: Basra
+Requirements:
+1. Engineer with B.Sc. in Electrical Engineering
+2. Minimum 5 years experience as a site engineer in oil and gas
+3. Fresh graduates with internship experience are welcome to apply for the trainee track""") == vReject
+    check verdict("""مطلوب مهندس للعمل في شركة نفطية
+موقع العمل: البصرة
+الشروط:
+1- مهندس حاصل على بكالوريوس هندسة كهرباء
+2- خبرة لا تقل عن 7 سنوات كمهندس موقع""") == vReject
+
+  test "a numbered degree requirement is not a job of its own":
+    check verdict("""مطلوب مهندس كهرباء للعمل في البصرة
+1- بكالوريوس هندسة كهرباء
+2- حديث التخرج""") == vPublish
+
 suite "not a job (3.9)":
   test "job seeker":
     check verdict("""أبحث حاليًا عن فرصة عمل في البصرة، خريج هندسة كهرباء حديث التخرج""") == vReject
@@ -264,3 +350,132 @@ suite "found on the first real run (stage 4)":
       check verdict(fg & t) == vReview
     for t in ["اولا: خبرة واسعة", "مثلا خبرة واسعة في المجال", "مشروع صغير\nخبرة واسعة", "خبرة سابقة واسعة"]:
       check verdict(ar & t) == vReview
+
+suite "corpus false publishes (Nov 2026)":
+  test "training only for current students is not published":
+    check verdict("""الاعلان عن فرصة تدريب صيفي في شركة نفطية
+شروط القبول:
+- ان يكون احد طلبة الجامعة في قسم هندسة السيطرة
+- ان يكون احد طلبة المرحلة الثانية او الثالثة
+- من سكنة محافظة البصرة""") == vReview
+    check verdict("""Summer training opportunity at an oil company in Basra
+Open to current students of electrical engineering only""") == vReview
+
+  test "training for students and graduates still publishes":
+    check verdict("""فرصة تدريب صيفي في شركة نفطية في البصرة
+للطلبة والخريجين من قسم هندسة السيطرة""") == vPublish
+
+  test "a CV posted by a job seeker is rejected":
+    # "get the job done" was the only job wording in the real one
+    check verdict("""AHMED ALI
+Basra, Iraq
+
+WHO AM I?
+I'm a cybersecurity volunteer who gets the job done.""") == vReject
+    check verdict("""CAREER OBJECTIVE
+Cybersecurity volunteer in Basra. I get the job done.""") == vReject
+
+  test "an advert asking for an 'About me' paragraph is not a CV":
+    check verdict("""Internship opportunity in Basra – IT Support
+Fresh graduates welcome.
+Send your CV with a short "About me" section to hr@example.com""") == vPublish
+
+  test "a seniority word on the title line holds back a field-only match":
+    check verdict("""RSK Iraq – HSE Lead (Basra)
+We are looking for an HSE Lead to serve as our on-site authority.
+Education: Degree in Electrical Engineering, graduate preferred.""") == vReview
+
+  test "a graduate programme named like a senior title still publishes":
+    # Baker Hughes calls its graduate scheme "LEAD"
+    check verdict("""LEAD Field Engineering
+Development Program – 2027
+Location: Basra, Iraq
+Position: Field Engineer I
+- Bachelor's degree in Engineering in any discipline.
+- Graduated within the last 12 months.""") == vPublish
+
+  test "students-only: more wordings, and 'graduate' that means still studying":
+    check verdict("""فرصة تدريب صيفي في البصرة
+ان يكون طالبا في المرحلة الرابعة قسم هندسة السيطرة""") == vReview
+    check verdict("""Summer training opportunity at an oil company in Basra
+For final year students of electrical engineering.""") == vReview
+    check verdict("""Summer training opportunity at an oil company in Basra
+Open to current students of electrical engineering only, expected to graduate in 2027.""") == vReview
+    check verdict("""فرصة تدريب صيفي في البصرة
+ان يكون احد طلبة المرحلة الرابعة في قسم هندسة السيطرة
+ارفاق عنوان مشروع التخرج""") == vReview
+
+  test "students-only: graduates welcome, or students excluded, still publishes":
+    check verdict("""Summer training opportunity at an oil company in Basra
+Open to current students and fresh graduates of electrical engineering.""") == vPublish
+    check verdict("""Junior position in Basra – Electrical Engineering
+Bachelor's in Electrical Engineering, no experience required.
+Current students are not eligible.""") == vPublish
+
+  test "students-only holds back publish_when_unsure too":
+    var j = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j["publish_when_unsure"] = %true
+    let c2 = parseConfig(j)
+    check classify("""Electrical engineer wanted in Basra
+Open to current students only""", c2).verdict == vReview
+
+  test "the headline rule ignores duty lines and 'first' (الاولى)":
+    check verdict("""Graduate Trainee – Basra
+Fresh graduates welcome.
+Degree in Electrical Engineering.
+In this role you will support the project manager on site.""") == vPublish
+    check verdict("""اعلان توظيف - الوجبة الاولى
+شركة في البصرة تعلن عن حاجتها الى حديثي التخرج
+التخصص: هندسة السيطرة""") == vPublish
+
+  test "the programme exemption only counts at the top":
+    check verdict("""RSK Iraq – HSE Lead (Basra)
+We are looking for an HSE Lead to serve as our on-site authority.
+Degree in Electrical Engineering, graduate preferred.
+We offer a professional development program for all staff.""") == vReview
+    check verdict("""Baker Hughes LEAD Program 2027 – Basra
+Graduate opportunity for fresh graduates
+Location: Basra, Iraq
+Bachelor's degree in Electrical Engineering.""") == vPublish
+
+  test "adversarial review: real entry-level posts are not held back":
+    check verdict("""IT support technician wanted at our Basra campus.
+You will help university students and staff with laptops, Wi-Fi and printers.
+Apply by email.""") == vPublish
+    check verdict("""Summer internship - Electrical Engineering
+Open to final year students or those who graduated in 2025.
+Location: Basra. Apply now.""") == vPublish
+    check verdict("""Junior IT support - Basra
+Current students will not be considered; you must hold your degree already.
+Apply now.""") == vPublish
+    check verdict("""Who am I looking for?
+A junior IT support technician in Basra, no experience required.
+Apply via email.""") == vPublish
+    check verdict("""Ali Hassan - Senior Talent Acquisition Partner at KBR
+We are hiring a graduate engineer with a degree in Engineering (electrical).
+Fresh graduates welcome. Location: Basra. Apply now.""") == vPublish
+    check verdict("""اعلان صادر عن مكتب المدير العام لشركة نفط البصرة
+تعلن الشركة عن حاجتها الى خريجي هندسة كهرباء من حديثي التخرج للعمل في البصرة""") == vPublish
+    check verdict("""فرصة تدريب في البصرة
+مطلوب متدرب هندسة حاسبات
+يستثنى الطلبة الحاليين""") == vPublish
+    check verdict("""فرصة تدريب صيفي في البصرة لطلبة الجامعات والمتخرجين حديثا
+التخصص: هندسة حاسبات""") == vPublish
+    check verdict("""Junior IT support - Basra
+Applicants must have finished their degree. Not open to current students.
+Apply now.""") == vPublish
+    check verdict("""Help desk technician (Basra), entry level.
+Please include a short career objective in your CV and apply by email.""") == vPublish
+    check verdict("""Expert Solutions Iraq
+We are hiring someone with a degree in Engineering. Fresh graduates welcome. Location: Basra. Apply now.""") == vPublish
+    check verdict("""Junior IT support in Basra, apply now. Open to final year students as well as graduated engineers.""") == vPublish
+
+  test "adversarial review: senior or students-only posts still held back":
+    check verdict("""Internship - Basra. Apply now.
+Requirements: degree in Engineering (in progress); open only to students in their final year.""") == vReview
+    check verdict("""فرصة تدريب في البصرة
+مطلوب متدرب هندسة حاسبات
+للطلبة فقط""") == vReview
+    check verdict("""Lead Engineer - Basra
+Part of the Majnoon expansion programme. Apply now.
+Requirements: degree in Engineering. Probation period applies.""") == vReview

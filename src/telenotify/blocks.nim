@@ -12,12 +12,17 @@
 ##
 ## The splitting rule is deliberately simple:
 ## 1. Cut the post before every line that starts a list item ("1-", "2.",
-##    "3)", "1️⃣") and at separator lines ("━━━━", "-----"). The text before
+##    "3)", "1️⃣", "🔹 2-", "🔸 2 محاسب"; not "• 5+ years" or "• 5 سنوات", a
+##    quantity) and at separator lines ("━━━━", "-----"). The text before
 ##    the first cut is the *header*.
 ## 2. If no list piece names one of your job titles, the post is one block
 ##    (a single job, the list being its requirements).
 ## 3. Otherwise every list piece that names one of your titles starts a job
-##    block. A numbered piece without one of your titles is either
+##    block. So does a numbered piece whose first line names *some* job and
+##    that mentions one of your fields ("3. Commissioning Engineer ...
+##    بكالوريوس هندسة كهرباء"): your degree is what that job asks for. A
+##    numbered degree line ("1- بكالوريوس هندسة كهرباء") names no job, so it
+##    stays a requirement. A numbered piece without one of your titles is either
 ##    * another job, if it names *some* job ("2- محاسب", see `jobNouns`):
 ##      dropped, or
 ##    * a requirement ("2- خبرة 4 سنوات"): glued onto the job above it.
@@ -42,14 +47,34 @@ type
     isHeader*: bool       ## true when the block is the header/whole post
 
 let
-  listItem = re2(r"^\s*(?:\(?\d{1,2}\s*[-.)ـ:](?:\s|$)|\d\x{FE0F}?\x{20E3}|[\x{2776}-\x{277F}\x{2460}-\x{2473}]|[•▪◾◽🔹🔸]\s*\d)")
+  listItem = re2(r"^\s*(?:\(?\d{1,2}\s*[-.)ـ:](?:\s|$)|\d\x{FE0F}?\x{20E3}|[\x{2776}-\x{277F}\x{2460}-\x{2473}]|[•▪◾◽🔹🔸]\s*\d{1,2}(?:\s*[-.)ـ:](?:\s|$)|\s+(?!(?:years?|yrs|months?|سنه|سنوات|سنين|سنتين|اشهر|شهر)(?:\s|$)))[^\s+%\d]?)")
   separator = re2(r"^\s*[━─—_=\-*~•.·]{3,}\s*$")
 
 proc mentionsTitle(lines: seq[string], titles: KeywordList): bool =
   for l in lines:
     if l.flatten.contains(titles): return true
 
-proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
+proc namesJob(line: string, jobNouns, requirementWords: KeywordList): bool =
+  ## Does this list item's first line name a job? Only if a job noun comes
+  ## before any requirement word: "2- محاسبة خبرة 5 سنوات" is a job, "2- خبرة
+  ## 7 سنوات كمهندس" and "2. Minimum 5 years as a site engineer" aren't.
+  let flat = line.flatten
+  var noun = -1
+  for h in flat.hits(jobNouns):
+    if noun < 0 or h.start < noun: noun = h.start
+  if noun < 0: return false
+  for h in flat.hits(requirementWords):
+    if h.start < noun: return false
+  true
+
+proc isOurJob(p: seq[string], numbered: bool, titles, fields, jobNouns,
+              requirementWords: KeywordList): bool =
+  if p.mentionsTitle(titles): return true
+  numbered and fields.len > 0 and p.len > 0 and
+    p[0].namesJob(jobNouns, requirementWords) and p.mentionsTitle(fields)
+
+proc splitJobs*(normText: string, titles, jobNouns: KeywordList,
+                fields: KeywordList = @[], requirementWords: KeywordList = @[]): seq[Block] =
   ## Returns either one block (the whole post, `isHeader = true`) or a
   ## header block followed by one block per job.
   let lines = normText.splitLines
@@ -68,7 +93,7 @@ proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
   let whole = @[Block(lines: lines, isHeader: true)]
   var titledPieces = 0
   for i in 1 ..< pieces.len:
-    if numbered[i] and pieces[i].mentionsTitle(titles): inc titledPieces
+    if numbered[i] and pieces[i].isOurJob(true, titles, fields, jobNouns, requirementWords): inc titledPieces
   if titledPieces == 0:
     return whole
 
@@ -92,10 +117,12 @@ proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
   result.add Block(lines: pieces[0] & footer, isHeader: true)
   for i in 1 ..< pieces.len:
     let p = pieces[i]
-    if p.mentionsTitle(titles):
+    if p.isOurJob(numbered[i], titles, fields, jobNouns, requirementWords):
       result.add Block(lines: p)
-    elif numbered[i] and p.mentionsTitle(jobNouns):
-      discard                  # another job that isn't yours
+    elif numbered[i] and p.len > 0 and p[0].namesJob(jobNouns, requirementWords):
+      # another job that isn't yours; only its first line counts ("2- ...
+      # strong experience with EPC/Developer" is a requirement)
+      discard
     elif result.len > 1:
       result[^1].lines.add p   # a requirement, footer or continuation
     else:

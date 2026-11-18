@@ -30,11 +30,14 @@
 ## * **Edits.** A rejected post whose text is edited later ("job coming
 ##   soon" → the real ad) is judged again. Published or reviewed posts are
 ##   left alone.
+## * **Lost chats** (#16): if a watched chat bans you, you leave it, or it
+##   can't be read any more, you're told once (checked at start-up, on
+##   TDLib's live updates, and when its backlog can't be read).
 ## * **Downtime alerts** (#3, #16): a heartbeat is saved every minute; on
 ##   start-up, and when the connection comes back, a long gap is reported
 ##   to your Saved Messages.
 
-import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm]
+import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
 import config, classify, gather, fetch, telegram, state, dedup, boards
 
 type
@@ -50,9 +53,16 @@ type
     held: seq[TgMessage]          # live messages that arrived during bootstrap
     stop*: ref bool               # set to stop after the current message
     albumWaitMs*: int             # how long to wait for the rest of an album
+    progressEvery*: int           # backlog progress line every this many messages (#11)
+    backlogTotal, backlogDone: int
+    retryChats: seq[int64]        # chats whose backlog couldn't be read yet (#5)
+    retryEveryTicks*: int         # worker ticks (~0.1 s) between retries; backs off
     log*: proc (line: string) {.closure, gcsafe.}
     downSince: int64
     selfChat: int64
+    titles*: Table[int64, string]   # watched chats' titles, for alerts
+    checkingAccess: bool            # the start-up access check is running
+    accessChecked: HashSet[int64]   # chats it has looked at
 
 proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: Ocr,
                   dryRun: bool): Listener =
@@ -60,7 +70,7 @@ proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: O
            queue: initDeque[TgMessage](), stop: new bool,
            # live messages wait from the very start until the backlog is done
            # (they can arrive while chats are still being opened)
-           bootstrapping: true, albumWaitMs: 1500,
+           bootstrapping: true, albumWaitMs: 1500, progressEvery: 25, retryEveryTicks: 600,
            log: proc (line: string) {.closure, gcsafe.} =
              echo now().format("yyyy-MM-dd HH:mm:ss"), "  ", line)
 
@@ -74,12 +84,120 @@ proc duration(seconds: int64): string =
 proc alert*(l: Listener, text: string) {.async.} =
   ## Log loudly and, if alerts are on, tell you in Saved Messages.
   l.say "⚠️  " & text
+  try: l.state.addAlert(text)        # for the terminal screen
+  except CatchableError as e: l.say "   (could not record the alert: " & e.msg & ")"
   if not l.cfg.alerts: return
   try:
     if l.selfChat == 0: l.selfChat = await l.tg.selfChat()
-    await l.tg.sendText(l.selfChat, "⚠️ tele-notify: " & text)
+    # two bots (a dry run beside the real one) both alert: say which
+    await l.tg.sendText(l.selfChat, "⚠️ tele-notify" & (if l.dryRun: " [dry run]" else: "") & ": " & text)
   except CatchableError as e:
     l.say "   (could not send the alert: " & e.msg & ")"
+
+# ------------------------------------------------- lost access to a chat (#16)
+
+proc accessKey(chat: int64): string = "chat_access:" & $chat
+
+proc accessText*(chat: int64, title: string, a: ChatAccess, detail = ""): string =
+  ## The alert for a watched chat this account can't read any more.
+  case a.status
+  of "banned":
+    &"you were banned from {title}: tele-notify can't read it any more. " &
+      "Remove it from config.json, or rejoin it if you can."
+  of "left":
+    &"you're no longer a member of {title}: tele-notify may not get its posts any more. " &
+      "Rejoin it, or remove it from config.json."
+  of "upgraded":
+    &"{title} became a supergroup with a new id, {a.newChat}: tele-notify no longer gets " &
+      &"its posts. Replace {chat} with {a.newChat} in \"chats\" in config.json."
+  else:
+    &"{title} can't be read" & (if detail != "": &" ({detail})" else: "") &
+      ": tele-notify gets nothing from it any more. Remove it from config.json, or rejoin it."
+
+proc onChatAccess*(l: Listener, chat: int64, access: ChatAccess, detail = "",
+                   live = false) {.async.} =
+  ## This account's access to a chat, from a live TDLib update, the
+  ## start-up check or a failed backlog read. For a watched chat that can't
+  ## be read any more, alert once per state: TDLib repeats these updates on
+  ## every start, so the last state alerted is kept in the state database.
+  ## Never raises. `live`: from a TDLib update (not the start-up check or a read).
+  if chat notin l.cfg.chats or access.status == "": return
+  let title = if access.title != "": access.title else: l.titles.getOrDefault(chat, &"chat {chat}")
+  let key = accessKey(chat)
+  var a = access
+  var detail = detail
+  try:
+    let before = l.state.getMeta(key)
+    if a.status == "ok":
+      # Membership back. "unavailable" (the chat couldn't be read) is only
+      # cleared by actually reading it (chatReadable): a member can still
+      # get "can't access the chat".
+      if before notin ["", "unavailable"]:
+        l.state.setMeta(key, "")
+        l.state.setChatStatus(chat, "ok")
+        l.say &"✅ can read {title} again"
+      return
+    # While the start-up check runs, a live update for a chat it hasn't
+    # reached yet is skipped: the check reads the same state (and knows a
+    # public channel you never joined isn't a lost chat).
+    if live and l.checkingAccess and chat notin l.accessChecked: return
+    # A public channel (it has a username) is readable without being a
+    # member: the bot opens every watched chat. Not an alert.
+    if a.status == "left" and a.public:
+      if before == "":
+        l.state.setMeta(key, "left-public")
+        l.say &"   not a member of {title} (fine: it's public)"
+      return
+    if a.status == "left" and before == "left-public":
+      # it lost its username: private now, and this account isn't a member
+      a = ChatAccess(title: a.title, status: "unavailable")
+      detail = "it's no longer public and this account isn't a member"
+    if before == a.status: return
+    l.state.setMeta(key, a.status)   # before the await: no double alert
+    l.state.setChatStatus(chat, a.status)
+  except CatchableError as e:
+    l.say &"   could not record access to {title}: {e.msg}"
+    return
+  await l.alert(accessText(chat, title, a, detail))
+
+proc chatReadable(l: Listener, chat: int64, title: string) =
+  ## The chat's messages were just read: clear an "unavailable" state.
+  try:
+    if l.state.getMeta(accessKey(chat)) == "unavailable":
+      l.state.setMeta(accessKey(chat), "")
+      l.state.setChatStatus(chat, "ok")
+      let t = if title != "": title else: l.titles.getOrDefault(chat, &"chat {chat}")
+      l.say &"✅ can read {t} again"
+  except CatchableError as e:
+    l.say &"   could not record access to chat {chat}: {e.msg}"
+
+proc unreadFailed(l: Listener, chat: int64, e: ref CatchableError) {.async.} =
+  ## Reading a chat failed. If it can't be read any more (not just
+  ## offline), say so.
+  if isAccessError(e.msg):
+    # A known ban or removal already explains it: "unavailable" would
+    # replace it and both would alert again after every restart.
+    var known = ""
+    try: known = l.state.getMeta(accessKey(chat))
+    except CatchableError: discard
+    if known in ["banned", "left", "upgraded"]: return
+    # only TDLib's message, without the async traceback debug builds add
+    await l.onChatAccess(chat, ChatAccess(status: "unavailable"), e.msg.splitLines()[0].strip)
+
+proc checkWatchedChats*(l: Listener) {.async.} =
+  ## At start-up: is this account still a member of every watched chat?
+  l.checkingAccess = true
+  defer: l.checkingAccess = false
+  for chat in l.cfg.chats:
+    if l.stop[]: break
+    try:
+      let a = await l.tg.chatAccess(chat)
+      if a.title != "": l.titles[chat] = a.title
+      await l.onChatAccess(chat, a)
+    except CatchableError as e:
+      if isAccessError(e.msg): await l.unreadFailed(chat, e)
+      else: l.say &"   could not check access to chat {chat}: " & e.msg.splitLines()[0]
+    l.accessChecked.incl chat
 
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
@@ -192,7 +310,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   for x in group:
     try:
       l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
-                            rawText = (if l.dryRun: x.text else: ""),   # for compare
+                            rawText = x.text,   # compare; search in the terminal screen
                             albumId = x.albumId)
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
@@ -240,19 +358,33 @@ proc processQueue*(l: Listener) {.async.} =
   while l.queue.len > 0 and not l.stop[]:
     let m = l.queue.popFirst
     var group = @[m]
+    var popped = 1
     if m.albumId != 0 and not m.edited:
       # The pictures of an album arrive as separate messages, back to back.
       if l.queue.len == 0: await sleepAsync(l.albumWaitMs)
       while l.queue.len > 0 and l.queue.peekFirst.chatId == m.chatId and
           l.queue.peekFirst.albumId == m.albumId and not l.queue.peekFirst.edited:
         let x = l.queue.popFirst
+        inc popped
         if group.allIt(it.id != x.id): group.add x      # the same picture twice: once
       # Telegram wants the ids in increasing order (forwardMessages)
       group.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))
     await l.handleGroup(group)
-    if not l.dryRun:
+    l.chatReadable(m.chatId, m.chatTitle)   # a post arrived: the chat is readable
+    # Marking a message read moves Telegram's read marker past everything
+    # older: in a chat whose backlog couldn't be read yet, that backlog
+    # would be lost to the retry. Its messages are marked once it works.
+    if not l.dryRun and m.chatId notin l.retryChats:
       try: await l.tg.markRead(m.chatId, group.mapIt(it.id))
       except CatchableError as e: l.say "   could not mark read: " & e.msg
+    if l.bootstrapping and l.backlogTotal > 0:
+      # A progress bar doesn't suit a service whose output goes to the
+      # journal; a count every few messages does.
+      let before = l.backlogDone
+      l.backlogDone = min(l.backlogDone + popped, l.backlogTotal)
+      if l.backlogDone == l.backlogTotal or
+          l.backlogDone div max(l.progressEvery, 1) > before div max(l.progressEvery, 1):
+        l.say &"backlog: {l.backlogDone}/{l.backlogTotal} checked"
 
 proc bootstrap*(l: Listener) {.async.} =
   ## Handle every chat's unread messages, oldest first, then the live
@@ -263,6 +395,8 @@ proc bootstrap*(l: Listener) {.async.} =
       if l.stop[]: break
       try:
         let u = await l.tg.unread(chat)
+        # only messages actually read prove access (no unread: history isn't fetched)
+        if u.messages.len > 0: l.chatReadable(chat, u.messages[0].chatTitle)
         if u.messages.len > 0:
           l.say &"{u.messages.len} unread in {u.messages[0].chatTitle}"
         if u.cut:
@@ -270,13 +404,46 @@ proc bootstrap*(l: Listener) {.async.} =
                         "messages; only the newest were checked.")
         for m in u.messages: l.queue.addLast m
       except CatchableError as e:
-        l.say &"   could not read chat {chat}: {e.msg}"
+        l.say &"   could not read chat {chat}: {e.msg} (will try again every minute)"
+        l.retryChats.add chat
+        await l.unreadFailed(chat, e)
+    l.backlogTotal = l.queue.len
+    l.backlogDone = 0
     await l.processQueue()
   finally:
     l.bootstrapping = false
     for m in l.held: l.queue.addLast m
     l.held.setLen 0
   await l.processQueue()
+
+proc retryFailedChats*(l: Listener) {.async.} =
+  ## Read the backlog of chats that failed at startup (no connection yet, a
+  ## timeout). Without this, their unread messages waited for the next
+  ## restart. Messages already handled live meanwhile are skipped as seen.
+  var still: seq[int64]
+  for chat in l.retryChats:
+    if l.stop[]:
+      still.add chat
+      continue
+    try:
+      let u = await l.tg.unread(chat)
+      # only messages actually read prove access (no unread: history isn't fetched)
+      if u.messages.len > 0: l.chatReadable(chat, u.messages[0].chatTitle)
+      if u.messages.len > 0:
+        l.say &"{u.messages.len} unread in {u.messages[0].chatTitle} (read on retry)"
+      if u.cut:
+        await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
+                      "messages; only the newest were checked.")
+      for m in u.messages: l.queue.addLast m
+    except CatchableError as e:
+      l.say &"   could not read chat {chat} again: {e.msg}"
+      still.add chat
+      await l.unreadFailed(chat, e)
+  # a chat that keeps failing (left, banned) is tried less and less often,
+  # up to every 30 minutes
+  if still.len > 0 and still.len == l.retryChats.len:
+    l.retryEveryTicks = min(l.retryEveryTicks * 2, 18_000)
+  l.retryChats = still
 
 proc sendApproved*(l: Listener) {.async.} =
   ## Send the posts you approved in `telenotify review`. A failure puts the
@@ -308,6 +475,8 @@ proc worker*(l: Listener) {.async.} =
     if ticks mod 50 == 0 and not l.dryRun:
       try: await l.sendApproved()
       except CatchableError as e: l.say "   reviewed posts: " & e.msg
+    if ticks mod max(l.retryEveryTicks, 1) == 0 and l.retryChats.len > 0:
+      await l.retryFailedChats()   # about every minute at first
 
 proc checkDowntimeAtStart*(l: Listener) {.async.} =
   let last = l.state.getMeta("last_alive")
@@ -317,10 +486,21 @@ proc checkDowntimeAtStart*(l: Listener) {.async.} =
     let since = fromUnix(parseBiggestInt(last)).local.format("yyyy-MM-dd HH:mm")
     await l.alert(&"was not running for {duration(gap)} (since {since}). Back now.")
 
+proc forgetOldTexts*(l: Listener) =
+  ## `keep_text_days`: clear old post texts. Not in a dry run: `compare`
+  ## matches the other bot's posts by text, over any number of days.
+  if l.dryRun: return
+  try: l.state.forgetOldTexts(l.cfg.keepTextDays)
+  except CatchableError as e: l.say "   could not clear old post texts: " & e.msg
+
 proc heartbeat*(l: Listener) {.async.} =
+  var lastCleanup = 0'i64
   while not l.stop[]:
     try: l.state.setMeta("last_alive", $getTime().toUnix)
     except CatchableError as e: l.say "   heartbeat: " & e.msg
+    if getTime().toUnix - lastCleanup >= 86_400:   # at start, then daily
+      lastCleanup = getTime().toUnix
+      l.forgetOldTexts()
     for _ in 0 ..< 60:
       if l.stop[]: break
       await sleepAsync(1000)
@@ -328,6 +508,9 @@ proc heartbeat*(l: Listener) {.async.} =
 proc onConnectionState*(l: Listener, state: string) =
   ## Called with TDLib's connection state ("connectionStateReady", ...).
   let t = getTime().toUnix
+  # for the terminal screen: "ready", "updating", "connecting", ...
+  try: l.state.setMeta("connection", state.replace("connectionState", "").toLowerAscii)
+  except CatchableError: discard
   # "Updating" means connected and catching up on missed updates: not down
   if state in ["connectionStateReady", "connectionStateUpdating"]:
     if l.downSince > 0:

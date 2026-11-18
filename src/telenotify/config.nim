@@ -26,6 +26,9 @@
 ##   (your login) and `state.sqlite3`. Keep it private.
 ## * `tdlib_path`: path to `libtdjson.so` if it isn't found automatically.
 ## * `dry_run` (default false): judge and record, forward nothing.
+## * `keep_text_days` (default 90): how long the text of each judged post
+##   is kept in the state database (for searching it in the terminal
+##   screen); 0 keeps it forever. Verdicts and reasons are always kept.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
 ##
@@ -48,6 +51,8 @@ type
     streetBefore*, streetAfter*, locationMarkers*: KeywordList
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
+    studentsOnly*, graduateWords*, programmes*, headlineProgrammes*, headlineSeniority*: KeywordList
+    cvHeadings*, freshGradWelcome*, requirementWords*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -57,6 +62,7 @@ type
     dryRun*: bool              ## judge and record, but forward nothing
     alerts*: bool              ## send downtime alerts to Saved Messages
     alertAfterMinutes*: int    ## downtime shorter than this is only logged
+    keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
     apiId*: int
     apiHash*: string
     chats*: seq[int64]
@@ -110,8 +116,28 @@ proc parseConfig*(j: JsonNode): Config =
   result.titleMarkers = toKeywords(titleMarkers)
   result.seekerPhrases = toKeywords(seekerPhrases)
   result.employerPhrases = toKeywords(employerPhrases)
+  result.studentsOnly = toKeywords(studentsOnlyPhrases)
+  result.graduateWords = toKeywords(graduateWords)
+  result.programmes = toKeywords(programmeWords)
+  result.headlineProgrammes = toKeywords(headlineProgrammeWords)
+  result.cvHeadings = toKeywords(cvHeadings)
+  result.freshGradWelcome = toKeywords(freshGradWelcome)
+  # "الوجبه الاولي" / "المرحله الاولي": on a headline, "first" is rarely "senior"
+  var headline: seq[string]
+  for w in @seniorityWords & j.strings("extra_seniority"):
+    if w notin ["اول", "اولي"]: headline.add w
+  result.headlineSeniority = toKeywords(headline, strict = true)
   result.notAPlaceAfter = toKeywords(notAPlaceAfter)
-  result.jobNouns = toKeywords(jobNouns)
+  # plurals too: "1. Coordinators & Project Managers" is another job, not a
+  # requirement shared by every job in the post
+  var nouns = @jobNouns
+  for w in jobNouns:
+    if w.len > 2 and w[^1] in {'a'..'z'} and not w.endsWith("s"): nouns.add w & "s"
+  # not whole words: Arabic feminine and plural forms ("محاسبه", "مشرفين")
+  # must count too. blocks.nim only trusts a job noun that comes before any
+  # requirement word, so "تحمل المسؤوليه" or "خبره كمهندس" aren't jobs.
+  result.jobNouns = toKeywords(nouns)
+  result.requirementWords = toKeywords(requirementWords)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))
   result.jobSignals = toKeywords(@jobSignals & j.strings("extra_job_signals"))
   result.otherPlaces = toKeywords(@otherPlaces & j.strings("extra_other_places"), strict = true)
@@ -126,11 +152,15 @@ proc parseConfig*(j: JsonNode): Config =
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
   result.extraJobSites = j.strings("extra_job_sites")
 
-  result.dataDir = j{"data_dir"}.getStr(getHomeDir() / ".local" / "share" / "tele-notify")
+  # "" means the default too (a blank field in the terminal screen's settings)
+  result.dataDir = j{"data_dir"}.getStr("").strip.expandTilde
+  if result.dataDir == "":
+    result.dataDir = getHomeDir() / ".local" / "share" / "tele-notify"
   result.tdlibPath = j{"tdlib_path"}.getStr("")
   result.dryRun = j{"dry_run"}.getBool(false)
   result.alerts = j{"alerts"}.getBool(true)
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
+  result.keepTextDays = j{"keep_text_days"}.getInt(90)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)
@@ -147,4 +177,8 @@ proc loadConfig*(path: string): Config =
              except IOError as e: raise newException(ConfigError, "cannot read " & path & ": " & e.msg)
   let j = try: parseJson(text)
           except JsonParsingError as e: raise newException(ConfigError, path & " is not valid JSON: " & e.msg)
-  parseConfig(j)
+  result = parseConfig(j)
+  # a relative data_dir is next to config.json, whatever folder the bot
+  # (or the terminal screen) was started from
+  if not result.dataDir.isAbsolute:
+    result.dataDir = absolutePath(path).parentDir / result.dataDir

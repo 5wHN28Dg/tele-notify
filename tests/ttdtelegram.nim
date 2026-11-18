@@ -10,6 +10,7 @@ var history: seq[int64]          # message ids in the chat, oldest first
 var lastRead = 0'i64
 var forwardWorks = true
 var partly = false             # only the first message of an album goes out
+var memberStatus = "chatMemberStatusMember"   # this account in the chat (#16)
 
 proc page(fromId: int64, limit: int): JsonNode =
   ## TDLib's getChatHistory with offset 0: newest first, starting *at*
@@ -30,7 +31,10 @@ proc fakeSend(id: cint, req: cstring) {.cdecl, gcsafe.} = {.cast(gcsafe).}:
   case r{"@type"}.getStr
   of "getChat":
     answer = %*{"@type": "chat", "id": -1, "title": "Jobs", "last_read_inbox_message_id": lastRead,
-                "unread_count": history.filterIt(it > lastRead).len}
+                "unread_count": history.filterIt(it > lastRead).len,
+                "type": {"@type": "chatTypeSupergroup", "supergroup_id": 1, "is_channel": true}}
+  of "getSupergroup":
+    answer = %*{"@type": "supergroup", "id": r["supergroup_id"], "status": {"@type": memberStatus}}
   of "getChatHistory":
     answer = %*{"@type": "messages", "messages": page(r["from_message_id"].getBiggestInt,
                                                       r["limit"].getInt)}
@@ -79,3 +83,11 @@ suite "tdTelegram":
     check not waitFor tg.forward(-9, -1, @[5'i64])
     partly = true                                            # one picture failed:
     check waitFor tg.forward(-9, -1, @[5'i64, 6, 7])         # it's in the channel, no link too
+
+  test "chatAccess: a channel's title and whether you're still a member (#16)":
+    var a = waitFor tg.chatAccess(-1)
+    check a.title == "Jobs" and a.status == "ok"
+    memberStatus = "chatMemberStatusBanned"
+    a = waitFor tg.chatAccess(-1)
+    check a.status == "banned"
+    memberStatus = "chatMemberStatusMember"

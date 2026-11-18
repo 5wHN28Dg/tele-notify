@@ -36,3 +36,8 @@ corpus/
 !tests/fixtures/*.jpeg
 # TDLib build output (deploy/build-tdlib.sh)
 /lib/
+*.egg-info/
+.pytest_cache/
+# config backups made by the settings screen (they hold the secrets)
+config.json.bak-*
+*.bak-*
