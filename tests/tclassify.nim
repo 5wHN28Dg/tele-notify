@@ -286,8 +286,13 @@ Basra, Iraq
 
 WHO AM I?
 I'm a cybersecurity volunteer who gets the job done.""") == vReject
-    check verdict("""ABOUT ME
+    check verdict("""CAREER OBJECTIVE
 Cybersecurity volunteer in Basra. I get the job done.""") == vReject
+
+  test "an advert asking for an 'About me' paragraph is not a CV":
+    check verdict("""Internship opportunity in Basra – IT Support
+Fresh graduates welcome.
+Send your CV with a short "About me" section to hr@example.com""") == vPublish
 
   test "a seniority word on the title line holds back a field-only match":
     check verdict("""RSK Iraq – HSE Lead (Basra)
@@ -302,3 +307,47 @@ Location: Basra, Iraq
 Position: Field Engineer I
 - Bachelor's degree in Engineering in any discipline.
 - Graduated within the last 12 months.""") == vPublish
+
+  test "students-only: more wordings, and 'graduate' that means still studying":
+    check verdict("""فرصة تدريب صيفي في البصرة
+ان يكون طالبا في المرحلة الرابعة قسم هندسة السيطرة""") == vReview
+    check verdict("""Summer training opportunity at an oil company in Basra
+For final year students of electrical engineering.""") == vReview
+    check verdict("""Summer training opportunity at an oil company in Basra
+Open to current students of electrical engineering only, expected to graduate in 2027.""") == vReview
+    check verdict("""فرصة تدريب صيفي في البصرة
+ان يكون احد طلبة المرحلة الرابعة في قسم هندسة السيطرة
+ارفاق عنوان مشروع التخرج""") == vReview
+
+  test "students-only: graduates welcome, or students excluded, still publishes":
+    check verdict("""Summer training opportunity at an oil company in Basra
+Open to current students and fresh graduates of electrical engineering.""") == vPublish
+    check verdict("""Junior position in Basra – Electrical Engineering
+Bachelor's in Electrical Engineering, no experience required.
+Current students are not eligible.""") == vPublish
+
+  test "students-only holds back publish_when_unsure too":
+    var j = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j["publish_when_unsure"] = %true
+    let c2 = parseConfig(j)
+    check classify("""Electrical engineer wanted in Basra
+Open to current students only""", c2).verdict == vReview
+
+  test "the headline rule ignores duty lines and 'first' (الاولى)":
+    check verdict("""Graduate Trainee – Basra
+Fresh graduates welcome.
+Degree in Electrical Engineering.
+In this role you will support the project manager on site.""") == vPublish
+    check verdict("""اعلان توظيف - الوجبة الاولى
+شركة في البصرة تعلن عن حاجتها الى حديثي التخرج
+التخصص: هندسة السيطرة""") == vPublish
+
+  test "the programme exemption only counts at the top":
+    check verdict("""RSK Iraq – HSE Lead (Basra)
+We are looking for an HSE Lead to serve as our on-site authority.
+Degree in Electrical Engineering, fresh graduate welcome.
+We offer a professional development program for all staff.""") == vReview
+    check verdict("""Baker Hughes LEAD Program 2027 – Basra
+Graduate opportunity for fresh graduates
+Location: Basra, Iraq
+Bachelor's degree in Electrical Engineering.""") == vPublish
