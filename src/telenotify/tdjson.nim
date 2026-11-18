@@ -31,7 +31,9 @@ type
   TdLibError* = object of CatchableError
 
 proc candidates(configured: string): seq[string] =
-  if configured != "": result.add configured
+  # A path you set is the only one tried: silently loading another copy
+  # would hide the mistake (and run a TDLib you didn't choose).
+  if configured != "": return @[configured]
   result.add getAppDir() / "lib" / "libtdjson.so"
   result.add getAppDir() / ".." / "lib" / "libtdjson.so"
   result.add "libtdjson.so"

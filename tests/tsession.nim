@@ -1,6 +1,6 @@
 ## Logging in against a fake libtdjson, and where state is kept.
 
-import std/[unittest, asyncdispatch, json, deques, os, strutils]
+import std/[unittest, asyncdispatch, json, deques, os, strutils, unicode]
 import telenotify/[session, tdjson, config, commands]
 
 var outbox = initDeque[string]()
@@ -46,6 +46,11 @@ suite "session":
 
   test "control characters are removed before printing a post":
     check printable("a\e]0;pwned\a\e[2Jb\nc\td\u009bé ع") == "a]0;pwned[2Jb\nc\tdé ع"
+
+  test "stats columns count letters, not bytes":
+    check fitColumn("وظائف العراق للشباب والبنات", 10).runeLen == 10
+    check fitColumn("وظائف العراق للشباب والبنات", 10).validateUtf8 == -1
+    check fitColumn("Jobs", 6) == "Jobs  "
 
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"

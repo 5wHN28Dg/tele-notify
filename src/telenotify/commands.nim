@@ -141,14 +141,21 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
     else: echo &"\n{approved} approved: the running bot sends them within seconds (or when it next starts)."
 
+proc fitColumn*(s: string, width: int): string =
+  ## `s` cut or padded to `width` characters (not bytes: channel names are
+  ## often Arabic, and cutting bytes breaks a letter in half).
+  let r = s.toRunes
+  result = if r.len > width: $r[0 ..< width - 1] & "…" else: s
+  result.add " ".repeat(max(0, width - result.runeLen))
+
 proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
   let st = openState(statePath(cfg, dryRun))
   let rows = st.stats(days)
   echo &"Last {days} days                                  publish  review  reject  forwarded"
   var tot: array[4, int]
   for r in rows:
-    let name = (if r.chat.len > 40: r.chat[0 ..< 40] else: r.chat)
-    echo &"{name:<44}{r.verdicts[0]:>9}{r.verdicts[1]:>8}{r.verdicts[2]:>8}{r.forwarded:>11}"
+    let name = r.chat.printable.fitColumn(44)
+    echo &"{name}{r.verdicts[0]:>9}{r.verdicts[1]:>8}{r.verdicts[2]:>8}{r.forwarded:>11}"
     for i in 0 .. 2: tot[i] += r.verdicts[i]
     tot[3] += r.forwarded
   echo &"{\"total\":<44}{tot[0]:>9}{tot[1]:>8}{tot[2]:>8}{tot[3]:>11}"

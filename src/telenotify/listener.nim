@@ -238,7 +238,8 @@ proc heartbeat*(l: Listener) {.async.} =
 proc onConnectionState*(l: Listener, state: string) =
   ## Called with TDLib's connection state ("connectionStateReady", ...).
   let t = getTime().toUnix
-  if state == "connectionStateReady":
+  # "Updating" means connected and catching up on missed updates: not down
+  if state in ["connectionStateReady", "connectionStateUpdating"]:
     if l.downSince > 0:
       let gap = t - l.downSince
       if gap > l.cfg.alertAfterMinutes * 60:

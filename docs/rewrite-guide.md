@@ -477,6 +477,12 @@ Every minute the bot saves a heartbeat. At start-up, a heartbeat older than `ale
 - `deploy/build-tdlib.sh` (shell, because it only drives cmake for a C++ library) builds `lib/libtdjson.so`. Expect about 4 GB of RAM per parallel job (`JOBS=2` by default) and 20–40 minutes. It builds a fixed TDLib commit, the one this code was tested with, because TDLib renames fields from time to time. To move to a newer TDLib, change `TD_REF` in the script and run the tests and a dry run. It builds `gperf` from GNU's source if it's missing, so no system install is needed beyond a compiler, cmake, and the OpenSSL and zlib headers (already on your machine).
 - `deploy/tele-notify.service` is a systemd **user** unit (no sudo) with `Restart=always`. The comments at its top say how to install it.
 
+### First run on your account (2026-11-18, dry run)
+
+187 unread messages in 18 of the 40 watched chats, judged in under 2 minutes: 2 would have been published, 4 went to review, 181 were rejected, no errors, and the stop was clean. Things it showed, all fixed before merging: TDLib's "connection Updating" state was logged as a lost connection, TDLib printed harmless internal errors (now silenced), and `stats` cut Arabic channel names in the middle of a letter.
+
+One of the 2 publishes was wrong: an expatriate Electrical QA/QC job asking for "extensive experience" (خبرة واسعة). The channel starts every post with "#حديثي_التخرج واصحاب الخبرة" (fresh graduates *and* experienced), and the filter took that as an entry-level sign. That's a filter change, so it goes into stage 4 with a corpus check.
+
 ### Not done yet
 
 - **The nice dashboard (#10).** `review` and `stats` are plain text for now. The data the dashboard needs is all in SQLite already.

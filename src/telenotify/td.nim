@@ -32,12 +32,15 @@ type
     stopped*: bool
 
 proc setLogLevel*(lib: TdLib, level: int) =
-  ## TDLib logs a lot to stderr by default; 1 = errors only.
+  ## TDLib logs a lot to stderr by default. Even level 1 (errors) prints
+  ## internal hiccups it recovers from by itself (seen on the first real
+  ## run), so we use 0: only fatal errors. Errors that matter to us come
+  ## back as answers to our requests anyway.
   discard lib.execute(cstring($(%*{"@type": "setLogVerbosityLevel",
                                     "new_verbosity_level": level})))
 
 proc newTdClient*(lib: TdLib): TdClient =
-  lib.setLogLevel(1)
+  lib.setLogLevel(0)
   result = TdClient(lib: lib, id: lib.createClientId())
   # TDLib only starts talking once it has received a first request.
   lib.send(result.id, cstring($(%*{"@type": "getOption", "name": "version", "@extra": "wake-up"})))

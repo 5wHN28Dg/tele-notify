@@ -143,6 +143,11 @@ suite "listener":
     st.setMeta("last_alive", $(getTime().toUnix - 3 * 3600))
     waitFor l.checkDowntimeAtStart()
     check f.texts.len == 1 and f.texts[0][0] == 42 and "was not running for 3h" in f.texts[0][1]
+    var lines: seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines.add line
+    l.onConnectionState("connectionStateUpdating")   # connected, catching up: fine
+    check lines.len == 0
     l.onConnectionState("connectionStateWaitingForNetwork")
     l.onConnectionState("connectionStateReady")      # back at once: only logged
     waitFor sleepAsync(50)
