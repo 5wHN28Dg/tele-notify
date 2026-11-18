@@ -85,7 +85,8 @@ proc alert*(l: Listener, text: string) {.async.} =
   if not l.cfg.alerts: return
   try:
     if l.selfChat == 0: l.selfChat = await l.tg.selfChat()
-    await l.tg.sendText(l.selfChat, "⚠️ tele-notify: " & text)
+    # two bots (a dry run beside the real one) both alert: say which
+    await l.tg.sendText(l.selfChat, "⚠️ tele-notify" & (if l.dryRun: " [dry run]" else: "") & ": " & text)
   except CatchableError as e:
     l.say "   (could not send the alert: " & e.msg & ")"
 
@@ -109,7 +110,8 @@ proc accessText*(chat: int64, title: string, a: ChatAccess, detail = ""): string
     &"{title} can't be read" & (if detail != "": &" ({detail})" else: "") &
       ": tele-notify gets nothing from it any more. Remove it from config.json, or rejoin it."
 
-proc onChatAccess*(l: Listener, chat: int64, a: ChatAccess, detail = "") {.async.} =
+proc onChatAccess*(l: Listener, chat: int64, a: ChatAccess, detail = "",
+                   atStartup = false) {.async.} =
   ## This account's access to a chat, from a live TDLib update, the
   ## start-up check or a failed backlog read. For a watched chat that can't
   ## be read any more, alert once per state: TDLib repeats these updates on
@@ -129,6 +131,13 @@ proc onChatAccess*(l: Listener, chat: int64, a: ChatAccess, detail = "") {.async
         l.say &"✅ can read {title} again"
       return
     if before == a.status: return
+    # A watched public channel the account never joined reads as "left" at
+    # start-up, but the bot still gets its posts (it opens every watched
+    # chat). Only a live "left" (you just left, or were removed) alerts.
+    if a.status == "left" and atStartup and before == "":
+      l.state.setMeta(key, "left")
+      l.say &"   not a member of {title} (fine for a public channel)"
+      return
     l.state.setMeta(key, a.status)   # before the await: no double alert
   except CatchableError as e:
     l.say &"   could not record access to {title}: {e.msg}"
@@ -149,6 +158,12 @@ proc unreadFailed(l: Listener, chat: int64, e: ref CatchableError) {.async.} =
   ## Reading a chat failed. If it can't be read any more (not just
   ## offline), say so.
   if isAccessError(e.msg):
+    # A known ban or removal already explains it: "unavailable" would
+    # replace it and both would alert again after every restart.
+    var known = ""
+    try: known = l.state.getMeta(accessKey(chat))
+    except CatchableError: discard
+    if known in ["banned", "left", "upgraded"]: return
     # only TDLib's message, without the async traceback debug builds add
     await l.onChatAccess(chat, ChatAccess(status: "unavailable"), e.msg.splitLines()[0].strip)
 
@@ -159,7 +174,7 @@ proc checkWatchedChats*(l: Listener) {.async.} =
     try:
       let a = await l.tg.chatAccess(chat)
       if a.title != "": l.titles[chat] = a.title
-      await l.onChatAccess(chat, a)
+      await l.onChatAccess(chat, a, atStartup = true)
     except CatchableError as e:
       if isAccessError(e.msg): await l.unreadFailed(chat, e)
       else: l.say &"   could not check access to chat {chat}: " & e.msg.splitLines()[0]
@@ -359,7 +374,8 @@ proc bootstrap*(l: Listener) {.async.} =
       if l.stop[]: break
       try:
         let u = await l.tg.unread(chat)
-        l.chatReadable(chat, (if u.messages.len > 0: u.messages[0].chatTitle else: ""))
+        # only messages actually read prove access (no unread: history isn't fetched)
+        if u.messages.len > 0: l.chatReadable(chat, u.messages[0].chatTitle)
         if u.messages.len > 0:
           l.say &"{u.messages.len} unread in {u.messages[0].chatTitle}"
         if u.cut:
@@ -390,7 +406,8 @@ proc retryFailedChats*(l: Listener) {.async.} =
       continue
     try:
       let u = await l.tg.unread(chat)
-      l.chatReadable(chat, (if u.messages.len > 0: u.messages[0].chatTitle else: ""))
+      # only messages actually read prove access (no unread: history isn't fetched)
+      if u.messages.len > 0: l.chatReadable(chat, u.messages[0].chatTitle)
       if u.messages.len > 0:
         l.say &"{u.messages.len} unread in {u.messages[0].chatTitle} (read on retry)"
       if u.cut:
