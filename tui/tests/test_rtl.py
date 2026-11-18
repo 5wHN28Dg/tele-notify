@@ -8,10 +8,11 @@ import io
 import json
 import os
 import pty
-import re
 import select
+import shutil
 import signal
 import sqlite3
+import subprocess
 import sys
 import time
 import unicodedata
@@ -20,6 +21,7 @@ import arabic_reshaper
 import pytest
 from bidi import get_display
 from conftest import REPO, SCHEMA, fill
+from rich.cells import cell_len
 from textual.geometry import Region
 from textual.widgets import Static
 
@@ -368,7 +370,7 @@ def test_emoji_sequences_stay_whole():
 
 
 def test_combining_marks_stay_on_their_letter():
-    for word in ("מִשְׁפָּט", "مُطَوِّر", "بِسْمِ الرَّحِيمِۖ"):
+    for word in ("מ\u05b4ש\u05b0\u05c1פ\u05b8\u05bcט", "م\u064fط\u064eو\u0650\u0651ر", "ب\u0650س\u0652م\u0650 الر\u064e\u0651ح\u0650يم\u0650\u06d6"):
         for m in ("full", "words"):
             rtl.set_mode(m)
             shown = rtl.visual(word)
@@ -377,7 +379,7 @@ def test_combining_marks_stay_on_their_letter():
                 if unicodedata.combining(ch):        # a mark follows its letter (or another mark)
                     assert unicodedata.combining(shown[i - 1]) or unicodedata.category(shown[i - 1])[0] == "L"
     rtl.set_mode("full")
-    assert "ُ" in rtl.visual("مُطَوِّر")              # harakat are kept, not deleted
+    assert "\u064f" in rtl.visual("م\u064fط\u064eو\u0650\u0651ر")              # harakat are kept, not deleted
 
 
 def test_levels_come_from_the_whole_paragraph():
@@ -412,24 +414,34 @@ def test_unicode_line_and_paragraph_separators_break_lines():
 # ------------------------------------------------------------------- kitty: words
 
 def kitty_shows(sent: str) -> str:
-    """What kitty draws for a line of cells: each run of non-space cells
-    shaped on its own; a run whose first letter is from a right-to-left
-    script is drawn reversed (by grapheme cluster) with its brackets
-    mirrored; spaces stay where they are. This is what kitty 0.47 does
-    (kitty/fonts.c: render_line splits runs at blank cells, load_hb_buffer
-    lets HarfBuzz guess the direction; checked against kitty's own renderer
-    with `kitty +runpy` and kitty.fonts.render.render_string)."""
-    out = []
-    for word in re.split("( )", sent):
-        if rtl._kitty_rtl(word):
-            clusters = [word[a:b] for a, b in rtl._clusters(word, 0, len(word))]
-            out.append("".join(rtl._mirror(c) for c in reversed(clusters)))
+    """What kitty draws for a line of cells. kitty shapes each run of cells
+    on its own and a run ends at a blank (space) cell and wherever the font
+    changes, as it does for an emoji, drawn from an emoji font (kitty/fonts.c:
+    render_line). load_hb_buffer lets HarfBuzz guess a run's direction from
+    its first character whose script isn't Common: a right-to-left run is
+    drawn reversed by grapheme cluster with its brackets mirrored; others
+    as sent. Checked against kitty 0.47's own renderer (`kitty +runpy`,
+    kitty.fonts.render.render_string), see test_kitty_renderer_agrees."""
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        text = "".join(run)
+        out.append("".join(rtl._mirror(c) for c in reversed(run)) if rtl._kitty_rtl(text) else text)
+        run.clear()
+
+    for a, b in rtl._clusters(sent):
+        c = sent[a:b]
+        if c == " " or rtl._is_emoji(c):
+            flush()
+            out.append(c)
         else:
-            out.append(word)
+            run.append(c)
+    flush()
     return "".join(out)
 
 
-@pytest.mark.parametrize("post", [
+KITTY_POSTS = [
     "كيف حالك",
     "خبرة 15 سنوات in Python",
     "Python developer مطلوب في البصرة",
@@ -440,15 +452,77 @@ def kitty_shows(sent: str) -> str:
     "email: a@b.com للتواصل",
     "مرحبا. كيف الحال؟",
     "٣ سنوات 50% خبرة",
-])
+    # a word whose parts end up apart on screen (the adversarial review)
+    "مطلوب (Senior Developer) فورا\u064b",
+    "مطلوب (Full Stack) للعمل",
+    "مطور (React Native) في بغداد",
+    "شركة (ABC Company Ltd) تعلن",
+    "مطلوب للعمل في Google, Inc. فورا",
+    "مطلوب \"Team Lead\" للعمل",
+    "مطلوب [Senior Dev] حالا",
+    "Python developer (عن بعد) مطلوب",
+    "#Python_مطور مطلوب",
+    # emoji: kitty ends a run there
+    "🔥مطلوب محاسب",
+    "✅مطلوب محاسب",
+    "📍بغداد - الكرادة",
+    "مطلوب🔥 فورا",
+    "العنوان بغداد📍",
+    "وظيفة 👨\u200d💻 في بغداد",
+]
+
+
+@pytest.mark.parametrize("post", KITTY_POSTS)
 def test_words_mode_shows_in_kitty_what_bidi_would(post):
     """Sent in the words mode and drawn the way kitty draws, a line reads
-    as the Unicode bidi algorithm orders it (python-bidi's get_display),
-    with the letters left for kitty to join."""
+    as the full bidi order (no shaping), with the letters left for kitty to
+    join."""
     rtl.set_mode("words")
     sent = rtl.visual(post)
-    assert not any(0xfb50 <= ord(c) <= 0xfeff for c in sent)           # nothing reshaped: kitty joins letters
-    assert kitty_shows(sent) == get_display(post)
+    want = rtl.layout(rtl.safe(post), None, "order")[0].text
+    # (letters kitty draws left to right are joined here, as presentation forms: compare the letters)
+    assert unicodedata.normalize("NFKC", kitty_shows(sent)) == want, (sent, want)
+    if not set(post) & set("()[]") and all(ord(c) < 0x2000 for c in post):
+        assert want == get_display(post)                              # and that is python-bidi's order
+
+
+@pytest.mark.skipif(shutil.which("kitty") is None, reason="kitty isn't installed")
+def test_kitty_renderer_agrees(tmp_path):
+    """kitty's own renderer (no window: kitty.fonts.render.render_string, in
+    kitty's Python) draws a line the way kitty_shows says: each run on its
+    own, split at spaces and emoji, so the cells of a whole line are the
+    cells of its runs drawn one by one."""
+    rtl.set_mode("words")
+    lines = [rtl.visual(p) for p in KITTY_POSTS]
+    script = tmp_path / "probe.py"
+    script.write_text(
+        "import json, sys\n"
+        "from kitty.fonts.render import render_string\n"
+        "def cells(s): return [bytes(c).hex() for c in render_string(s)[2]]\n"
+        "blank = cells('x x')[1]\n"
+        "out = []\n"
+        "for line, runs in json.load(open(sys.argv[1])):\n"
+        "    out.append(cells(line) == [c for r in runs for c in ([blank] if r == ' ' else cells(r))])\n"
+        "print(json.dumps(out))\n", encoding="utf-8")
+    runs = []
+    for line in lines:
+        cur, parts = "", []
+        for a, b in rtl._clusters(line):
+            c = line[a:b]
+            if c == " " or rtl._is_emoji(c):
+                parts += [cur, c]
+                cur = ""
+            else:
+                cur += c
+        runs.append([r for r in [*parts, cur] if r])
+    data = tmp_path / "lines.json"
+    data.write_text(json.dumps(list(zip(lines, runs, strict=True)), ensure_ascii=False), encoding="utf-8")
+    code = (f"import runpy, sys; sys.argv = ['p', {str(data)!r}]; "
+            f"runpy.run_path({str(script)!r}, run_name='__main__')")
+    done = subprocess.run(["kitty", "+runpy", code], check=False, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    agree = json.loads(done.stdout.strip().splitlines()[-1])
+    assert all(agree), [p for p, ok in zip(KITTY_POSTS, agree, strict=True) if not ok]
 
 
 def test_words_mode_examples():
@@ -490,3 +564,84 @@ def rtl_selection_all():
     from textual.selection import Selection
 
     return Selection(None, None)
+
+
+# ----------------------------------------------- the adversarial review's findings
+
+def test_words_mode_copy_maps_columns_through_kittys_reversal():
+    """kitty shows a right-to-left run reversed, so the two leftmost cells of
+    'بغداد' show its last two letters: copying them gives those."""
+    rtl.set_mode("words")
+    block = rtl.Block("بغداد")
+    [line] = block.layout(20)
+    left = line.pad
+    assert rtl.logical(block.text, [line], [(0, left, left + 2)]) == "اد"
+    assert rtl.logical(block.text, [line], [(0, len(line.text) - 2, len(line.text))]) == "بغ"
+    rtl.set_mode("full")
+    [line] = block.layout(20)
+    assert rtl.logical(block.text, [line], [(0, line.pad, line.pad + 2)]) == "اد"
+
+
+@pytest.mark.parametrize("m", ["full", "words", "off"])
+def test_copy_keeps_blank_lines_and_spaces(m):
+    rtl.set_mode(m)
+    for post in ("مطلوب محاسب\n\nللتواصل 0770", "first line\n\n\nlast  line  ", "a  b"):
+        block = rtl.Block(post)
+        drawn = block.layout(40)
+        picks = [(y, 0, len(line.text)) for y, line in enumerate(drawn)]
+        assert rtl.logical(block.text, drawn, picks) == post, (m, post)
+
+
+def test_long_runs_stay_fast():
+    flags = "🇮🇶" * 8000
+    started = time.perf_counter()
+    assert len(rtl._clusters(flags)) == 8000
+    assert time.perf_counter() - started < 1.0                    # was quadratic: 22 s for 16k letters
+    rtl.set_mode("words")
+    post = " ".join(["Python/بايثون"] * 2000)
+    started = time.perf_counter()
+    rtl.Block(post).layout(80)
+    assert time.perf_counter() - started < 2.0                    # the paragraph is shaped once, not per line
+
+
+def test_a_mark_after_a_space_is_kept_and_lines_dont_overflow():
+    for m in ("full", "words", "off"):
+        rtl.set_mode(m)
+        for post, width in [("ع  \u200d\u064b", 2), ("a \u0301b c", 2), ("مرحبا \u064b بكم", 6)]:
+            drawn = rtl.Block(post).layout(width)
+            assert all(cell_len(line.text) <= width for line in drawn), (m, post, [ln.text for ln in drawn])
+            shown = "".join(line.text for line in drawn)
+            assert "\u064b" in shown or "\u0301" in shown, (m, post)   # the mark isn't lost at the break
+    rtl.set_mode("off")
+    assert rtl.visual("a \u0301b") == "a \u25cc\u0301b"            # a bare mark sits on a dotted circle
+
+
+@pytest.mark.parametrize(("env", "mode"), [
+    ({"KITTY_WINDOW_ID": "3"}, "full"),                                # no TERM to go by: not trusted
+    ({"TERM": "alacritty", "KITTY_WINDOW_ID": "3"}, "full"),           # another terminal started from kitty
+    ({"TERM": "xterm-256color", "KITTY_WINDOW_ID": "3"}, "full"),
+    ({"TERM": "screen-256color", "KITTY_WINDOW_ID": "3"}, "words"),    # screen / tmux started in kitty
+])
+def test_kitty_window_id_alone_isnt_kitty(env, mode):
+    assert rtl.env_mode(env) == mode
+
+
+def test_unknown_env_value_is_reported(monkeypatch, config, capsys):
+    class FakeApp:
+        def __init__(self, paths):
+            pass
+
+        def run(self):
+            pass
+
+    for k in ("TERM", "KITTY_WINDOW_ID"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("TELENOTIFY_BIDI", "wrods")
+    monkeypatch.setattr(entry, "TeleNotifyApp", FakeApp)
+    entry.main(["--config", str(config)])
+    err = capsys.readouterr().err
+    assert "TELENOTIFY_BIDI='wrods'" in err and "using full" in err
+    for ok in ("full", "words", "off", "auto", "", "0"):
+        monkeypatch.setenv("TELENOTIFY_BIDI", ok)
+        entry.main(["--config", str(config)])
+        assert capsys.readouterr().err == ""

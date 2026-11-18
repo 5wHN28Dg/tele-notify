@@ -30,7 +30,11 @@ def main(argv: list[str] | None = None) -> None:
     elif a.bidi:
         rtl.set_mode(a.bidi)
     else:
+        bad = rtl.bad_env_value()
         rtl.set_mode(rtl.env_mode())
+        if bad is not None:
+            print(f"telenotify-tui: TELENOTIFY_BIDI={bad!r} isn't full, words, off or auto; "
+                  f"using {rtl.mode()} for this terminal", file=sys.stderr)
     app = TeleNotifyApp(resolve(a.config, a.dry_run))
     with rtl.terminal_mode():
         app.run()

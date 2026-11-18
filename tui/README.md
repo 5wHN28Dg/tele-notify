@@ -33,7 +33,7 @@ Terminals draw each line left to right in the order the characters are stored, s
 | `words` | kitty | kitty joins the letters and draws each Arabic word right to left by itself, but keeps the words in stored order (its `force_ltr` docs: "HELLO WORLD" in an RTL script shows as "WORLD HELLO"). So only the word order is changed, and each word is left for kitty to draw. Nothing is sent to the terminal |
 | `off` | a terminal whose own bidi you prefer | text as stored, the terminal left alone |
 
-The mode is picked by itself: `words` in kitty (`TERM=xterm-kitty`, which ssh passes on, or `$KITTY_WINDOW_ID`, which a tmux started from kitty keeps), `full` anywhere else. To choose:
+The mode is picked by itself: `words` in kitty (`TERM=xterm-kitty`, which ssh passes on, or `$KITTY_WINDOW_ID` inside a tmux or screen started from kitty; another terminal started from a kitty shell inherits `$KITTY_WINDOW_ID` too, so on its own it doesn't count), `full` anywhere else. An unknown `TELENOTIFY_BIDI` value is reported when the screen starts, and the automatic choice is used. To choose:
 
 ```bash
 TELENOTIFY_BIDI=words .venv/bin/telenotify-tui --config:/path/to/config.json   # full, words, off or auto
@@ -42,7 +42,8 @@ TELENOTIFY_BIDI=words .venv/bin/telenotify-tui --config:/path/to/config.json   #
 ```
 
 - With `force_ltr yes` in kitty.conf kitty draws cells as they are: use `--bidi=full` there.
-- Inside tmux or screen the `ESC [ 8 l` switch may not reach the outer terminal, and the auto choice only sees tmux's `TERM`. If Arabic looks reversed there, pick the mode yourself (or `--no-bidi`).
+- Inside tmux or screen the `ESC [ 8 l` switch doesn't reach the outer terminal, and the auto choice only sees tmux's `TERM`. In tmux inside GNOME Terminal or Ptyxis, VTE then reorders the screen's already-ordered text again: use `--bidi=off` there and let VTE do it. Elsewhere, if Arabic looks reversed, pick the mode yourself.
+- kitty shapes the text between spaces and emoji as one piece in one direction, so a word that starts with Arabic and ends with Latin letters with no space between ("بايثونPython" in an Arabic sentence) can't come out right there.
 - If the screen is killed hard (`kill -9`) in `full` mode and Arabic in that terminal looks wrong afterwards, `printf '\e[8h'` restores it.
 - Selecting a post with the mouse and copying it gives the text as stored (reading order, plain letters), not the drawn order. Short values in tables and headers copy as drawn.
 - Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
