@@ -13,13 +13,13 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 
 ### The tab table
 
-What each tab is for, used by the [UI and UX policy](../docs/UI-UX-POLICY.md) (rules R1, R2 and R13). Draft: the owner approves it.
+What each tab is for, used by the [UI and UX policy](../docs/UI-UX-POLICY.md) (rules R1, R2, R13 and R14). Draft: the owner approves it. Rows say what must be true; today's gaps are listed in the first audit.
 
 | Tab | Main tasks | Must be visible at 80 × 24 (no scrolling, no focus change) | Main action: key / click |
 |---|---|---|---|
 | Dashboard | see whether the bot is healthy; start / stop / restart it; check alerts; read the numbers for a period (pick it) | service state (running / stopped) and the Start, Stop and Restart buttons; dry run or real; Telegram connection; pending reviews; alert count and age of the last one (or "no alerts"); the period name and its judged / publish / review / reject / forwarded counts | `p` picks the period / click the period picker |
 | Review | read the next unsure post and decide: send, discard, match no send (`k`), undo; open its link | dry run or real; how many are waiting; the post's chat, reasons and the start of its text; the Send, Match no send and Discard buttons, and Undo after a decision | `s` sends / click Send |
-| Search | find a judged post and see why it got its verdict; re-judge it | the search box; the first results with their verdicts; the chosen result's verdict and reasons | `enter` in the search box searches (typing excepted for the mouse) / click a result row opens it |
+| Search | find a judged post and see why it got its verdict; re-judge it | the search box; the first results with their verdicts; the chosen result's verdict and reasons | typing in the search box searches / click a result row opens it |
 | Settings | add, edit or delete a keyword; watch or unwatch a chat; save or revert; test on the corpus | the saved / unsaved marker and the problem count in the status bar; Save, Test, Revert; in the list sections: the list picker, the chosen list, Edit / Delete / Add; in Chats: the chat table | `ctrl+s` saves / click Save |
 
 ### Numbers over a period
