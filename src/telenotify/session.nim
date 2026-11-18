@@ -106,6 +106,28 @@ proc loadAllChats*(s: Session) {.async.} =
         if e.code == 404: break   # all chats of this list loaded
         raise
 
+proc chatKind*(chat: JsonNode): string =
+  ## "channel", "group" or "private", from a TDLib chat object.
+  case chat{"type", "@type"}.getStr
+  of "chatTypeSupergroup": (if chat{"type", "is_channel"}.getBool: "channel" else: "group")
+  of "chatTypeBasicGroup": "group"
+  of "chatTypePrivate", "chatTypeSecret": "private"
+  else: ""
+
+proc chatRows*(s: Session): Future[seq[(int64, string, string)]] {.async.} =
+  ## Every chat in the main list and the Archive: (id, title, kind).
+  await s.loadAllChats()
+  var seen: seq[int64]
+  for list in ["chatListMain", "chatListArchive"]:
+    let r = await s.client.call(%*{"@type": "getChats",
+      "chat_list": {"@type": list}, "limit": 1000})
+    for id in r{"chat_ids"}.getElems:
+      let cid = id.getBiggestInt
+      if cid in seen: continue
+      seen.add cid
+      let chat = await s.client.call(%*{"@type": "getChat", "chat_id": cid})
+      result.add (cid, chat{"title"}.getStr, chatKind(chat))
+
 proc listChats*(s: Session): Future[seq[(int64, string)]] {.async.} =
   await s.loadAllChats()
   for list in ["chatListMain", "chatListArchive"]:

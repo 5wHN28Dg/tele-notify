@@ -1,6 +1,6 @@
 ## The whole bot against a fake Telegram: no account, no network.
 
-import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json]
+import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json, sequtils]
 import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup]
 
 const target = -999'i64
@@ -15,8 +15,12 @@ type FakeTg = ref object
   afterForward: proc () {.closure, gcsafe.}
   forwardFails, linkFails: bool
   cutChats: HashSet[int64]
+  duringAccess: proc () {.closure, gcsafe.}   # e.g. a live update racing the check
   unreadFails: HashSet[int64]        # chats whose backlog can't be read (offline)
   readMarker: bool                   # like Telegram: unread = after the newest read id
+  unreadError: Table[int64, string]  # chats whose backlog read fails with this TDLib error
+  access: Table[int64, ChatAccess]   # chatAccess answers; default: a member
+  accessError: Table[int64, string]  # chats chatAccess fails for
 
 proc toTelegram(f: FakeTg): Telegram =
   result = Telegram()
@@ -24,6 +28,7 @@ proc toTelegram(f: FakeTg): Telegram =
     {.cast(gcsafe).}:
       if f.duringUnread != nil: f.duringUnread()
       if chat in f.unreadFails: raise newException(IOError, "timeout")
+      if chat in f.unreadError: raise newException(IOError, f.unreadError[chat])
       var ms = f.chats.getOrDefault(chat)
       if f.readMarker:
         var upTo = 0'i64
@@ -63,6 +68,11 @@ proc toTelegram(f: FakeTg): Telegram =
     if "t.me/basrajobs/" notin url: raise newException(IOError, "unknown link")
     return (-5'i64, parseBiggestInt(url.split('/')[^1]))
   result.selfChat = proc (): Future[int64] {.async, closure, gcsafe.} = return 42
+  result.chatAccess = proc (chat: int64): Future[ChatAccess] {.async, closure, gcsafe.} =
+    {.cast(gcsafe).}:
+      if f.duringAccess != nil: f.duringAccess()
+      if chat in f.accessError: raise newException(IOError, f.accessError[chat])
+      return f.access.getOrDefault(chat, ChatAccess(title: "chat" & $(-chat), status: "ok"))
 
 proc noFetch(): Fetcher =
   result = proc (url: string): Future[Fetched] {.closure, gcsafe.} =
@@ -463,3 +473,208 @@ suite "listener":
     check st.previous(-1, 101).found
     for row in st.stats(1):
       if row.chat == "chat1": check row.forwarded == 1   # one post, not two pictures
+
+suite "watched chats you can't read any more (#16)":
+  proc capture(l: Listener): ref seq[string] =
+    let lines = new seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines[].add line
+    lines
+
+  test "a ban is reported once; the same update again, or for an unwatched chat, is not":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Basra Jobs", status: "banned"))
+    check f.texts.len == 1 and f.texts[0][0] == 42
+    check "banned from Basra Jobs" in f.texts[0][1] and "config.json" in f.texts[0][1]
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Basra Jobs", status: "banned"))   # TDLib repeats it
+    check f.texts.len == 1
+    waitFor l.onChatAccess(-7, ChatAccess(title: "not watched", status: "banned"))
+    waitFor l.onChatAccess(-2, ChatAccess(title: "x", status: ""))     # unknown status
+    check f.texts.len == 1
+
+  test "leaving, and a group upgraded to a supergroup, are reported too":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    waitFor l.onChatAccess(-1, ChatAccess(status: "left"))             # no title: from l.titles
+    check f.texts.len == 1 and "no longer a member of chat -1" in f.texts[0][1]
+    l.titles[-2] = "Old Group"
+    waitFor l.onChatAccess(-2, ChatAccess(status: "upgraded", newChat: -1000000000009))
+    check f.texts.len == 2 and "Old Group" in f.texts[1][1]
+    check "Replace -2 with -1000000000009" in f.texts[1][1]
+
+  test "access back clears the state; losing it again is reported again":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let lines = l.capture
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Jobs", status: "banned"))
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Jobs", status: "ok"))
+    check st.getMeta("chat_access:-1") == ""
+    check "✅ can read Jobs again" in lines[]
+    check f.texts.len == 1                          # a log line, no alert
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Jobs", status: "ok"))
+    check lines[].countIt(it == "✅ can read Jobs again") == 1
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Jobs", status: "banned"))
+    check f.texts.len == 2
+
+  test "a restart (same state database) doesn't report it again":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Jobs", status: "banned")
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 1 and "banned from Jobs" in f.texts[0][1]
+    let l2 = newListener(l.cfg, f.toTelegram, st, noFetch(), defaultOcr(), false)
+    l2.log = proc (line: string) {.closure, gcsafe.} = discard
+    waitFor l2.checkWatchedChats()
+    waitFor l2.onChatAccess(-1, ChatAccess(title: "Jobs", status: "banned"))   # TDLib's replay
+    check f.texts.len == 1
+
+  test "start-up check: a chat that can't be opened is reported; a timeout only logged":
+    let f = FakeTg()
+    f.accessError[-1] = "Chat not found (400)"
+    f.accessError[-2] = "no answer from TDLib after 300 s"
+    let (l, st) = setup(f)
+    let lines = l.capture
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 1 and "chat -1 can't be read (Chat not found (400))" in f.texts[0][1]
+    check st.getMeta("chat_access:-1") == "unavailable" and st.getMeta("chat_access:-2") == ""
+    check lines[].anyIt("could not check access to chat -2" in it)
+    # its backlog fails the same way: still one alert
+    f.unreadError[-1] = "Chat not found (400)"
+    waitFor l.bootstrap()
+    check f.texts.len == 1
+    # a member again (status ok) isn't enough: the chat must be readable
+    f.accessError.clear
+    waitFor l.checkWatchedChats()
+    check st.getMeta("chat_access:-1") == "unavailable"
+
+  test "a backlog that can't be read for lack of access is reported; readable again clears it":
+    let f = FakeTg()
+    f.chats[-2] = @[msg(-2, 5, good)]
+    f.unreadError[-2] = "CHANNEL_PRIVATE (400)"
+    f.unreadFails.incl -1                          # offline: only logged, retried
+    let (l, st) = setup(f)
+    let lines = l.capture
+    waitFor l.bootstrap()
+    check f.texts.len == 1 and "chat -2 can't be read (CHANNEL_PRIVATE (400))" in f.texts[0][1]
+    waitFor l.retryFailedChats()                   # still failing: not reported again
+    check f.texts.len == 1
+    f.unreadError.clear
+    f.unreadFails.clear
+    waitFor l.retryFailedChats()
+    waitFor l.processQueue()
+    check st.getMeta("chat_access:-2") == ""
+    check "✅ can read chat2 again" in lines[]
+    check f.forwarded == @[(-2'i64, 5'i64)]
+
+  test "a ban plus a failing backlog is one alert, also after restarts (review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Jobs", status: "banned")
+    f.unreadError[-1] = "CHANNEL_PRIVATE (400)"
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    waitFor l.bootstrap()
+    check f.texts.len == 1 and st.getMeta("chat_access:-1") == "banned"
+    let l2 = newListener(l.cfg, f.toTelegram, st, noFetch(), defaultOcr(), false)
+    l2.log = proc (line: string) {.closure, gcsafe.} = discard
+    waitFor l2.checkWatchedChats()
+    waitFor l2.bootstrap()
+    check f.texts.len == 1
+
+  test "no unread messages doesn't prove a chat readable (review)":
+    let f = FakeTg()
+    f.unreadError[-2] = "CHANNEL_PRIVATE (400)"
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check st.getMeta("chat_access:-2") == "unavailable"
+    f.unreadError.clear                       # read works, but there's nothing unread
+    waitFor l.retryFailedChats()
+    check st.getMeta("chat_access:-2") == "unavailable"
+    f.chats[-2] = @[msg(-2, 5, good)]         # next start, a real read clears it
+    let l2 = newListener(l.cfg, f.toTelegram, st, noFetch(), defaultOcr(), false)
+    l2.log = proc (line: string) {.closure, gcsafe.} = discard
+    waitFor l2.bootstrap()
+    check st.getMeta("chat_access:-2") == ""
+
+  test "a public channel never joined is not reported at start-up; leaving live is (review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Public", status: "left", public: true)
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 0 and st.getMeta("chat_access:-1") == "left-public"
+    waitFor l.onChatAccess(-2, ChatAccess(title: "Group", status: "left"))   # live update
+    check f.texts.len == 1 and "no longer a member of Group" in f.texts[0][1]
+
+  test "a dry run's alerts say so (review)":
+    let f = FakeTg()
+    let (l, _) = setup(f, dryRun = true)
+    waitFor l.alert("something")
+    check f.texts.len == 1 and f.texts[0][1].startsWith("⚠️ tele-notify [dry run]: something")
+
+  test "a post that arrives proves the chat readable again (adversarial review)":
+    let f = FakeTg()
+    f.unreadError[-1] = "CHANNEL_PRIVATE (400)"
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check st.getMeta("chat_access:-1") == "unavailable"
+    let live = msg(-1, 20, bad)              # you rejoined; posts arrive live
+    l.enqueue live
+    waitFor l.processQueue()
+    check st.getMeta("chat_access:-1") == ""
+
+  test "removed from a private group while the bot was down is reported (adversarial review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Private Jobs", status: "left")     # no username
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 1 and "no longer a member of Private Jobs" in f.texts[0][1]
+    check st.getMeta("chat_access:-1") == "left"
+
+  test "a public channel never joined that goes private is reported (adversarial review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Public", status: "left", public: true)
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 0
+    waitFor l.onChatAccess(-1, ChatAccess(status: "left", public: false), live = true)   # username gone
+    check f.texts.len == 1 and "no longer public" in f.texts[0][1]
+    check st.getMeta("chat_access:-1") == "unavailable"
+
+  test "a live update during the start-up check waits for the check (adversarial review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Public", status: "left", public: true)
+    let (l, st) = setup(f)
+    var raced = false
+    f.duringAccess = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if not raced:
+          raced = true
+          # TDLib's refresh of chat -2 arrives while chat -1 is being checked
+          waitFor l.onChatAccess(-2, ChatAccess(status: "left"), live = true)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 0 and st.getMeta("chat_access:-2") == ""
+
+suite "what the terminal screen reads":
+  test "alerts are recorded; the chat list's status follows access changes":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    st.saveChats(@[ChatRow(id: -1, title: "Basra Jobs", kind: "channel")], @[-1'i64, -2])
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Basra Jobs", status: "banned"))
+    check st.chatStatus(-1) == "banned"
+    check "banned from Basra Jobs" in st.alertTexts(1)[0]
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Basra Jobs", status: "ok"))
+    check st.chatStatus(-1) == "ok"
+
+  test "the post text is kept for search, in the real run too":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    let (l, st) = setup(f)               # not a dry run
+    waitFor l.bootstrap()
+    check st.rawTextOf(-1, 10) == good
+
+  test "the connection state is published":
+    let (l, st) = setup(FakeTg())
+    l.onConnectionState("connectionStateConnecting")
+    check st.getMeta("connection") == "connecting"
+    l.onConnectionState("connectionStateReady")
+    check st.getMeta("connection") == "ready"

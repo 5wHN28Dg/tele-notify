@@ -40,6 +40,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   var sessionLost = ""
   var titles = initTable[int64, string]()
   let watched = cfg.chats
+  var accessReady = false   # the start-up check reads the current state first
   let s = await connect(cfg, interactive = false, onUpdate =
     proc (u: JsonNode) {.closure, gcsafe.} =
       if l == nil: return
@@ -68,6 +69,13 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
               l.enqueue m
             except CatchableError: discard   # deleted meanwhile, etc.
           asyncCheck refetch()
+      of "updateSupergroup", "updateBasicGroup":
+        # banned from / left a watched channel or group (#16). TDLib sends
+        # these for every chat while starting up: until the start-up check
+        # has run (and the titles are known) they're left to it.
+        if not accessReady: return
+        let (chat, access) = parseAccessUpdate(u)
+        if chat in watched: asyncCheck l.onChatAccess(chat, access, live = true)
       of "updateConnectionState":
         l.onConnectionState(u{"state", "@type"}.getStr)
       of "updateAuthorizationState":
@@ -102,6 +110,19 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
+  # for the terminal screen: how the bot runs, since when, and your chats by name
+  st.setMeta("mode", if l.dryRun: "dry-run" else: "real")
+  st.setMeta("started_at", $getTime().toUnix)
+  try:
+    var rows: seq[ChatRow]
+    for (id, title, kind) in await s.chatRows():
+      rows.add ChatRow(id: id, title: title, kind: kind)
+    st.saveChats(rows, cfg.chats)
+  except CatchableError as e:
+    l.log "   could not save the chat list: " & e.msg
+  l.titles = titles
+  accessReady = true
+  await l.checkWatchedChats()
   asyncCheck l.heartbeat()
   await l.bootstrap()
   if not stopRequested[]: l.log &"watching {titles.len} chats"

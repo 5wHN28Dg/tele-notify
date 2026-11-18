@@ -29,6 +29,18 @@ type
     messages*: seq[TgMessage]  ## oldest first
     cut*: bool                 ## more unread messages, older than these, were left out
 
+  ChatAccess* = object
+    ## Can this account still read a chat? (#16: a channel that bans you
+    ## just stops sending you its posts, silently.)
+    title*: string
+    status*: string   ## "ok" (a member), "banned", "left" (not a member any
+                      ## more), "upgraded" (a basic group that became a
+                      ## supergroup, with a new chat id), "unavailable" (it
+                      ## can't be opened or read at all), "" (unknown: ignore)
+    newChat*: int64   ## "upgraded": the new chat id
+    public*: bool     ## a supergroup/channel with a public username: readable
+                      ## without being a member
+
   Telegram* = ref object
     ## Every operation the listener uses. All of them may raise (network,
     ## TDLib errors); the listener catches per message.
@@ -48,6 +60,8 @@ type
     sendText*: proc (chat: int64, text: string): Future[void] {.closure, gcsafe.}
     selfChat*: proc (): Future[int64] {.closure, gcsafe.}
       ## the chat id of Saved Messages, for alerts
+    chatAccess*: proc (chat: int64): Future[ChatAccess] {.closure, gcsafe.}
+      ## whether this account can still read `chat` (still a member)
 
 # ------------------------------------------------------------ parsing
 
@@ -95,6 +109,65 @@ proc parseMessage*(m: JsonNode): TgMessage =
       for b in row.getElems:
         if b{"type", "@type"}.getStr == "inlineKeyboardButtonTypeUrl":
           result.buttons.add b{"type", "url"}.getStr
+
+# ------------------------------------------------------------ chat access (#16)
+
+proc supergroupChatId*(supergroupId: int64): int64 =
+  ## TDLib's chat id for a supergroup or channel.
+  -1_000_000_000_000'i64 - supergroupId
+
+proc basicGroupChatId*(basicGroupId: int64): int64 = -basicGroupId
+
+proc memberAccess*(status: JsonNode): string =
+  ## A TDLib chatMemberStatus as a ChatAccess status.
+  case status{"@type"}.getStr
+  of "chatMemberStatusBanned": "banned"
+  of "chatMemberStatusLeft": "left"
+  of "chatMemberStatusRestricted":
+    # restricted (can't post, say) but still reading, unless not a member
+    if status{"is_member"}.getBool(true): "ok" else: "left"
+  of "chatMemberStatusMember", "chatMemberStatusAdministrator",
+     "chatMemberStatusCreator": "ok"
+  else: ""
+
+proc basicGroupAccess*(g: JsonNode): ChatAccess =
+  ## A TDLib basicGroup. One upgraded to a supergroup is inactive: its
+  ## posts now go to the new chat.
+  if not g{"is_active"}.getBool(true):
+    let up = g{"upgraded_to_supergroup_id"}.getBiggestInt
+    if up != 0: return ChatAccess(status: "upgraded", newChat: supergroupChatId(up))
+    return ChatAccess(status: "unavailable")
+  ChatAccess(status: memberAccess(g{"status"}))
+
+proc isPublic*(supergroup: JsonNode): bool =
+  ## Does this TDLib supergroup have a public username?
+  let names = supergroup{"usernames", "active_usernames"}   # may be missing
+  names != nil and names.kind == JArray and names.len > 0
+
+proc parseAccessUpdate*(u: JsonNode): tuple[chat: int64, access: ChatAccess] =
+  ## updateSupergroup / updateBasicGroup: the chat it is about (0 for any
+  ## other update) and this account's access to it.
+  case u{"@type"}.getStr
+  of "updateSupergroup":
+    let g = u{"supergroup"}
+    if g{"id"} == nil: return
+    (supergroupChatId(g{"id"}.getBiggestInt),
+     ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g)))
+  of "updateBasicGroup":
+    let g = u{"basic_group"}
+    if g{"id"} == nil: return
+    (basicGroupChatId(g{"id"}.getBiggestInt), basicGroupAccess(g))
+  else: (0'i64, ChatAccess())
+
+proc isAccessError*(msg: string): bool =
+  ## Does this TDLib error mean the chat can't be read any more (banned,
+  ## made private, gone), rather than a passing problem (no connection, a
+  ## timeout)?
+  let m = msg.toLowerAscii
+  for s in ["channel_private", "channel_invalid", "chat not found", "chat_access",
+            "can't access the chat", "have no access", "user_banned_in_channel",
+            "chat_forbidden", "user_kicked"]:
+    if s in m: return true
 
 # ------------------------------------------------------------ TDLib
 
@@ -189,3 +262,20 @@ proc tdTelegram*(c: TdClient): Telegram =
     let chat = await c.call(%*{"@type": "createPrivateChat", "user_id": me{"id"}.getBiggestInt,
                                "force": false})
     return chat{"id"}.getBiggestInt
+
+  result.chatAccess = proc (chat: int64): Future[ChatAccess] {.async, closure, gcsafe.} =
+    let info = await c.call(%*{"@type": "getChat", "chat_id": chat})
+    let t = info{"type"}
+    var a: ChatAccess
+    case t{"@type"}.getStr
+    of "chatTypeSupergroup":     # channels too
+      let g = await c.call(%*{"@type": "getSupergroup",
+                              "supergroup_id": t{"supergroup_id"}.getBiggestInt})
+      a = ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g))
+    of "chatTypeBasicGroup":
+      let g = await c.call(%*{"@type": "getBasicGroup",
+                              "basic_group_id": t{"basic_group_id"}.getBiggestInt})
+      a = basicGroupAccess(g)
+    else: a = ChatAccess(status: "ok")   # a private chat or a bot
+    a.title = info{"title"}.getStr
+    return a

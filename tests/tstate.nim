@@ -52,6 +52,23 @@ suite "state":
     check st.decideReview(id, "sent", fromStatus = "to_send")
     check third().verdicts == [0, 1, 0] and third().forwarded == 1
 
+  test "alerts are kept for the terminal screen, newest first":
+    st.addAlert("first")
+    st.addAlert("second")
+    check st.alertTexts(2) == @["second", "first"]
+
+  test "the chat list keeps names, watched flags and access status":
+    st.setMeta("chat_access:-200", "banned")
+    st.setMeta("chat_access:-100", "left-public")
+    st.saveChats(@[ChatRow(id: -100, title: "Jobs", kind: "channel"),
+                   ChatRow(id: -200, title: "Other", kind: "group")], @[-100'i64, -200, -300])
+    check st.chatStatus(-100) == "ok" and st.chatStatus(-200) == "banned"
+    check st.chatStatus(-300) == "unavailable"          # watched, unknown to Telegram
+    st.setChatStatus(-200, "")
+    check st.chatStatus(-200) == "ok"
+    st.saveChats(@[ChatRow(id: -100, title: "Jobs", kind: "channel")], @[-100'i64])
+    check st.chatStatus(-200) == ""                      # gone from the account: removed
+
   test "a new data folder is private to you":
     check getFilePermissions(dir) == {fpUserRead, fpUserWrite, fpUserExec}
 
