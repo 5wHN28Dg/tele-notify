@@ -3,7 +3,7 @@
 This document explains what was built, why it looks the way it does, and how to keep working on it, so you don't have to reverse-engineer anything. Read it top to bottom once; after that, use the headings as a reference.
 
 - **Problems report** (what was wrong with the Python version and why): [`problems-report.md`](problems-report.md)
-- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4 is done: after a week next to the Python bot ([section 9](#9-stage-4-side-by-side-with-the-python-bot)), the Nim bot took over on 2026-11-18 and the Python bot is retired in `legacy/`. Stage 5, the terminal screen, is done too ([section 10](#10-the-terminal-screen)). See [Roadmap](#roadmap).
+- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4 is done: after a week next to the Python bot ([section 9](#9-stage-4-side-by-side-with-the-python-bot)), the Nim bot took over on 2026-11-18 and the Python bot is retired in `legacy/`. Stage 5, the terminal screen, is done too ([section 10](#10-the-terminal-screen-tui-issue-10)). See [Roadmap](#roadmap).
 
 ---
 
