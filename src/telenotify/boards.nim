@@ -17,19 +17,29 @@
 ## | LinkedIn job | linkedin.com/jobs/view/<id> | page `<title>` + `description__text` block |
 ## | LinkedIn post | linkedin.com/posts/<slug> | the post's own text (+ the reshared post's), never comments |
 ## | lnkd.in | lnkd.in/<code> | resolved to its target, which is then read if supported |
-## | Sites with schema.org JobPosting | yadanoo.com/job/<id>, shift-iraq.com/jobs/<id>, + `extra_job_sites` | the page's JSON-LD `JobPosting` block only |
+## | Sites with schema.org JobPosting | yadanoo.com/job/<id>, shift-iraq.com/jobs/<id>, mselect.com/job/<slug>-<id>, + `extra_job_sites` | the page's JSON-LD `JobPosting` block only |
+## | Workable job board | jobs.workable.com/view/<id>/<slug> | the page's JSON-LD `JobPosting` block (+ its `requirementsSection` when the description lacks it; `jobLocationType` ignored) |
+## | Workable company page | apply.workable.com/<company>/j/<shortcode>, <company>.workable.com/j/<shortcode> | JSON API (title, locations, description, requirements, benefits) |
+##
+## Bare apply.workable.com/j/<shortcode> links (no company) are skipped:
+## the API needs the company's name.
+##
+## Workable's job board marks hybrid jobs "TELECOMMUTE" too (a hybrid
+## Baghdad job said so on 2026-11-18 while its API said remote: false), so
+## on Workable pages that field is not read: "remote" would make any job
+## look acceptable.
 ##
 ## Not supported any more: Iraq Jobs Scout (iqjscout.com now redirects to
-## Yadanoo's home page), Workable and mselect (no links in recent posts, so
-## no real page to test against; adding one back is a new `BoardKind`, a
-## pattern in `findJobLinks` and a branch in `extract`).
+## Yadanoo's home page).
 ##
 ## Why JSON-LD only for those sites: a Yadanoo page also contains a city
 ## picker listing *every* city, Basra included. Reading the whole page
 ## would make every job look like a Basra job.
 
 import std/[json, strutils, uri]
+from std/unicode import Rune, runes, toUTF8, splitWhitespace
 import regex
+import unicodedb/decompositions
 import html
 
 type
@@ -40,12 +50,18 @@ type
     bkLinkedInPost = "LinkedIn post"
     bkShortLink = "lnkd.in short link"
     bkJobPosting = "job page (JSON-LD)"
+    bkWorkableBoard = "Workable job board"
+    bkWorkableApply = "Workable"
 
   JobLink* = object
     kind*: BoardKind
     url*: string        ## what to download (an API URL or a clean page URL)
 
-const defaultJobPostingSites* = ["yadanoo.com", "shift-iraq.com"]
+const defaultJobPostingSites* = ["yadanoo.com", "shift-iraq.com", "mselect.com"]
+
+const wwwOnlyHosts = ["mselect.com"]
+  ## Sites whose bare name has no DNS record: links are read without
+  ## "www.", so it is put back before downloading.
 
 let
   # URL characters: stop at spaces, quotes, brackets and the invisible
@@ -56,6 +72,15 @@ let
   liJob = re2(r"(?i)linkedin\.com/(?:comm/)?jobs/view/(?:[A-Za-z0-9%_-]*-)?(\d{6,})")
   liPost = re2(r"(?i)linkedin\.com/posts/([A-Za-z0-9%_-]+)")
   shortLink = re2(r"(?i)lnkd\.in/([A-Za-z0-9_-]+)")
+  # Workable: the job board (jobs.workable.com, JSON-LD in the page; the
+  # path's last part is a slug without digits, so the generic JSON-LD
+  # pattern can't see it) and company pages (apply.workable.com, a
+  # JavaScript shell: read through the API instead).
+  wkView = re2(r"(?i)jobs\.workable\.com/view/([A-Za-z0-9]{16,24})(?![A-Za-z0-9])")
+  wkApply = re2(r"(?i)apply\.workable\.com/([a-z0-9][a-z0-9_-]*)/j/([0-9a-f]{10})(?![A-Za-z0-9])")
+  # Old-style company links, <company>.workable.com/j/<shortcode>: they
+  # redirect to apply.workable.com/<company>/j/<shortcode>.
+  wkOld = re2(r"(?i)([a-z0-9][a-z0-9-]*)\.workable\.com/j/([0-9a-f]{10})(?![A-Za-z0-9])")
   # Links end at the first non-ASCII character (Arabic text or punctuation
   # glued to the link, "yadanoo.com/job/55،للتقديم") or at quotes/brackets.
   anyUrl = re2(r"(?i)(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[!#-&*-;=?-Z^-~]*)?")
@@ -65,6 +90,15 @@ proc addUnique(list: var seq[JobLink], l: JobLink) =
   for x in list:
     if x.url == l.url: return
   list.add l
+
+proc startsAtUrlBoundary(text: string, start: int): bool =
+  ## True when a host found at `start` is the start of a link: the text
+  ## starts there, or the character before can't be part of a URL (a space,
+  ## a bracket, Arabic text...), or it follows "//". So "notjobs.workable.com"
+  ## and "evil.com/?x=acme.workable.com/j/..." are not Workable links.
+  if start == 0: return true
+  if start >= 2 and text[start - 2] == '/' and text[start - 1] == '/': return true
+  text[start - 1] notin Letters + Digits + {'.', '-', '_', '@', '/', '=', '?', '&', '%', '~', '+', '#'}
 
 proc looksLikeJobPath(path: string): bool =
   ## "/job/55ab", "/jobs/251f8967-..." yes; "/", "/jobs", "/careers" no:
@@ -90,16 +124,48 @@ proc findJobLinks*(text: string, jobSites: openArray[string] = defaultJobPosting
     result.addUnique JobLink(kind: bkLinkedInPost, url: "https://www.linkedin.com/posts/" & text[m.group(0)] & "/")
   for m in text.findAll(shortLink):
     result.addUnique JobLink(kind: bkShortLink, url: "https://lnkd.in/" & text[m.group(0)])
+  for m in text.findAll(wkView):
+    if not text.startsAtUrlBoundary(m.boundaries.a): continue
+    # The slugless URL redirects to the full one; the ID alone is enough.
+    result.addUnique JobLink(kind: bkWorkableBoard, url: "https://jobs.workable.com/view/" & text[m.group(0)])
+  for m in text.findAll(wkApply):
+    if not text.startsAtUrlBoundary(m.boundaries.a): continue
+    result.addUnique JobLink(kind: bkWorkableApply, url: "https://apply.workable.com/api/v2/accounts/" &
+      text[m.group(0)].toLowerAscii & "/jobs/" & text[m.group(1)].toUpperAscii)
+  for m in text.findAll(wkOld):
+    # not part of a longer host name, an e-mail address or another URL
+    if not text.startsAtUrlBoundary(m.boundaries.a): continue
+    let company = text[m.group(0)].toLowerAscii
+    if company in ["jobs", "apply", "www"]: continue
+    result.addUnique JobLink(kind: bkWorkableApply, url: "https://apply.workable.com/api/v2/accounts/" &
+      company & "/jobs/" & text[m.group(1)].toUpperAscii)
   for m in text.findAll(anyUrl):
     let start = m.boundaries.a
     if start > 0 and text[start - 1] in {'@', '.', '-', '_'} + Letters + Digits:
       continue   # part of an e-mail address or a longer host name
-    let host = text[m.group(0)].toLowerAscii
+    var host = text[m.group(0)].toLowerAscii
+    if host in wwwOnlyHosts: host = "www." & host
     for site in jobSites:
       if (host == site or host.endsWith("." & site)) and m.group(1).a >= 0:
-        let path = text[m.group(1)].split({'?', '#'})[0].strip(leading = false, chars = {'/', '.', ','})
+        var path = text[m.group(1)].split({'?', '#'})[0].strip(leading = false, chars = {'/', '.', ','})
+        # mselect slugs are lower case; "Drilling-Fluids-Engineer-5748" is
+        # the same job and must not make a second link.
+        if host == "www.mselect.com": path = path.toLowerAscii
         if path.looksLikeJobPath:
           result.addUnique JobLink(kind: bkJobPosting, url: "https://" & host & path)
+  # One jobs.workable.com link and one apply.workable.com link in a post are
+  # almost always the same job (the board's "apply" button leads to the
+  # company page). Their IDs differ, so keep only the API one: it has
+  # richer data, and gather reads a post's link only when there is one.
+  var views, applies: int
+  for l in result:
+    if l.kind == bkWorkableBoard: inc views
+    elif l.kind == bkWorkableApply: inc applies
+  if views == 1 and applies == 1:
+    var kept: seq[JobLink]
+    for l in result:
+      if l.kind != bkWorkableBoard: kept.add l
+    result = kept
 
 proc isSupported*(url: string, jobSites: openArray[string] = defaultJobPostingSites): bool =
   findJobLinks(url, jobSites).len > 0
@@ -142,8 +208,50 @@ proc extractTaeen(body: string): string =
   result.add j.str("description").htmlFragmentToText & "\n" &
              j.str("requirements").htmlFragmentToText
 
-proc jobPostingFromLd(body: string): string =
+proc squeeze(s: string): string =
+  ## Lowercase text with every run of whitespace turned into one space and
+  ## lone bullets dropped (a `<li>` becomes "- ", a `<p>` doesn't).
+  ## Unicode spaces count too: "Requirements:&nbsp;3 years" (U+00A0) is the
+  ## same text as "Requirements: 3 years".
+  for w in unicode.splitWhitespace(s):
+    # (unicode.splitWhitespace gives "" between two spaces in a row)
+    if w in ["", "-", "–", "—", "•", "*", "·"]: continue
+    if result.len > 0: result.add ' '
+    result.add w.toLowerAscii
+
+proc baseLetter(r: Rune): Rune =
+  ## "ā" -> "a", "ḩ" -> "h": the first part of the full canonical
+  ## decomposition (combining marks always come after the letter).
+  result = r
+  while true:
+    let d = canonicalDecomposition(result)
+    if d.len == 0: return
+    result = d[0]
+
+proc stripLatinAccents*(s: string): string =
+  ## Latin letters without their accents, combining marks dropped. mselect
+  ## writes places the GeoNames way ("Muḩāfaz̧at Maysān", "Al Başrah") and
+  ## the filter's place names are plain ("Maysan", "Basrah"). Only Latin
+  ## letters are touched: Arabic text stays as it is.
+  for r in s.runes:
+    let c = int(r)
+    if c in 0x0300..0x036F: continue          # combining accents (z + U+0327)
+    if c in 0x00C0..0x024F or c in 0x1E00..0x1EFF:
+      result.add baseLetter(r).toUTF8
+    else:
+      result.add r.toUTF8
+
+proc cleanPlace(s: string): string =
+  ## A JSON-LD place name as the filter can match it: no accents and no
+  ## "Muhafazat" ("governorate of") in front.
+  result = s.stripLatinAccents.strip
+  if result.toLowerAscii.startsWith("muhafazat "):
+    result = result["muhafazat ".len .. ^1].strip
+
+proc jobPostingFromLd(body: string, workable = false): string =
   ## Text of the first schema.org JobPosting in the page's JSON-LD blocks.
+  ## `workable`: a jobs.workable.com page, whose jobLocationType says
+  ## TELECOMMUTE even for hybrid jobs, so it is ignored there.
   for m in body.findAll(ldJson):
     var j: JsonNode
     try: j = parseJson(body[m.group(0)])
@@ -158,15 +266,54 @@ proc jobPostingFromLd(body: string): string =
       let loc = c{"jobLocation"}
       for l in (if loc != nil and loc.kind == JArray: loc.getElems else: @[loc]):
         if l == nil: continue
-        let p = [l.str("address", "addressLocality"), l.str("address", "addressRegion")].join(" ").strip
+        var parts: seq[string]
+        for k in ["addressLocality", "addressRegion"]:
+          let part = l.str("address", k).cleanPlace
+          if part != "" and (parts.len == 0 or cmpIgnoreCase(part, parts[0]) != 0): parts.add part
+        let p = parts.join(" ")
         if p != "": places.add p
-      if c.str("jobLocationType") == "TELECOMMUTE": places.add "remote"
+      if not workable and c.str("jobLocationType") == "TELECOMMUTE": places.add "remote"
       var r = line("Job title", c.str("title")) & line("Location", places.join(", "))
       let exp = c.str("experienceRequirements", "monthsOfExperience")
       if exp != "": r.add line("Experience", exp & " months")
-      r.add c.str("description").htmlFragmentToText
+      let desc = c.str("description").htmlFragmentToText
+      r.add desc
+      # Some pages keep the requirements ("3+ years of ...") apart; Workable
+      # repeats them in the description too, so add them only when missing.
+      let req = c.str("requirementsSection").htmlFragmentToText
+      if req.strip != "" and req.squeeze notin desc.squeeze: r.add "\n" & req
       return r
   ""
+
+proc extractWorkableApply(body: string): string =
+  let j = parseJson(body)
+  if j.kind != JObject or j.str("title") == "": return ""
+  var places: seq[string]
+  # "location" is the main place; "locations" lists all of them (a job can
+  # be in Baghdad and Basra).
+  var locs = @[j{"location"}]
+  if j{"locations"} != nil and j["locations"].kind == JArray: locs.add j["locations"].getElems
+  for l in locs:
+    for k in ["city", "region", "country"]:
+      let p = l.str(k)
+      if p != "" and p notin places: places.add p
+  # "remote" makes any place acceptable to the filter, so it is added only
+  # for jobs in Iraq or with no country at all: a remote job in Austin,
+  # Texas is for people in the US.
+  var countries: seq[string]
+  for l in locs:
+    for k in ["country", "countryCode"]:
+      let c = l.str(k).strip.toLowerAscii
+      if c != "": countries.add c
+  let inIraq = countries.len == 0 or "iraq" in countries or "iq" in countries
+  let remote = j{"remote"}
+  let isRemote = remote != nil and (remote.getBool(false) or
+    (remote.kind == JString and remote.getStr.strip.toLowerAscii in ["true", "yes", "1"]))
+  if inIraq and (isRemote or j.str("workplace") == "remote"): places.add "remote"
+  result = line("Job title", j.str("title")) & line("Location", places.join(", "))
+  for k in ["description", "requirements", "benefits"]:
+    let t = j.str(k).htmlFragmentToText
+    if t.strip != "": result.add t & "\n"
 
 proc extractLinkedInJob(body: string): string =
   let doc = parsePage(body)
@@ -201,6 +348,8 @@ proc extract*(kind: BoardKind, body: string): string =
     of bkLinkedInJob: extractLinkedInJob(body)
     of bkLinkedInPost: extractLinkedInPost(body)
     of bkJobPosting: jobPostingFromLd(body)
+    of bkWorkableBoard: jobPostingFromLd(body, workable = true)
+    of bkWorkableApply: extractWorkableApply(body)
     of bkShortLink: ""
   except CatchableError:
     ""
