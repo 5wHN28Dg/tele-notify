@@ -1,7 +1,7 @@
 # UI and UX policy: the terminal screen
 
-Status: adopted 2026-11-18 by the owner, after a blind and an adversarial review. Revised 2026-11-18 after the
-owner's critique (owner sign-off, tab table, R13, R14, scope and loophole fixes).
+Status: adopted 2026-11-18 by the owner, after a blind and an adversarial review. Revision under review in PR #50
+(owner's critique: owner sign-off, tab table, R13, R14, scope and loophole fixes).
 
 This policy says what the terminal screen (`tui/`, the Textual app `telenotify-tui`) must do, and how a change to it is
 checked. It is modelled on the owner's kks-explorer policy, cut down to a one-person terminal app: the method
@@ -35,7 +35,10 @@ recorded and gets an issue, but doesn't block. Each rule ends with how it is che
 
 **Main tasks and what must be visible** come from the **tab table** in `tui/README.md`: one row per tab with its
 main tasks, what must be visible at 80 × 24 with no scrolling or focus change, and the key and the click that do the
-main action. The owner writes and approves the table; changing it needs no policy review. R1, R2 and R13 use it.
+main action. R1, R2 and R13 use it. Auditors use the table as it is on main; a change to the table needs the owner's
+OK in that PR and takes effect for later PRs. Until the owner approves the first table, the draft in `tui/README.md`
+is used. Visibility is checked as each tab first opens (its default view and sub-tab), on the evidence pack's
+synthetic data with its longest values, in both the dry run and the real mode.
 
 ### R1 Every action by keyboard and by mouse (Block for main tasks, Warn for the rest)
 
@@ -125,7 +128,7 @@ Checked on every change to `app.tcss`, a widget's CSS, the theme or a new kind o
 1. Text has a contrast of at least 4.5 : 1 against what is behind it; focus marks, the selected-row cursor and
    the borders of focused controls at least 3 : 1. Exempt: disabled or dimmed controls, placeholders, and unfocused
    decorative borders. A stock widget a change adds counts as that change's own fail; a stock widget already on main
-   is a pre-existing fail only with the evidence and issue section 4 asks for (noted in the audit file, not filed
+   is a pre-existing fail only with the evidence and the issue in this repository that section 4 asks for (noted in the audit file, not filed
    upstream without the owner's approval).
 2. Colour is never the only signal: a verdict, problem, warning or selected row also has a word, a symbol, bold,
    underline or reverse video. A background colour alone doesn't count.
@@ -193,22 +196,29 @@ no confirmation, is a pre-existing fail.
 Check: a pilot selection or copy key on each kind of value; `app.clipboard` compared with the stored value; the
 confirmation text.
 
+### R12 (folded into 3.3)
+
+The rules for private, side-effect-free evidence are in 3.3, since they bind the auditors, not the screen.
+
 ### R13 Task cost (Warn)
 
-For each main task in the tab table, the keyboard-only and mouse-only pilot scripts (R1) record the keys pressed and
-the clicks, on synthetic data. A change that raises either count gives the reason in its results table; a rise with
-no reason is a fail. Waits such as `DECIDE_DELAY` are not counted.
+Applies to PRs that touch a main task's tab. The harness keeps one keyboard script and one mouse script per main task
+of the tab table (`tui/audit/tasks/`); a PR that changes a task's path updates its script. The keys pressed and the
+clicks are counted on main and on the branch, on synthetic data; typed text counts as one key, and waits such as
+`DECIDE_DELAY` don't count. A rise in either count needs a reason in the PR's results table; a rise with no reason
+is a fail.
 
-Check: the harness's task-cost table, before and after the change.
+Check: the harness's task-cost table from main and from the branch.
 
 ### R14 Visual consistency (Warn)
 
 1. Colours in `tui/` CSS and in styles or markup in code are theme variables (`$primary`, `$accent`, `$success`,
-   `$warning`, `$error`, `$text-muted`, …), never literal colours.
-2. Padding, margin and gap use only 0, 1 or 2 cells.
-3. Each tab has at most one control or heading in the primary style.
+   `$warning`, `$error`, `$text-muted`, …) or values read from `app.theme_variables`, never literal colours
+   (`dim`, `bold`, `reverse` aren't colours).
+2. Padding, margin and `grid-gutter` use only 0, 1 or 2 cells.
+3. Each tab view has at most one `variant="primary"` button or `$primary`-coloured heading (borders don't count).
 
-Check: the harness's style scan of `tui/` and its table of primary-styled elements per tab from the 120 × 40 SVGs.
+Check: the harness's style scan of `tui/`, and a DOM query per tab view for primary buttons and headings.
 
 Whether the layout looks right (hierarchy, spacing, what stands out) is not an auditor rule: a subagent judging it
 would file issues about taste that isn't the owner's. It is the owner's sign-off (3.2).
@@ -221,8 +231,9 @@ would file issues about taste that isn't the owner's. It is the owner's sign-off
   tables or the `meta` keys the screen reads. Filter changes that only change reason wording need none.
 - A **wording-only** change needs one audit pass with 80 × 24 dark-theme screenshots of the changed screens.
 - **A full audit** (every rule, every tab) once now that the policy is adopted (results in
-  `docs/ui-audit/2026-11.md`) and again before the switch from the Python bot (PR #39). A PR that reworks a tab gets
-  the normal PR audit for the rules and tabs it touches, plus the owner's sign-off, not a full audit.
+  `docs/ui-audit/2026-11.md`), again before the switch from the Python bot (PR #39), and after that when the owner
+  asks, at least once a year. A PR that reworks a tab gets the normal PR audit for the rules and tabs it touches,
+  plus the owner's sign-off, not a full audit.
 - No calendar schedule: with one user and one platform, audits follow changes.
 
 ### 3.2 Who
@@ -239,12 +250,13 @@ diff.
 3. **After fixes:** a fresh subagent re-checks the rules that failed and the rules the fix's screens touch, on new
    evidence. A fail stands until such a check says it's gone. After two rounds of fixes that don't clear a fail, the
    owner is asked.
-4. **The owner's sign-off** for a PR that adds, removes or moves a widget or dialog, changes key bindings, or changes
-   layout properties in the CSS (size, dock, layout, padding, margin, grid): the owner runs the branch in Kitty for a
-   few minutes with the harness's interactive mode (`python -m audit interactive`), always on its synthetic home,
-   never the live bot's data, checks the PR's Not-checked items in the same session, and records in the PR
-   "Owner: OK" or what feels wrong. Wording-only and bug-fix PRs don't need it. Screenshots the SVGs can't judge
-   (looks, how Kitty draws it) are judged here.
+4. **The owner's sign-off** for a PR whose diff adds, removes or moves a widget or dialog, changes key bindings,
+   changes layout properties in the CSS (size, dock, layout, padding, margin, grid), or changes colours, button
+   variants or the theme: the owner runs the branch in Kitty for a few minutes with the harness's interactive mode,
+   with every isolation of 3.3 (never the live bot's data or services), checks the PR's Not-checked items in the same
+   session, and records in the PR "Owner: OK" or what feels wrong. A PR whose diff has none of these changes doesn't
+   need it (wording-only changes and most bug fixes). What the SVGs can't show (looks, how Kitty draws it) is judged
+   here.
 
 Auditors don't change the repository; they run the harness and may write throw-away tests outside it, following the
 machine's memory rules.
@@ -279,6 +291,12 @@ The pack, only for the rules and tabs the change touches:
 | Timing | the R7 interaction's slow-callback log |
 | Colours | the R6 states, read from the SVGs |
 | Hostile text and failures | the R9 and R10 fixtures |
+| Task cost | the R13 scripts' counts, on main and on the branch |
+| Style scan | the R14 scan and DOM query |
+
+The harness also has an **interactive mode** (`cd tui && python -m audit interactive`) that sets up the same isolated
+environment and starts the screen in the current terminal, for the owner's sign-off. Until the harness exists, a
+sign-off waits for it, or the owner accepts the PR on screenshots.
 
 **Accepted Not checked reasons:** how it really looks in Kitty or VTE, a real mouse drag, and whether the terminal
 puts an OSC 52 copy on the clipboard. These are listed in the PR for the owner to look at in their own terminal.
@@ -301,16 +319,19 @@ A PR that changes the screen merges only when its audit passes are done and:
   change;
 - a PR that needs the owner's sign-off (3.2) has "Owner: OK";
 - a fail already on main doesn't block if there is evidence from main, it has an open issue or a waiver, and the
-  change doesn't make it worse. "Worse" means: for R6 and R7, the gap to the limit grows; for the other rules, the
-  change adds a failing place (a tab, dialog, control or key) or makes an existing one fail in a new way. A change
-  that adds a Block fail while removing more Block fails may still merge if the owner signs it off and the new fail
-  gets an issue: redesigns that raise the ceiling shouldn't be blocked by the floor.
+  change doesn't make it worse. "Worse" means: for R6, the gap to the limit grows; for R7, the longest stall grows by
+  more than 10 %; for the other rules, the change adds a failing place (a tab, dialog, control or key) or makes an
+  existing one fail in a new way.
+
+Exception, so redesigns aren't blocked by the floor: a change that adds one Block fail of R1, R2, R4, R6, R7 or R11
+while removing more fails of those rules (counted as places, as for "worse") may merge if the PR names the new fail
+and the owner writes "Owner accepts: <the fail>" in the PR; the new fail gets an issue. Never for R3, R5, R9 or R10.
 
 **Warn** fails get an issue and don't block. An audit that finds a fail with no issue files one. Before the switch
 (PR #39), the Block fails of R3, R5, R9 and R10 found by the first full audit are fixed; the others stay as issues.
 
 **Getting better, not only not worse:** each full audit ends with a short list, agreed with the owner, of the open
-issues (Warn included) to fix next, and those fixes are done before the next full audit.
+issues (Warn included) to fix next. It doesn't block the switch unless the owner says so.
 
 ## 5. Changing this policy
 
