@@ -38,6 +38,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from .. import bot
+from ..clean import clean
 from . import settings_data as sd
 
 FORM_HELP = {
@@ -73,7 +74,7 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(Text(self.message), id="confirm-text")
+            yield Static(Text(clean(self.message)), id="confirm-text")
             with Horizontal():
                 yield Button(f"{self.yes} (y)", variant="warning", id="yes")
                 yield Button("Cancel (n)", id="no")
@@ -104,7 +105,7 @@ class EvalModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             head = Text("Corpus test", style="bold")
-            head.append(f"  {self.corpus}", style="dim")
+            head.append(f"  {clean(self.corpus)}", style="dim")
             head.append("\nEach cell: with the saved config.json -> with your edits")
             yield Static(head)
             yield DataTable(id="eval-table", show_cursor=False, zebra_stripes=True)
@@ -129,7 +130,7 @@ class EvalModal(ModalScreen[None]):
         out = Text()
         for name, r in (("saved config", self.before), ("your edits", self.after)):
             if r.error:
-                out.append(f"{name}: the test failed: {r.error}\n", style="bold red")
+                out.append(f"{name}: the test failed: {clean(r.error)}\n", style="bold red")
         if self.before.error or self.after.error:
             return out
 
@@ -141,7 +142,7 @@ class EvalModal(ModalScreen[None]):
         line("wrong publishes (FALSE published)", self.before.wrong_published, self.after.wrong_published)
         line("true matches lost (TRUE rejected)", self.before.true_lost, self.after.true_lost)
         for s in self.after.summary:
-            out.append(f"with edits: {s}\n", style="dim")
+            out.append(f"with edits: {clean(s)}\n", style="dim")
         return out
 
     def on_button_pressed(self, _event: Button.Pressed) -> None:
@@ -206,7 +207,7 @@ class KeywordEditor(Vertical):
         old = ol.highlighted
         ol.clear_options()
         if shown:
-            ol.add_options([Option(Text(str(x)), id=str(i)) for i, x in shown])
+            ol.add_options([Option(Text(clean(x)), id=str(i)) for i, x in shown])
             ol.highlighted = min(old or 0, len(shown) - 1)
         else:
             ol.add_option(Option(Text("(empty)" if not items else "(nothing matches)", style="dim"),
@@ -250,7 +251,7 @@ class KeywordEditor(Vertical):
             return
         self.editing = int(event.option.id)
         entry = self.query_one("#kw-entry", Input)
-        entry.value = str(self.items()[self.editing])
+        entry.value = clean(self.items()[self.editing])
         self.refresh_items()
         entry.focus()
 
@@ -477,7 +478,7 @@ class SettingsPane(Vertical):
         with self.prevent(Input.Changed, Checkbox.Changed):
             for key in [*sd.INT_KEYS, *sd.STR_KEYS, "target_chat"]:
                 v = self.edited.get(key, sd.MISSING)
-                self.query_one(f"#f-{key}", Input).value = "" if v is sd.MISSING else str(v)
+                self.query_one(f"#f-{key}", Input).value = "" if v is sd.MISSING else clean(v)
             for key in sd.BOOL_KEYS:
                 v = self.edited.get(key, sd.BOOL_KEYS[key])
                 self.query_one(f"#f-{key}", Checkbox).value = bool(v)
@@ -508,7 +509,7 @@ class SettingsPane(Vertical):
     def update_status(self) -> None:
         if self.original is None:
             self.query_one("#settings-status", Static).update(
-                Text(f"config.json can't be used: {self.load_error}", style="bold red"))
+                Text(f"config.json can't be used: {clean(self.load_error)}", style="bold red"))
             return
         n = len(sd.changed_keys(self.original, self.edited))
         errs = len(sd.errors(self.problems))
@@ -532,7 +533,7 @@ class SettingsPane(Vertical):
                     grouped.setdefault((p.error, p.message), []).append(p.key)
             t = Text()
             for (error, message), ks in sorted(grouped.items(), key=lambda x: not x[0][0]):
-                t.append(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}\n",
+                t.append(clean(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}") + "\n",
                          style="red" if error else "yellow")
             t.rstrip()
             self.query_one(f"#problems-{sec}", Static).update(t)
@@ -586,10 +587,10 @@ class SettingsPane(Vertical):
         keep = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
         table.clear()
         for r in rows:
-            status = Text(r.status, style="red" if r.status not in ("ok", "") else "")
-            title = Text(r.title, style="italic dim" if not r.known else "")
+            status = Text(clean(r.status), style="red" if r.status not in ("ok", "") else "")
+            title = Text(clean(r.title), style="italic dim" if not r.known else "")
             table.add_row(Text("[x]" if r.watched else "[ ]", style="bold green" if r.watched else "dim"), Text("->", style="bold green") if r.target else "",
-                          title, Text(r.kind), status, Text(str(r.id), style="dim"), key=str(r.id))
+                          title, Text(clean(r.kind)), status, Text(str(r.id), style="dim"), key=str(r.id))
         if table.row_count:
             ids = [str(r.id) for r in rows]
             table.move_cursor(row=ids.index(keep) if keep in ids else min(cursor, table.row_count - 1))
@@ -712,13 +713,24 @@ class SettingsPane(Vertical):
         if conflicts:
             self._offer_take_disk(disk, conflicts)
             return
+        bad = sd.non_finite_keys(new)
+        if bad:
+            self.notify(f"Not saved: config.json holds NaN or Infinity (a number too big, like 1e999?) in "
+                        f"{', '.join(bad)}, which can't be written as JSON. Fix it in the file by hand.",
+                        severity="error", timeout=10, markup=False)
+            return
+        moved = [k for k in sd.changed_keys(self.original, self.edited) if k in ("data_dir", "dry_run")]
         try:
             bak = sd.save(path, new)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             self.notify(f"Not saved: {e}", severity="error", markup=False)
             return
         self.load()
         self.notify(f"Saved. Backup: {bak.name if bak else '(no old file)'}", markup=False)
+        if moved:
+            # Paths are worked out once at start (paths.resolve): the screen keeps showing the old state file.
+            self.notify(f"You changed {' and '.join(moved)}: close and reopen this screen so it shows "
+                        "the right state file.", severity="warning", timeout=12, markup=False)
         self.run_worker(self._offer_restart("dry-run" if self.paths.dry_run else "real"), group="restart")
 
     def _offer_take_disk(self, disk: dict, conflicts: list[str]) -> None:
@@ -799,7 +811,11 @@ class SettingsPane(Vertical):
         self.run_worker(self._run_eval(binary, corpus, self._merged()), exclusive=True, group="eval")
 
     async def _run_eval(self, binary: Path, corpus: Path, cfg: dict) -> None:
-        tmp = sd.write_temp(cfg)
+        try:
+            tmp = sd.write_temp(cfg)
+        except ValueError as e:   # NaN / Infinity in the config
+            self.notify(f"Can't test: {e}", severity="error", markup=False)
+            return
         try:
             before, after = await asyncio.gather(bot.evaluate(binary, self.paths.config, corpus),
                                                  bot.evaluate(binary, tmp, corpus))

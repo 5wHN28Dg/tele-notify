@@ -446,3 +446,79 @@ async def test_quit_with_unsaved_settings_asks_first(paths, cfg_path):
         await pilot.press("y")
         await pilot.pause()
         assert not app.is_running
+
+
+def messages(app) -> str:
+    return "\n".join(n.message for n in app._notifications)
+
+
+async def test_infinity_in_an_unknown_key_refuses_to_save(paths, cfg_path, services):
+    cfg_path.write_text(cfg_path.read_text(encoding="utf-8").replace('"keep": true', '"keep": 1e999'),
+                        encoding="utf-8")
+    before = cfg_path.read_text(encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await save(pilot)
+        assert app.is_running and not isinstance(app.screen, ConfirmModal)
+        assert "Not saved" in messages(app) and "zz_unknown" in messages(app)
+        assert "NaN or Infinity" in messages(app)
+    assert cfg_path.read_text(encoding="utf-8") == before and backups(cfg_path) == []
+    assert services == []
+
+
+async def test_infinity_added_on_disk_meanwhile_refuses_to_save(paths, cfg_path, services):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg_path.write_text(json.dumps(cfg | {"zz_new": 1}).replace('"zz_new": 1', '"zz_new": 1e999'),
+                            encoding="utf-8")
+        before = cfg_path.read_text(encoding="utf-8")
+        await save(pilot)
+        assert app.is_running
+        assert "Not saved" in messages(app) and "zz_new" in messages(app)
+    assert cfg_path.read_text(encoding="utf-8") == before and backups(cfg_path) == []
+
+
+@pytest.mark.parametrize("key", ["data_dir", "dry_run"])
+async def test_changing_where_the_state_lives_says_to_reopen(paths, cfg_path, services, tmp_path, key):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane._put(key, str(tmp_path / "elsewhere") if key == "data_dir" else True)
+        pane.query_one("#editor-roles #kw-entry", Input).focus()   # ctrl+s needs focus inside Settings
+        await save(pilot)
+        assert "Saved" in messages(app)
+        assert "reopen this screen" in messages(app) and key in messages(app)
+
+
+async def test_ordinary_save_doesnt_say_reopen(paths, cfg_path, services):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await save(pilot)
+        assert "Saved" in messages(app) and "reopen" not in messages(app)
+
+
+async def test_config_values_are_shown_without_control_characters(paths, cfg_path):
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["extra_seniority"] = ["le\x1b]0;PWNED\x07ad"]
+    cfg["data_dir"] = cfg["data_dir"] + "\x1b[2J"
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-filters"
+        await pilot.pause()
+        picker = pane.query_one("#picker-filters", OptionList)
+        picker.highlighted = [picker.get_option_at_index(i).id
+                              for i in range(picker.option_count)].index("extra_seniority")
+        await pilot.pause()
+        items = pane.query_one("#editor-filters #kw-items", OptionList)
+        assert str(items.get_option_at_index(0).prompt) == "le]0;PWNEDad"
+        assert "\x1b" not in pane.query_one("#f-data_dir", Input).value
+        assert not pane.dirty                      # showing a cleaned value isn't an edit

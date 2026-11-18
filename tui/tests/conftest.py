@@ -101,6 +101,15 @@ def paths(config: Path, state: Path, tmp_path: Path) -> Paths:
 
 
 @pytest.fixture(autouse=True)
+def no_decide_delay(monkeypatch):
+    """Tests press s / d right after a post appears; the double-tap guard is
+    tested on its own (test_review.py sets the delay back)."""
+    from telenotify_tui.screens.review import ReviewPane
+
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def no_systemctl(monkeypatch):
     """Tests never talk to the real systemd: the services look stopped and
     actions are refused (tests that need other answers patch these again)."""

@@ -34,14 +34,32 @@ def find_binary(config: Path) -> Path | None:
     return Path(found) if found else None
 
 
+def data_dir_from(cfg_path: Path, value: object) -> Path:
+    """The bot's data folder for config.json's `data_dir` value, worked out the
+    way the bot does: blank (or not text) means the default; surrounding
+    spaces are ignored; a leading ~ is your home folder; a relative path is
+    relative to the folder config.json is in."""
+    if not isinstance(value, str) or not value.strip():
+        return default_data_dir()
+    s = value.strip()
+    if s == "~" or s.startswith("~/"):
+        return Path.home() / s[2:]
+    p = Path(s)
+    return p if p.is_absolute() else cfg_path.parent / p
+
+
 def resolve(config: str | os.PathLike[str], dry_run: bool) -> Paths:
+    """`dry_run`: the --dry-run flag. As in the bot, `"dry_run": true` in
+    config.json means a dry run (its own state file) even without the flag."""
     cfg = Path(config).expanduser().resolve()
-    data = default_data_dir()
+    raw: dict = {}
     try:
-        raw = json.loads(cfg.read_text(encoding="utf-8"))
-        if isinstance(raw.get("data_dir"), str) and raw["data_dir"]:
-            data = Path(raw["data_dir"]).expanduser()
+        loaded = json.loads(cfg.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            raw = loaded
     except (OSError, ValueError):
         pass  # the settings screen reports a broken config; the rest still works
-    state = data / ("state-dryrun.sqlite3" if dry_run else "state.sqlite3")
-    return Paths(config=cfg, data_dir=data, state=state, binary=find_binary(cfg), dry_run=dry_run)
+    data = data_dir_from(cfg, raw.get("data_dir"))
+    dry = dry_run or raw.get("dry_run") is True
+    state = data / ("state-dryrun.sqlite3" if dry else "state.sqlite3")
+    return Paths(config=cfg, data_dir=data, state=state, binary=find_binary(cfg), dry_run=dry)

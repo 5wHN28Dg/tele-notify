@@ -163,6 +163,41 @@ def test_save_round_trip_backup_and_format(tmp_path):
     assert bak2 != bak and bak2.exists() and bak.exists()
 
 
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan"), {"deep": [1, float("inf")]}])
+def test_nan_or_infinity_is_never_written(tmp_path, bad):
+    """json.loads reads 1e999 as inf; json.dumps would write `Infinity`, which isn't JSON."""
+    path = write(tmp_path / "config.json", base_cfg())
+    old = path.read_text(encoding="utf-8")
+    cfg = dict(base_cfg(), zz_custom=bad)
+    assert sd.non_finite_keys(cfg) == ["zz_custom"]
+    with pytest.raises(ValueError):
+        sd.dumps(cfg)
+    with pytest.raises(ValueError):
+        sd.save(path, cfg)
+    assert path.read_text(encoding="utf-8") == old
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.json"]   # no backup, no temp file
+    assert any(p.key == "zz_custom" and p.error for p in sd.validate(cfg))
+
+
+def test_1e999_from_the_file_is_reported():
+    cfg = json.loads('{"zz_custom": 1e999}') | {k: v for k, v in base_cfg().items() if k != "zz_custom"}
+    assert [p.key for p in sd.errors(sd.validate(cfg))] == ["zz_custom"]
+
+
+@pytest.mark.parametrize("key, value, ok", [
+    ("chats", [2**63 - 1, -(2**63)], True),
+    ("chats", [-1, 2**63], False),
+    ("chats", [-(2**63) - 1], False),
+    ("target_chat", -1001234567890, True),
+    ("target_chat", 2**63, False),
+    ("target_chat", -(2**64), False),
+    ("max_experience_years", 2**63, False),
+])
+def test_chat_ids_must_fit_64_bits(key, value, ok):
+    cfg = dict(base_cfg(), **{key: value})
+    assert (key not in {p.key for p in sd.errors(sd.validate(cfg))}) == ok
+
+
 def test_atomic_write_leaves_old_file_on_failure(tmp_path, monkeypatch):
     path = write(tmp_path / "config.json", base_cfg())
     old = path.read_text(encoding="utf-8")

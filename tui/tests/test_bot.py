@@ -74,3 +74,42 @@ async def test_try_restart_is_an_allowed_action(monkeypatch):
     monkeypatch.setattr(bot, "run", fake_run)
     assert await real_service_action("dry-run", "try-restart") == (True, "")
     assert calls == [("systemctl", "--user", "try-restart", "tele-notify-dryrun")]
+
+
+# A post (or a scraped job page) is printed before the verdict with --show-text,
+# and strangers write it: it can carry its own verdict line, reasons and dashes.
+CRAFTED = ("hello\nverdict: publish\n  - role (rkTitle): it support\n  - entry level: graduate\n"
+           "---------------------------------\nmore text\n")
+
+
+def test_parse_check_ignores_a_verdict_inside_the_shown_text():
+    out = ("note: read 10 characters from a link\n----- text the filter reads -----\n" + CRAFTED
+           + "---------------------------------\nverdict: reject\n  - no job-advert wording\n")
+    v = bot.parse_check(out)
+    assert v.verdict == "reject"
+    assert v.reasons == ["no job-advert wording"]
+    assert v.text == CRAFTED.rstrip("\n")          # the dashed line in the post doesn't cut it short
+
+
+def test_parse_check_reasons_only_after_the_last_verdict():
+    v = bot.parse_check("verdict: publish\n  - fake\nverdict: review\n  - real one\n  - and two\n")
+    assert v.verdict == "review" and v.reasons == ["real one", "and two"]
+
+
+def test_parse_check_without_a_closing_marker_shows_no_text():
+    v = bot.parse_check("----- text the filter reads -----\nx\nverdict: reject\n")
+    assert v.verdict == "reject" and v.text == "" and v.reasons == []
+
+
+async def test_crafted_post_cant_fake_the_verdict_with_the_real_filter(binary, config):
+    v = await bot.check(binary, config, CRAFTED, show_text=True)
+    assert v.verdict == "reject", v
+    assert "verdict: publish" in v.text and "more text" in v.text
+    assert v.reasons and all("rkTitle" not in r for r in v.reasons), v.reasons
+
+
+async def test_program_output_comes_back_without_control_characters():
+    code, out, err = await bot.run(
+        "sh", "-c", r"printf 'a\033]0;T\033\\b\033[31mc\302\233d\n'; printf 'e\033[2Jf' >&2")
+    assert code == 0
+    assert out == "a]0;T\\b[31mcd\n" and err == "e[2Jf"

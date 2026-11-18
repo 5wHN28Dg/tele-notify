@@ -26,6 +26,7 @@ from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
 from .. import bot
+from ..clean import clean
 from ..store import Judged
 from . import search_data
 
@@ -71,7 +72,7 @@ def verdict_report(v: bot.Verdict, then: str | None = None, show_text: bool = Fa
     out = Text()
     if v.error or not v.verdict:
         out.append("Couldn't judge: ", style="bold red")
-        out.append(v.error or "no verdict")
+        out.append(clean(v.error) or "no verdict")
         return out
     if then is not None:
         out.append("then: ")
@@ -239,7 +240,7 @@ class SearchPane(Vertical):
             problem = f"couldn't read the state: {e}"
         self._fill(rows)
         if problem:
-            count.update(Text(problem, style="yellow"))
+            count.update(Text(clean(problem), style="yellow"))
         else:
             n = len(rows)
             count.update(f"{n}{'+' if n >= LIMIT else ''} result{'s' if n != 1 else ''}")
@@ -376,6 +377,15 @@ class SearchPane(Vertical):
     def action_paste(self) -> None:
         self.add_class("pasting")
         self.query_one("#paste-text", TextArea).focus()
+
+    @on(TextArea.Changed, "#paste-text")
+    def _paste_changed(self, event: TextArea.Changed) -> None:
+        """Pasted text is shown as typed: drop control characters before they reach the terminal."""
+        area = event.text_area
+        text = clean(area.text)
+        if text != area.text:
+            area.text = text
+            area.move_cursor(area.document.end)
 
     def action_close_paste(self) -> None:
         if self.has_class("pasting"):

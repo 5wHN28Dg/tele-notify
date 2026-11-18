@@ -13,6 +13,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .clean import clean
+
 SERVICES = {"real": "tele-notify", "dry-run": "tele-notify-dryrun"}
 
 
@@ -40,12 +42,14 @@ class EvalResult:
 
 
 async def run(*args: str, timeout: float = 120) -> tuple[int, str, str]:
-    """Run a program; (exit code, stdout, stderr). Never raises for a failing program."""
+    """Run a program; (exit code, stdout, stderr). Never raises for a failing program.
+    The output comes back without control characters (clean.clean): it is shown on screen
+    and can carry text strangers wrote (a post, a scraped job page)."""
     try:
         proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
                                                     stderr=asyncio.subprocess.PIPE)
     except OSError as e:
-        return 127, "", str(e)
+        return 127, "", clean(e)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
@@ -57,7 +61,7 @@ async def run(*args: str, timeout: float = 120) -> tuple[int, str, str]:
         _kill(proc)
         await asyncio.shield(proc.wait())
         raise
-    return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+    return proc.returncode or 0, clean(out.decode(errors="replace")), clean(err.decode(errors="replace"))
 
 
 def _kill(proc: asyncio.subprocess.Process) -> None:
@@ -86,20 +90,33 @@ async def service_action(mode: str, action: str) -> tuple[bool, str]:
 
 # -------------------------------------------------------------- filter
 
-_VERDICT = re.compile(r"^verdict:\s*(\w+)", re.MULTILINE)
+_VERDICT = re.compile(r"^verdict:\s*(\w+)\s*$")
 _TEXT_START, _TEXT_END = "----- text the filter reads -----", "---------------------------------"
 
 
 def parse_check(out: str) -> Verdict:
-    """Parse `telenotify check` output: a 'verdict: X' line followed by '  - reason' lines."""
-    m = _VERDICT.search(out)
-    if not m:
+    """Parse `telenotify check` output: a 'verdict: X' line followed by '  - reason' lines.
+
+    With --show-text the output first prints the text the filter read between
+    _TEXT_START and _TEXT_END, and strangers write that text: it may hold its
+    own "verdict: publish" and "  - " lines, or a dashed line. So the real
+    verdict is the LAST verdict line, its reasons are the "  - " lines after
+    it, and the shown text runs from the first opening marker to the last
+    closing marker before that verdict line."""
+    lines = out.splitlines()
+    at = next((i for i in range(len(lines) - 1, -1, -1) if _VERDICT.match(lines[i])), None)
+    if at is None:
         return Verdict("", error=out.strip() or "no verdict in the output")
-    reasons = [line.strip()[2:] for line in out[m.end():].splitlines() if line.strip().startswith("- ")]
+    verdict = _VERDICT.match(lines[at]).group(1)  # type: ignore[union-attr]
+    reasons = [line[4:] for line in lines[at + 1:] if line.startswith("  - ")]
     text = ""
-    if _TEXT_START in out:
-        text = out.split(_TEXT_START, 1)[1].split(_TEXT_END, 1)[0].strip("\n")
-    return Verdict(m.group(1), reasons, text)
+    head = lines[:at]
+    if _TEXT_START in head:
+        start = head.index(_TEXT_START)
+        end = max((i for i in range(start + 1, at) if head[i] == _TEXT_END), default=None)
+        if end is not None:
+            text = "\n".join(head[start + 1:end]).strip("\n")
+    return Verdict(verdict, reasons, text)
 
 
 async def check(binary: Path, config: Path, text: str, scrape: bool = False,
