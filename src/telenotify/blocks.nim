@@ -24,8 +24,7 @@
 ##    stays a requirement. A numbered piece without one of your titles is either
 ##    * another job, if it names *some* job ("2- محاسب", see `jobNouns`):
 ##      dropped, or
-##    * a requirement ("2- خبرة 4 سنوات"): glued onto the job above it, or
-##      dropped with it when the job above isn't yours.
+##    * a requirement ("2- خبرة 4 سنوات"): glued onto the job above it.
 ##    An un-numbered piece after a job (cut off by a separator line) is glued
 ##    onto that job too. If a job block has no location of its own or in the
 ##    header, the whole post is searched (the address may be in a footer
@@ -101,18 +100,14 @@ proc splitJobs*(normText: string, titles, jobNouns: KeywordList,
     pieces.setLen(lastNumbered + 1)
 
   result.add Block(lines: pieces[0] & footer, isHeader: true)
-  var inOtherJob = false       # the pieces after another job's belong to it
   for i in 1 ..< pieces.len:
     let p = pieces[i]
     if p.isOurJob(numbered[i], titles, fields, jobNouns):
       result.add Block(lines: p)
-      inOtherJob = false
     elif numbered[i] and p.len > 0 and p[0].flatten.contains(jobNouns):
-      # another job that isn't yours; only its first line counts ("• 5+ years
-      # ... strong experience with EPC/Developer" is a requirement)
-      inOtherJob = true
-    elif inOtherJob:
-      discard                  # its requirements ("• 5+ years" looks numbered too)
+      # another job that isn't yours; only its first line counts ("2- ...
+      # strong experience with EPC/Developer" is a requirement)
+      discard
     elif result.len > 1:
       result[^1].lines.add p   # a requirement, footer or continuation
     else:

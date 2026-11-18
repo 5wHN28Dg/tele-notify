@@ -141,6 +141,28 @@ Requirements:
 🔹 1- محاسب خبرة 5 سنوات
 🔹 2- مهندس كهرباء حديث التخرج""") == vPublish
 
+  test "requirements after a look-alike job line still count (review of #29 fix)":
+    check verdict("""مطلوب للعمل في شركة نفطية في البصرة
+1- مهندس كهرباء
+2- تحمل المسؤولية والعمل تحت الضغط
+3- خبرة لا تقل عن 10 سنوات""") == vReject
+    check verdict("""شركة نفطية في البصرة بحاجة الى مهندس حديث التخرج
+الشروط:
+1- خريج معهد فني او بكالوريوس هندسة كهرباء
+2- القدرة على تحمل المسؤولية
+3- خبرة لا تقل عن 8 سنوات في المشاريع النفطية""") == vReject
+    check verdict("""شركة في البصرة تعلن عن فرص عمل للخريجين الجدد
+1- مهندس كهرباء
+الشروط: بكالوريوس هندسة كهرباء
+2- محاسب
+خبرة سنتين
+━━━━━━
+شروط عامة لجميع الوظائف: خبرة لا تقل عن 6 سنوات""") == vReject
+    check verdict("""We are hiring in Basra - fresh graduates welcome
+1. Electrical Engineer
+2. Must work closely with site managers and technicians
+3. Minimum 10 years of experience""") == vReject
+
   test "a numbered degree requirement is not a job of its own":
     check verdict("""مطلوب مهندس كهرباء للعمل في البصرة
 1- بكالوريوس هندسة كهرباء

@@ -53,6 +53,7 @@ type
     progressEvery*: int           # backlog progress line every this many messages (#11)
     backlogTotal, backlogDone: int
     retryChats: seq[int64]        # chats whose backlog couldn't be read yet (#5)
+    retryEveryTicks*: int         # worker ticks (~0.1 s) between retries; backs off
     log*: proc (line: string) {.closure, gcsafe.}
     downSince: int64
     selfChat: int64
@@ -63,7 +64,7 @@ proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: O
            queue: initDeque[TgMessage](), stop: new bool,
            # live messages wait from the very start until the backlog is done
            # (they can arrive while chats are still being opened)
-           bootstrapping: true, albumWaitMs: 1500, progressEvery: 25,
+           bootstrapping: true, albumWaitMs: 1500, progressEvery: 25, retryEveryTicks: 600,
            log: proc (line: string) {.closure, gcsafe.} =
              echo now().format("yyyy-MM-dd HH:mm:ss"), "  ", line)
 
@@ -243,24 +244,29 @@ proc processQueue*(l: Listener) {.async.} =
   while l.queue.len > 0 and not l.stop[]:
     let m = l.queue.popFirst
     var group = @[m]
+    var popped = 1
     if m.albumId != 0 and not m.edited:
       # The pictures of an album arrive as separate messages, back to back.
       if l.queue.len == 0: await sleepAsync(l.albumWaitMs)
       while l.queue.len > 0 and l.queue.peekFirst.chatId == m.chatId and
           l.queue.peekFirst.albumId == m.albumId and not l.queue.peekFirst.edited:
         let x = l.queue.popFirst
+        inc popped
         if group.allIt(it.id != x.id): group.add x      # the same picture twice: once
       # Telegram wants the ids in increasing order (forwardMessages)
       group.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))
     await l.handleGroup(group)
-    if not l.dryRun:
+    # Marking a message read moves Telegram's read marker past everything
+    # older: in a chat whose backlog couldn't be read yet, that backlog
+    # would be lost to the retry. Its messages are marked once it works.
+    if not l.dryRun and m.chatId notin l.retryChats:
       try: await l.tg.markRead(m.chatId, group.mapIt(it.id))
       except CatchableError as e: l.say "   could not mark read: " & e.msg
     if l.bootstrapping and l.backlogTotal > 0:
       # A progress bar doesn't suit a service whose output goes to the
       # journal; a count every few messages does.
       let before = l.backlogDone
-      l.backlogDone = min(l.backlogDone + group.len, l.backlogTotal)
+      l.backlogDone = min(l.backlogDone + popped, l.backlogTotal)
       if l.backlogDone == l.backlogTotal or
           l.backlogDone div max(l.progressEvery, 1) > before div max(l.progressEvery, 1):
         l.say &"backlog: {l.backlogDone}/{l.backlogTotal} checked"
@@ -309,6 +315,10 @@ proc retryFailedChats*(l: Listener) {.async.} =
     except CatchableError as e:
       l.say &"   could not read chat {chat} again: {e.msg}"
       still.add chat
+  # a chat that keeps failing (left, banned) is tried less and less often,
+  # up to every 30 minutes
+  if still.len > 0 and still.len == l.retryChats.len:
+    l.retryEveryTicks = min(l.retryEveryTicks * 2, 18_000)
   l.retryChats = still
 
 proc sendApproved*(l: Listener) {.async.} =
@@ -341,8 +351,8 @@ proc worker*(l: Listener) {.async.} =
     if ticks mod 50 == 0 and not l.dryRun:
       try: await l.sendApproved()
       except CatchableError as e: l.say "   reviewed posts: " & e.msg
-    if ticks mod 600 == 0 and l.retryChats.len > 0:   # about every minute
-      await l.retryFailedChats()
+    if ticks mod max(l.retryEveryTicks, 1) == 0 and l.retryChats.len > 0:
+      await l.retryFailedChats()   # about every minute at first
 
 proc checkDowntimeAtStart*(l: Listener) {.async.} =
   let last = l.state.getMeta("last_alive")
