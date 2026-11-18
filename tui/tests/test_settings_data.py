@@ -309,3 +309,20 @@ def test_chat_rows_toggle_and_target():
     assert sd.toggle_watched(cfg, -1) is False and cfg["chats"] == [-77, -4]
     sd.set_target(cfg, -4)
     assert cfg["target_chat"] == -4
+
+
+def test_dedupe_leaves_job_sites_alone():
+    """Only the lower-case site works in the bot; "keep the first" would keep the broken one."""
+    cfg = {"extra_job_sites": ["Jobs.Example.com", "jobs.example.com"],
+           "extra_not_a_job": ["kurs", "Kurs"]}
+    assert sd.dedupe_all(cfg) == {"extra_not_a_job": ["Kurs"]}
+    assert cfg["extra_job_sites"] == ["Jobs.Example.com", "jobs.example.com"]
+    msgs = [p.message for p in sd.validate(cfg) if p.key == "extra_job_sites"]
+    assert any("listed twice" in m and "press D" not in m for m in msgs)
+
+
+def test_dedupe_only_merges_what_the_bot_sees_as_the_same():
+    """The bot trims and lower-cases; it doesn't fold "ß" into "ss" or ligatures."""
+    cfg = {"extra_not_a_job": ["kurs straße", "kurs strasse", "ﬁle", "file", "A  b", "a b"]}
+    assert sd.dedupe_all(cfg) == {"extra_not_a_job": ["a b"]}
+    assert sd.duplicates(cfg["extra_not_a_job"]) == []

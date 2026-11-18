@@ -134,6 +134,14 @@ def norm_keyword(k: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", k).casefold().split())
 
 
+def same_entry(k: str) -> str:
+    """When the bot sees two list entries as the same word: it trims them and
+    lower-cases them (Nim's toLower), nothing more. Stricter than
+    `norm_keyword` (which also folds "ß"/"ss", ligatures and the like, fine for
+    filtering but not for deciding what to delete)."""
+    return " ".join(k.split()).lower()
+
+
 def duplicates(items: list) -> list[str]:
     """Items that appear more than once (ignoring case and spacing), first spelling of each."""
     seen: dict[str, str] = {}
@@ -141,7 +149,7 @@ def duplicates(items: list) -> list[str]:
     for x in items:
         if not isinstance(x, str):
             continue
-        n = norm_keyword(x)
+        n = same_entry(x)
         if n in seen and seen[n] not in dups:
             dups.append(seen[n])
         seen.setdefault(n, x)
@@ -151,7 +159,7 @@ def duplicates(items: list) -> list[str]:
 def _dedupe_key(x: Any) -> Any:
     """What counts as "the same" entry: words ignoring case and spacing, other values as they are."""
     if isinstance(x, str):
-        return ("str", norm_keyword(x))
+        return ("str", same_entry(x))
     if isinstance(x, bool):
         return ("bool", x)
     return (type(x).__name__, x) if isinstance(x, (int, float)) else None
@@ -174,7 +182,11 @@ def dedupe(items: list) -> tuple[list, list]:
     return kept, removed
 
 
-DEDUPE_KEYS = (*LIST_KEYS, "chats")
+# extra_job_sites is left out: the bot compares a site exactly as written, so
+# of "Jobs.Example.com" and "jobs.example.com" only the second works, and
+# "keep the first spelling" could keep the broken one.
+NO_DEDUPE = ("extra_job_sites",)
+DEDUPE_KEYS = (*(k for k in LIST_KEYS if k not in NO_DEDUPE), "chats")
 
 
 def dedupe_all(cfg: dict) -> dict[str, list]:
@@ -233,7 +245,7 @@ def validate(cfg: dict) -> list[Problem]:
         dups = duplicates(v)
         if dups:
             p.append(Problem(key, "listed twice: " + ", ".join(f'"{d}"' for d in dups)
-                             + DUPLICATE_FIX, False))
+                             + ("" if key in NO_DEDUPE else DUPLICATE_FIX), False))
 
     def has_words(keys: tuple[str, ...]) -> bool:
         return any(isinstance(cfg.get(k), list) and any(isinstance(x, str) and x.strip() for x in cfg[k])
