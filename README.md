@@ -105,7 +105,7 @@ telenotify stats --days:7                  # what each channel brought
 telenotify run --dry-run                   # try changes: judge everything, forward nothing
 ```
 
-Every command finds the config by itself; `--config:FILE` (or `$TELENOTIFY_CONFIG`) picks another one.
+Every command finds the config by itself; `--config:FILE` (or `$TELENOTIFY_CONFIG`) picks another one. The service always uses `~/.config/tele-notify/config.json`.
 
 What's different from the Python bot:
 - Unclear posts wait in tele-notify's own review queue (`telenotify review`) instead of your Saved Messages.

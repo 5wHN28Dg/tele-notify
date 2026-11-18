@@ -41,3 +41,4 @@ corpus/
 # config backups made by the settings screen (they hold the secrets)
 config.json.bak-*
 *.bak-*
+tui/build/

@@ -14,7 +14,7 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=%h
-ExecStart=%h/.local/bin/telenotify run
+ExecStart=%h/.local/bin/telenotify run --config:%h/.config/tele-notify/config.json
 Restart=always
 RestartSec=30
 # be a good neighbour
