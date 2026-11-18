@@ -11,7 +11,7 @@ import pytest
 from conftest import BAD, GOOD
 from textual.widgets import Button, DataTable, Input, OptionList, Static, TabbedContent
 
-from telenotify_tui import bot
+from telenotify_tui import bot, rtl
 from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.screens import settings_data as sd
 from telenotify_tui.screens.settings import (
@@ -661,7 +661,8 @@ async def test_duplicate_warning_names_list_and_words_and_offers_the_fix(paths, 
         pane, _editor = await open_places(pilot)
         problems = str(pane.query_one("#problems-places", Static).render())
         assert 'location_keywords_en: listed twice: "abu al khasib"' in problems
-        assert 'location_keywords_ar: listed twice: "التنومة"' in problems
+        # drawn in display order (the screen reorders right-to-left words)
+        assert 'location_keywords_ar: listed twice: "' in problems and rtl.visual("التنومة") in problems
         assert "Remove duplicates" in problems
         button = pane.query_one("#dedupe", Button)
         assert not button.has_class("hidden")

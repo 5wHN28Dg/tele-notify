@@ -45,6 +45,8 @@ from textual.widgets.data_table import CellDoesNotExist
 
 from .. import bot
 from ..clean import clean
+from ..postview import PostView
+from ..rtl import Block, visual
 from ..store import Alert, ChatStats, Judged, Store
 from . import dashboard_data as dd
 from . import search_data
@@ -386,6 +388,7 @@ class DashboardPane(Vertical):
         # the last numbers counted: (choice, when (monotonic), numbers, seconds it took)
         self._counted: tuple[dd.PeriodChoice, float, dd.PeriodStats, float] | None = None
         self._sort: tuple[str, bool] = ("total", True)
+        self._chat_names: dict[str, str] = {}   # chat name as drawn -> as read, for sorting
         self._busy = False
         self._reading = False
         self._read_again = False   # asked for a fresh read while one was running
@@ -420,7 +423,7 @@ class DashboardPane(Vertical):
             with Vertical(id="view-feed"):
                 yield DataTable(id="feed", cursor_type="row", zebra_stripes=True)
                 with VerticalScroll(id="feed-detail-box"):
-                    yield Static("Select a message to see why it got its verdict.", id="feed-detail",
+                    yield PostView("Select a message to see why it got its verdict.", id="feed-detail",
                                  classes="muted")
             with Vertical(id="view-chats"):
                 yield Static("", id="chats-period", classes="muted")
@@ -646,9 +649,9 @@ class DashboardPane(Vertical):
                 continue
             self._feed[key] = j
             style = VERDICT_STYLE.get(j.verdict, "")
-            table.add_row(fmt_time(j.at, snap.now), Text(j.chat_title, overflow="ellipsis"),
-                          Text(j.verdict, style=style), Text(j.role), Text(first_reason(j.reasons), style=style),
-                          key=key)
+            table.add_row(fmt_time(j.at, snap.now), Text(visual(j.chat_title), overflow="ellipsis"),
+                          Text(j.verdict, style=style), Text(visual(j.role)),
+                          Text(visual(first_reason(j.reasons)), style=style), key=key)
         if not snap.feed:
             self._detail(None, "Nothing judged yet." if snap.exists else "No state file yet.")
             return
@@ -664,15 +667,16 @@ class DashboardPane(Vertical):
             return
         t = Text()
         t.append(f"{j.verdict}", style="bold " + VERDICT_STYLE.get(j.verdict, ""))
-        t.append(f"  {j.chat_title}  ·  {j.action}", style="dim")
+        t.append(f"  {visual(j.chat_title)}  ·  {visual(j.action)}", style="dim")
         if j.role:
-            t.append(f"  ·  role: {j.role}")
-        t.append("\n")
+            t.append(f"  ·  role: {visual(j.role)}")
         for r in [r.strip() for r in j.reasons.split(";") if r.strip()] or ["(no reasons recorded)"]:
-            t.append(f"  - {r}\n")
-        if j.text:
-            t.append("\n" + j.text.strip(), style="italic")
-        box.update(t)
+            t.append(f"\n  - {visual(r)}")
+        if not j.text.strip():
+            box.update(t)
+            return
+        t.append("\n")   # a blank line, then the post
+        box.update(Block(j.text.strip(), style="italic", head=t))
 
     @on(DataTable.RowHighlighted, "#feed")
     @on(DataTable.RowSelected, "#feed")
@@ -684,8 +688,11 @@ class DashboardPane(Vertical):
     def _show_stats(self, snap: Snapshot) -> None:
         table = self.query_one("#chat-stats", DataTable)
         table.clear()
+        self._chat_names = {}
         for s in snap.stats:
-            table.add_row(Text(s.chat or "?"), s.total, s.publish, s.review, s.reject, s.forwarded)
+            shown = visual(s.chat or "?")
+            self._chat_names[shown] = (s.chat or "?").casefold()   # sorted by the name as read, not as drawn
+            table.add_row(Text(shown), s.total, s.publish, s.review, s.reject, s.forwarded)
         self._sort_stats()
 
     def _sort_stats(self) -> None:
@@ -693,7 +700,7 @@ class DashboardPane(Vertical):
         if not table.row_count:
             return
         col, reverse = self._sort
-        key = (lambda v: str(v).casefold()) if col == "chat" else None
+        key = (lambda v: self._chat_names.get(str(v), str(v).casefold())) if col == "chat" else None
         table.sort(col, key=key, reverse=reverse)
 
     @on(DataTable.HeaderSelected, "#chat-stats")
@@ -763,12 +770,12 @@ class DashboardPane(Vertical):
         alerts = self.query_one("#alerts", DataTable)
         alerts.clear()
         for a in snap.alerts:
-            alerts.add_row(fmt_time(a.at, snap.now), Text(a.text))
+            alerts.add_row(fmt_time(a.at, snap.now), Text(visual(a.text)))
         health = self.query_one("#health", DataTable)
         health.clear()
         for p in snap.problems:
             style = "dim" if p.status == "silent" else "red"
-            health.add_row(Text(p.title), Text(p.status, style=style), Text(p.detail))
+            health.add_row(Text(visual(p.title)), Text(visual(p.status), style=style), Text(visual(p.detail)))
         note = self.query_one("#dash-note", Static)
         bits = []
         if snap.problems:
