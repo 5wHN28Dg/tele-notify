@@ -38,6 +38,8 @@ type
                       ## supergroup, with a new chat id), "unavailable" (it
                       ## can't be opened or read at all), "" (unknown: ignore)
     newChat*: int64   ## "upgraded": the new chat id
+    public*: bool     ## a supergroup/channel with a public username: readable
+                      ## without being a member
 
   Telegram* = ref object
     ## Every operation the listener uses. All of them may raise (network,
@@ -137,6 +139,11 @@ proc basicGroupAccess*(g: JsonNode): ChatAccess =
     return ChatAccess(status: "unavailable")
   ChatAccess(status: memberAccess(g{"status"}))
 
+proc isPublic*(supergroup: JsonNode): bool =
+  ## Does this TDLib supergroup have a public username?
+  let names = supergroup{"usernames", "active_usernames"}   # may be missing
+  names != nil and names.kind == JArray and names.len > 0
+
 proc parseAccessUpdate*(u: JsonNode): tuple[chat: int64, access: ChatAccess] =
   ## updateSupergroup / updateBasicGroup: the chat it is about (0 for any
   ## other update) and this account's access to it.
@@ -144,7 +151,8 @@ proc parseAccessUpdate*(u: JsonNode): tuple[chat: int64, access: ChatAccess] =
   of "updateSupergroup":
     let g = u{"supergroup"}
     if g{"id"} == nil: return
-    (supergroupChatId(g{"id"}.getBiggestInt), ChatAccess(status: memberAccess(g{"status"})))
+    (supergroupChatId(g{"id"}.getBiggestInt),
+     ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g)))
   of "updateBasicGroup":
     let g = u{"basic_group"}
     if g{"id"} == nil: return
@@ -263,7 +271,7 @@ proc tdTelegram*(c: TdClient): Telegram =
     of "chatTypeSupergroup":     # channels too
       let g = await c.call(%*{"@type": "getSupergroup",
                               "supergroup_id": t{"supergroup_id"}.getBiggestInt})
-      a = ChatAccess(status: memberAccess(g{"status"}))
+      a = ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g))
     of "chatTypeBasicGroup":
       let g = await c.call(%*{"@type": "getBasicGroup",
                               "basic_group_id": t{"basic_group_id"}.getBiggestInt})

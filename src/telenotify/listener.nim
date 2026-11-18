@@ -37,7 +37,7 @@
 ##   start-up, and when the connection comes back, a long gap is reported
 ##   to your Saved Messages.
 
-import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables]
+import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
 import config, classify, gather, fetch, telegram, state, dedup, boards
 
 type
@@ -61,6 +61,8 @@ type
     downSince: int64
     selfChat: int64
     titles*: Table[int64, string]   # watched chats' titles, for alerts
+    checkingAccess: bool            # the start-up access check is running
+    accessChecked: HashSet[int64]   # chats it has looked at
 
 proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: Ocr,
                   dryRun: bool): Listener =
@@ -110,16 +112,18 @@ proc accessText*(chat: int64, title: string, a: ChatAccess, detail = ""): string
     &"{title} can't be read" & (if detail != "": &" ({detail})" else: "") &
       ": tele-notify gets nothing from it any more. Remove it from config.json, or rejoin it."
 
-proc onChatAccess*(l: Listener, chat: int64, a: ChatAccess, detail = "",
-                   atStartup = false) {.async.} =
+proc onChatAccess*(l: Listener, chat: int64, access: ChatAccess, detail = "",
+                   live = false) {.async.} =
   ## This account's access to a chat, from a live TDLib update, the
   ## start-up check or a failed backlog read. For a watched chat that can't
   ## be read any more, alert once per state: TDLib repeats these updates on
   ## every start, so the last state alerted is kept in the state database.
-  ## Never raises.
-  if chat notin l.cfg.chats or a.status == "": return
-  let title = if a.title != "": a.title else: l.titles.getOrDefault(chat, &"chat {chat}")
+  ## Never raises. `live`: from a TDLib update (not the start-up check or a read).
+  if chat notin l.cfg.chats or access.status == "": return
+  let title = if access.title != "": access.title else: l.titles.getOrDefault(chat, &"chat {chat}")
   let key = accessKey(chat)
+  var a = access
+  var detail = detail
   try:
     let before = l.state.getMeta(key)
     if a.status == "ok":
@@ -130,14 +134,22 @@ proc onChatAccess*(l: Listener, chat: int64, a: ChatAccess, detail = "",
         l.state.setMeta(key, "")
         l.say &"✅ can read {title} again"
       return
-    if before == a.status: return
-    # A watched public channel the account never joined reads as "left" at
-    # start-up, but the bot still gets its posts (it opens every watched
-    # chat). Only a live "left" (you just left, or were removed) alerts.
-    if a.status == "left" and atStartup and before == "":
-      l.state.setMeta(key, "left")
-      l.say &"   not a member of {title} (fine for a public channel)"
+    # While the start-up check runs, a live update for a chat it hasn't
+    # reached yet is skipped: the check reads the same state (and knows a
+    # public channel you never joined isn't a lost chat).
+    if live and l.checkingAccess and chat notin l.accessChecked: return
+    # A public channel (it has a username) is readable without being a
+    # member: the bot opens every watched chat. Not an alert.
+    if a.status == "left" and a.public:
+      if before == "":
+        l.state.setMeta(key, "left-public")
+        l.say &"   not a member of {title} (fine: it's public)"
       return
+    if a.status == "left" and before == "left-public":
+      # it lost its username: private now, and this account isn't a member
+      a = ChatAccess(title: a.title, status: "unavailable")
+      detail = "it's no longer public and this account isn't a member"
+    if before == a.status: return
     l.state.setMeta(key, a.status)   # before the await: no double alert
   except CatchableError as e:
     l.say &"   could not record access to {title}: {e.msg}"
@@ -169,15 +181,18 @@ proc unreadFailed(l: Listener, chat: int64, e: ref CatchableError) {.async.} =
 
 proc checkWatchedChats*(l: Listener) {.async.} =
   ## At start-up: is this account still a member of every watched chat?
+  l.checkingAccess = true
+  defer: l.checkingAccess = false
   for chat in l.cfg.chats:
     if l.stop[]: break
     try:
       let a = await l.tg.chatAccess(chat)
       if a.title != "": l.titles[chat] = a.title
-      await l.onChatAccess(chat, a, atStartup = true)
+      await l.onChatAccess(chat, a)
     except CatchableError as e:
       if isAccessError(e.msg): await l.unreadFailed(chat, e)
       else: l.say &"   could not check access to chat {chat}: " & e.msg.splitLines()[0]
+    l.accessChecked.incl chat
 
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
@@ -350,6 +365,7 @@ proc processQueue*(l: Listener) {.async.} =
       # Telegram wants the ids in increasing order (forwardMessages)
       group.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))
     await l.handleGroup(group)
+    l.chatReadable(m.chatId, m.chatTitle)   # a post arrived: the chat is readable
     # Marking a message read moves Telegram's read marker past everything
     # older: in a chat whose backlog couldn't be read yet, that backlog
     # would be lost to the retry. Its messages are marked once it works.

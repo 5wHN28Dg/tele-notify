@@ -15,6 +15,7 @@ type FakeTg = ref object
   afterForward: proc () {.closure, gcsafe.}
   forwardFails, linkFails: bool
   cutChats: HashSet[int64]
+  duringAccess: proc () {.closure, gcsafe.}   # e.g. a live update racing the check
   unreadFails: HashSet[int64]        # chats whose backlog can't be read (offline)
   readMarker: bool                   # like Telegram: unread = after the newest read id
   unreadError: Table[int64, string]  # chats whose backlog read fails with this TDLib error
@@ -69,6 +70,7 @@ proc toTelegram(f: FakeTg): Telegram =
   result.selfChat = proc (): Future[int64] {.async, closure, gcsafe.} = return 42
   result.chatAccess = proc (chat: int64): Future[ChatAccess] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
+      if f.duringAccess != nil: f.duringAccess()
       if chat in f.accessError: raise newException(IOError, f.accessError[chat])
       return f.access.getOrDefault(chat, ChatAccess(title: "chat" & $(-chat), status: "ok"))
 
@@ -596,10 +598,10 @@ suite "watched chats you can't read any more (#16)":
 
   test "a public channel never joined is not reported at start-up; leaving live is (review)":
     let f = FakeTg()
-    f.access[-1] = ChatAccess(title: "Public", status: "left")
+    f.access[-1] = ChatAccess(title: "Public", status: "left", public: true)
     let (l, st) = setup(f)
     waitFor l.checkWatchedChats()
-    check f.texts.len == 0 and st.getMeta("chat_access:-1") == "left"
+    check f.texts.len == 0 and st.getMeta("chat_access:-1") == "left-public"
     waitFor l.onChatAccess(-2, ChatAccess(title: "Group", status: "left"))   # live update
     check f.texts.len == 1 and "no longer a member of Group" in f.texts[0][1]
 
@@ -608,3 +610,46 @@ suite "watched chats you can't read any more (#16)":
     let (l, _) = setup(f, dryRun = true)
     waitFor l.alert("something")
     check f.texts.len == 1 and f.texts[0][1].startsWith("⚠️ tele-notify [dry run]: something")
+
+  test "a post that arrives proves the chat readable again (adversarial review)":
+    let f = FakeTg()
+    f.unreadError[-1] = "CHANNEL_PRIVATE (400)"
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check st.getMeta("chat_access:-1") == "unavailable"
+    let live = msg(-1, 20, bad)              # you rejoined; posts arrive live
+    l.enqueue live
+    waitFor l.processQueue()
+    check st.getMeta("chat_access:-1") == ""
+
+  test "removed from a private group while the bot was down is reported (adversarial review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Private Jobs", status: "left")     # no username
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 1 and "no longer a member of Private Jobs" in f.texts[0][1]
+    check st.getMeta("chat_access:-1") == "left"
+
+  test "a public channel never joined that goes private is reported (adversarial review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Public", status: "left", public: true)
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 0
+    waitFor l.onChatAccess(-1, ChatAccess(status: "left", public: false), live = true)   # username gone
+    check f.texts.len == 1 and "no longer public" in f.texts[0][1]
+    check st.getMeta("chat_access:-1") == "unavailable"
+
+  test "a live update during the start-up check waits for the check (adversarial review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Public", status: "left", public: true)
+    let (l, st) = setup(f)
+    var raced = false
+    f.duringAccess = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if not raced:
+          raced = true
+          # TDLib's refresh of chat -2 arrives while chat -1 is being checked
+          waitFor l.onChatAccess(-2, ChatAccess(status: "left"), live = true)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 0 and st.getMeta("chat_access:-2") == ""
