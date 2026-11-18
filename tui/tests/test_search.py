@@ -199,3 +199,12 @@ def test_search_data_chat_filter_and_chats(state):
         titles = [t for _, t in search_data.judged_chats(s)]
         assert titles == ["Basra Jobs", "Blocked Channel", "Family", "Iraq Jobs"]
     assert search_data.split_reasons("a; b ;; c") == ["a", "b", "c"]
+
+
+
+def test_main_reason_skips_gather_notes():
+    from telenotify_tui.screens import search_data as sd
+    assert sd.main_reason("read 34 characters from an image; no matching role") == "no matching role"
+    assert sd.main_reason("LinkedIn job download failed: 404; role (rkTitle): it support") == "role (rkTitle): it support"
+    assert sd.main_reason("read 0 characters from an image") == "read 0 characters from an image"
+    assert sd.main_reason("") == ""

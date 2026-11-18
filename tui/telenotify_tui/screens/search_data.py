@@ -31,3 +31,24 @@ def judged_chats(store: Store) -> list[tuple[int, str]]:
 def split_reasons(reasons: str) -> list[str]:
     """The bot stores reasons joined with '; '."""
     return [r.strip() for r in reasons.split(";") if r.strip()]
+
+
+# Notes the bot adds while gathering text (gather.nim) come before the
+# filter's own reasons; they say what was read, not why the verdict.
+_GATHER_NOTES = ("read ", "short link", "ocr failed", "could not ")
+_GATHER_PARTS = (" download failed", "page had no job text", "job links: none followed")
+
+
+def is_gather_note(reason: str) -> bool:
+    r = reason.lower()
+    return r.startswith(_GATHER_NOTES) or any(p in r for p in _GATHER_PARTS)
+
+
+def main_reason(reasons: str) -> str:
+    """The first reason that explains the verdict (skipping 'read 34
+    characters from an image' and the like); the first note if that's all."""
+    parts = split_reasons(reasons)
+    for r in parts:
+        if not is_gather_note(r):
+            return r
+    return parts[0] if parts else ""

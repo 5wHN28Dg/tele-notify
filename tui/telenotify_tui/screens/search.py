@@ -254,9 +254,8 @@ class SearchPane(Vertical):
             if k in self._rows:
                 continue
             self._rows[k] = j
-            first = search_data.split_reasons(j.reasons)
             table.add_row(when(j.at, "%m-%d %H:%M"), short(j.chat_title, 14), verdict_text(j.verdict),
-                          short(j.role, 14), short(first[0] if first else "", 32), key=k)
+                          short(j.role, 14), short(search_data.main_reason(j.reasons), 32), key=k)
         if keep in self._rows:
             table.move_cursor(row=table.get_row_index(keep))
             self._show_detail(self._rows[keep], keep_result=True)

@@ -43,6 +43,7 @@ from textual.widgets.data_table import CellDoesNotExist
 from .. import bot
 from ..store import Alert, ChatStats, Judged, Store
 from . import dashboard_data as dd
+from . import search_data
 
 ALIVE_SECONDS = 120
 FEED_ROWS = 50
@@ -78,7 +79,7 @@ def fmt_time(at: int, now: float) -> str:
 
 
 def first_reason(reasons: str) -> str:
-    return reasons.split(";")[0].strip()
+    return search_data.main_reason(reasons)
 
 
 def render_chart(days: list[dd.DayCount], height: int = CHART_HEIGHT) -> Text:
