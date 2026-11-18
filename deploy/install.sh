@@ -42,7 +42,9 @@ fi
 
 echo "installing the terminal screen..."
 [ -x "$lib/tui-venv/bin/python" ] || python3 -m venv "$lib/tui-venv"
-rm -rf "$repo/tui/build"
+# a leftover build/ or *.egg-info can hide a packaging mistake (or ship a
+# deleted file), so build from a clean state every time
+rm -rf "$repo/tui/build" "$repo/tui/"*.egg-info
 "$lib/tui-venv/bin/pip" install -q --upgrade "$repo/tui"
 rm -rf "$repo/tui/build"
 ln -sf "$lib/tui-venv/bin/telenotify-tui" "$bin/telenotify-tui"

@@ -40,3 +40,9 @@ jobs:
           python -m pip install -q -e '.[dev]'
           ruff check --target-version py311 .
           python -m pytest -q
+      - name: TUI installs with its data files
+        run: |
+          w=$(mktemp -d); git archive HEAD tui | tar -x -C "$w"
+          python -m pip wheel -q --no-deps -w "$w/dist" "$w/tui"
+          unzip -l "$w"/dist/*.whl | grep -q 'telenotify_tui/app.tcss'
+          echo "the wheel has app.tcss"
