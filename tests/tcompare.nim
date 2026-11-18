@@ -31,19 +31,20 @@ st.addOtherBot(103, 0, 0, "Electrical engineer, Rumaila, fresh graduates, apply 
 st.addOtherBot(104, -9, 1, "something Nim never saw")
 st.addOtherBot(104, -9, 1, "the same message noted twice")   # ignored
 st.addOtherBot(105, -77, 3, "Python developer needed in Basra, send your CV to the email below please")
+st.addOtherBot(108, 0, 12, "match: help desk\npost link: https://t.me/None/12")  # chat unknown
 st.addOtherBot(106, -9, 5, "", albumId = 55)                 # an album: one post
 st.addOtherBot(107, -9, 6, "album caption", albumId = 55)
 
 suite "compare":
   test "both, Python only (with Nim's reasons), Nim only":
     let c = st.compareRuns(getTime().toUnix - 86400)
-    check c.both.len == 3                  # 10, the copy of it, and 13 by text
+    check c.both.len == 4                  # 10, the copy of it, 13 by text, 12 by id
     check c.pythonOnly.len == 4                # 11, 104, 105 (by text), the album
     check c.pythonOnly[0].nimSaw and c.pythonOnly[0].nim.reasons == "needs 5 years"
     check not c.pythonOnly[1].nimSaw
     check c.pythonOnly[2].nimSaw and c.pythonOnly[2].nim.msgId == 14   # found by its text
     check c.pythonOnly[3].other.text == "album caption" and not c.pythonOnly[3].nimSaw
-    check c.nimOnly.len == 1 and c.nimOnly[0].nim.msgId == 12
+    check c.nimOnly.len == 0
 
   test "the time window applies":
     let c = st.compareRuns(getTime().toUnix + 60)

@@ -67,6 +67,15 @@ proc compareRuns*(s: State, since: int64): Comparison =
     var row: ProcessedRow
     if p.originChat != 0:
       (found, row) = s.processedRow(p.originChat, p.originMsg)
+    elif p.originMsg != 0:
+      # a link without the chat (t.me/None/<id>): the watched message with
+      # that id; if several chats have one, the one Nim published
+      let candidates = s.processedByMsgId(p.originMsg)
+      var pick = -1
+      for i, (chat, action) in candidates:
+        if action in publishedActions: pick = i
+      if pick < 0 and candidates.len == 1: pick = 0
+      if pick >= 0: (found, row) = s.processedRow(candidates[pick][0], p.originMsg)
     if not found:
       # no origin (forwarded from a group), a link that couldn't be resolved,
       # or a forward of a forward (its origin is the first channel)

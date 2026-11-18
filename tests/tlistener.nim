@@ -294,7 +294,7 @@ suite "listener":
     check f.forwarded == @[(-1'i64, 31'i64), (-1'i64, 30'i64)]
     check st.previous(-1, 30).action == "forwarded"
 
-  test "an edit of a message never seen is handled like a new one":
+  test "an edit of a message never seen is ignored (it would forward old posts)":
     let f = FakeTg()
     let (l, _) = setup(f)
     waitFor l.bootstrap()
@@ -302,7 +302,7 @@ suite "listener":
     m.edited = true
     l.enqueue m
     waitFor l.processQueue()
-    check f.forwarded == @[(-2'i64, 50'i64)]
+    check f.forwarded.len == 0
 
   test "dry run: the Python bot's posts in the channel are noted, with where they came from":
     let f = FakeTg()
@@ -316,7 +316,7 @@ suite "listener":
     check notes.len == 3
     check (notes[0].originChat, notes[0].originMsg) == (-1'i64, 10'i64)
     check (notes[1].originChat, notes[1].originMsg) == (-5'i64, 77'i64)
-    check notes[2].originChat == 0          # couldn't resolve: kept, matched by text later
+    check notes[2].originChat == 0 and notes[2].originMsg == 1   # chat unknown, id kept
 
   test "album parts arriving after their first picture was handled are not judged again":
     let f = FakeTg()
@@ -372,3 +372,21 @@ suite "listener":
     l.enqueue m
     waitFor l.processQueue()
     check f.forwarded.len == 0
+
+  test "a late or split-off album picture counts as part of the handled post":
+    let f = FakeTg()
+    var a = msg(-1, 100, "Hiring a junior Electrical Engineer in Basra, fresh graduates welcome")
+    var b = msg(-1, 101, "", photo = 1)                  # its own picture text would publish
+    a.albumId = 42
+    b.albumId = 42
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    l.albumWaitMs = 10
+    l.enqueue a
+    l.enqueue msg(-2, 5, bad)                             # another chat in between
+    l.enqueue b
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 100'i64)]
+    check st.previous(-1, 101).found
+    for row in st.stats(1):
+      if row.chat == "chat1": check row.forwarded == 1   # one post, not two pictures

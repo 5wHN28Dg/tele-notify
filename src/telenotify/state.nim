@@ -60,12 +60,20 @@ proc openState*(path: string): State =
   #   processed.raw_text   the message text, dry run only (compare)
   #   reviews.album_ids    every message of an album, so approving sends it all
   #   other_bot.album_id   pictures of one album count as one post
-  for (table, column) in [("processed", "text_hash"), ("processed", "raw_text"),
-                          ("reviews", "album_ids"), ("other_bot", "album_id")]:
+  #   processed.album_id   so a late picture of an album counts as handled
+  # (Declare the type: values are bound as text, and only an INTEGER
+  # column turns "0" back into the number 0.)
+  for (table, column) in [("processed", "text_hash TEXT"), ("processed", "raw_text TEXT"),
+                          ("processed", "album_id INTEGER"),
+                          ("reviews", "album_ids TEXT"), ("other_bot", "album_id INTEGER")]:
     var has = false
     for row in db.fastRows(sql("PRAGMA table_info(" & table & ")")):
-      if row[1] == column: has = true
-    if not has: db.exec(sql("ALTER TABLE " & table & " ADD COLUMN " & column))
+      if row[1] == column.split(' ')[0]: has = true
+    if not has:
+      # `review` and `run` may open an old file at the same moment
+      try: db.exec(sql("ALTER TABLE " & table & " ADD COLUMN " & column))
+      except DbError as e:
+        if "duplicate column" notin e.msg: raise
 
 proc close*(s: State) = s.db.close()
 
@@ -73,11 +81,23 @@ proc seen*(s: State, chat, msg: int64): bool =
   s.db.getValue(sql"SELECT 1 FROM processed WHERE chat_id = ? AND msg_id = ?", chat, msg) != ""
 
 proc markProcessed*(s: State, chat, msg: int64, title, verdict, role, reasons, action: string,
-                    textHash = "", rawText = "") =
+                    textHash = "", rawText = "", albumId = 0'i64) =
   s.db.exec(sql"""INSERT OR REPLACE INTO processed
-    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at, text_hash, raw_text)
-    VALUES (?,?,?,?,?,?,?,?,?,?)""",
-    chat, msg, title, verdict, role, reasons, action, now(), textHash, rawText)
+    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at, text_hash, raw_text, album_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+    chat, msg, title, verdict, role, reasons, action, now(), textHash, rawText, albumId)
+
+proc albumHandled*(s: State, chat, albumId: int64): tuple[found: bool, action, textHash: string] =
+  ## Was any picture of this album handled already?
+  if albumId == 0: return
+  let row = s.db.getRow(sql"""SELECT 1, action, COALESCE(text_hash, '') FROM processed
+                              WHERE chat_id = ? AND album_id = ? LIMIT 1""", chat, albumId)
+  (row[0] == "1", row[1], row[2])
+
+proc processedByMsgId*(s: State, msg: int64): seq[(int64, string)] =
+  ## (chat, action) of every judged message with this id, in any chat.
+  for r in s.db.fastRows(sql"SELECT chat_id, action FROM processed WHERE msg_id = ?", msg):
+    result.add (parseBiggestInt(r[0]), r[1])
 
 proc previous*(s: State, chat, msg: int64): tuple[found: bool, action, textHash: string] =
   ## What happened to this message last time, if anything.
@@ -152,10 +172,13 @@ type StatRow* = object
 proc stats*(s: State, days: int): seq[StatRow] =
   ## Per chat over the last `days` days: how many messages got each verdict
   ## and how many were actually forwarded (#12, #13, #15).
+  # An album is one post, however many pictures: count its first row only.
   for r in s.db.fastRows(sql"""SELECT chat_title,
       SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
       SUM(action = 'forwarded' OR action = 'linked')
-      FROM processed WHERE at > ? GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):
+      FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
+        (SELECT MIN(msg_id) FROM processed q WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))
+      GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):
     result.add StatRow(chat: r[0], verdicts: [parseInt(r[1]), parseInt(r[2]), parseInt(r[3])],
                        forwarded: parseInt(r[4]))
 
@@ -178,7 +201,8 @@ proc addOtherBot*(s: State, msgId, originChat, originMsg: int64, text: string, a
                   VALUES (?,?,?,?,?,?)""", now(), msgId, originChat, originMsg, text, albumId)
 
 proc otherBotSince*(s: State, since: int64): seq[OtherBotPost] =
-  for r in s.db.fastRows(sql"""SELECT at, origin_chat, origin_msg, text, COALESCE(album_id, 0)
+  for r in s.db.fastRows(sql"""SELECT at, origin_chat, origin_msg, text,
+                               CAST(COALESCE(album_id, 0) AS INTEGER)
                                FROM other_bot WHERE at > ? ORDER BY msg_id""", since):
     result.add OtherBotPost(at: parseBiggestInt(r[0]), originChat: parseBiggestInt(r[1]),
                             originMsg: parseBiggestInt(r[2]), text: r[3],

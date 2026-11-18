@@ -149,16 +149,27 @@ proc locate(lines: seq[string], cfg: Config, why: var string): Place =
 # واسعة". Not a hard no (no years to compare), but it outweighs a generic
 # "fresh graduates and experienced" that some channels put on every post
 # (found on the first real run).
-let strongExperience = re2(r"(?:(?:ال)?خبر(?:ه|ات)\s+(?:(?:ال)?(?:عمليه|ميدانيه|مهنيه|فنيه|عملي|عمل)\s+)?(?:ال)?(?:واسعه|طويله|قويه|كبيره|عاليه|عميقه|متميزه|ممتازه)|(?:^|[^a-z])(?:extensive|proven|strong|solid|significant|substantial|considerable|broad)\s+(?:(?:hands\s+on|practical|professional|relevant|industry|industrial|field|work|working|technical|engineering|commercial|international|previous|prior)\s+)?experience(?:[^a-z]|$))")
-# ...unless it's denied ("no extensive experience required", "لا يشترط خبرة
-# واسعة") or offered ("you will gain solid practical experience").
-let notAsked = re2(r"(?:^|[^a-z])(?:no|not|without|gain|gaining|acquire|build|develop|get|offers?|provides?)(?:[^a-z]|$)|(?:لا|بدون|غير|اكتساب|لاكتساب|تكتسب|يكتسب|نوفر|توفر)(?:\s|$)")
+let strongExperience = re2(r"(?:(?:ال)?خبر(?:ه|ات)\s+(?:(?:ال)?(?:عمليه|ميدانيه|مهنيه|فنيه|عملي|عمل|سابقه)\s+)?(?:ال)?(?:واسعه|طويله|قويه|كبيره|عاليه|عميقه)|(?:^|[^a-z])(?:extensive|proven|strong|solid|significant|substantial|considerable|broad)\s+(?:(?:hands\s+on|practical|professional|relevant|industry|industrial|field|work|working|technical|engineering|commercial|international|previous|prior)\s+)?experience(?:[^a-z]|$))")
+# In the same sentence *before* the phrase: optional ("preferably",
+# "يفضل"), denied ("no", "لا يشترط"),
+# offered ("you will gain", "ستحصل على"), or describing the company or its
+# staff ("a company with", "ذات", "our team has").
+let notAskedBefore = re2(r"(?:^|[^a-z])(?:preferably|ideally|no|not|without|gain|gaining|acquire|build|develop|get|earn|obtain|receive|offers?|provides?|our|we|company|team|staff|alongside|mentored|mentors)(?:[^a-z]|$)|(?:^|\s)(?:يفضل|ويفضل|يستحسن|لا|بدون|غير|ليس|اكتساب|لاكتساب|تكتسب|يكتسب|ستكتسب|تحصل|ستحصل|يحصل|يمنحك|يمنح|نمنح|نوفر|توفر|ذات|تمتلك|نمتلك|يمتلك|لدينا|فريق|شركتنا|شركه)(?:\s|$)")
+# ...or *after* it: "is not required", "is a plus", "غير مطلوبه", "مع/with"
+# a tool or skill ("strong experience with MS Office").
+let notAskedAfter = re2(r"^\s*(?:is\s+|are\s+)?(?:not|n't|a\s+plus|an\s+advantage|preferred|desirable|optional|with|of\s+(?:using|working))(?:[^a-z]|$)|^\s*(?:غير|ليس|ليست|مفضل|ميزه|يفضل|مع)(?:\s|$)")
+let sentenceBreak = re2(r"[.!?:;\n؛،]")
 
 proc strongExperienceAsked(flatLower: string): string =
-  ## The first "extensive experience"-like requirement, or "".
+  ## The first "extensive experience"-like requirement, or "". Takes the
+  ## normalised, lower-case text with sentence punctuation kept.
   for m in flatLower.findAll(strongExperience):
-    let before = flatLower.runeSafe(m.boundaries.a - 30, m.boundaries.a)
-    if before.contains(notAsked): continue
+    var before = flatLower.runeSafe(m.boundaries.a - 60, m.boundaries.a)
+    var cut = -1
+    for b in before.findAll(sentenceBreak): cut = b.boundaries.b
+    if cut >= 0: before = before[cut + 1 .. ^1]
+    var after = flatLower.runeSafe(m.boundaries.b + 1, m.boundaries.b + 40)
+    if before.contains(notAskedBefore) or after.contains(notAskedAfter): continue
     return flatLower[m.boundaries].strip(chars = {' ', '\n', '.', ',', '(', ')'})
   ""
 
@@ -278,7 +289,9 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
   # A number of years (or "no experience needed") is a clearer answer than
   # a vague "strong experience", so the rule only applies without one.
   let strong = (if exp.requiredYears > 0 or exp.entryFriendly: ""
-                else: flatAll.toLowerAscii.strongExperienceAsked)
+                # the normal text: `flatten` turns ". : ," into spaces, and the
+                # rule needs sentence boundaries
+                else: (b.lines & header.lines).join("\n").toLowerAscii.replace("-", " ").strongExperienceAsked)
   if positive:
     if strong != "":
       result.reasons.add "but asks for '" & strong & "'"

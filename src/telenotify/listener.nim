@@ -103,6 +103,15 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   var prev = l.state.previous(m.chatId, m.id)
   for x in group[1 .. ^1]:
     if not prev.found: prev = l.state.previous(x.chatId, x.id)
+  if not prev.found and not m.edited:
+    # a picture of an album handled earlier (it arrived late, or the queue
+    # split the album)
+    prev = l.state.albumHandled(m.chatId, m.albumId)
+  if m.edited and not prev.found:
+    # An edit of a message the bot never saw (it wasn't running, or a dry
+    # run started later). Its original would have been judged if seen;
+    # judging the edit as a new post would forward old posts.
+    return
   if prev.found:
     # Only an edit of a rejected post with new text is judged again ("job
     # ad coming soon..." edited into the real ad). Not for album pictures
@@ -114,7 +123,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       for y in group:      # parts not recorded yet belong to the handled post
         if not l.state.seen(y.chatId, y.id):
           l.state.markProcessed(y.chatId, y.id, y.chatTitle, "", "", "part of a post already handled",
-                                prev.action, prev.textHash)
+                                prev.action, prev.textHash, albumId = y.albumId)
       return
     l.say &"✏️  {m.chatTitle} #{m.id} was edited: judging it again"
   var verdict, role, reasons = ""
@@ -183,7 +192,8 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   for x in group:
     try:
       l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
-                            rawText = (if l.dryRun: x.text else: ""))   # for compare
+                            rawText = (if l.dryRun: x.text else: ""),   # for compare
+                            albumId = x.albumId)
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 
@@ -209,7 +219,12 @@ proc noteOtherBot*(l: Listener, m: TgMessage) {.async.} =
       let words = m.text[i + "post link: ".len .. ^1].splitWhitespace
       if words.len > 0:
         try: (chat, msg) = await l.tg.linkTarget(words[0])
-        except CatchableError: discard
+        except CatchableError:
+          # The Python bot writes t.me/None/<id> for channels without a
+          # username: keep the id, compare finds the chat.
+          let parts = words[0].strip(chars = {'/'}).split('/')
+          try: msg = parseBiggestInt(parts[^1])
+          except ValueError: discard
     l.state.addOtherBot(m.id, chat, msg, m.text, m.albumId)
   except CatchableError as e:
     l.say "   could not note the other bot's post: " & e.msg
