@@ -5,11 +5,23 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 | Tab | Key | What it does |
 |---|---|---|
 | Dashboard | `1` | Is the bot running and connected, dry run or real; start / stop / restart it; posts judged today and this week; a 14-day chart; numbers per channel; a live feed of what it just judged; alerts; channels that blocked you or went silent |
-| Review | `2` | The review queue: read each unsure post and send (`s`) or discard (`d`) it (for a moment after a post appears these keys wait, so a double tap can't decide the next post unread); `u` undoes the last choice unless the bot already sent the post; `o` opens the link, `r` shows what the filter read from links. Every choice is also saved as a test label (`~/.local/share/tele-notify-corpus/review-labels.jsonl`) |
+| Review | `2` | The review queue: read each unsure post and send (`s`) or discard (`d`) it, or press `k` ("match, don't send") for a post that is a match but already reached your channel another way, for example the old bot forwarded it: it is labelled a match and the bot never sends it. For a moment after a post appears these keys wait, so a double tap can't decide the next post unread. `u` undoes the last choice unless the bot already sent the post; `o` opens the link, `r` shows what the filter read from links. Every choice is also saved as a test label (`~/.local/share/tele-notify-corpus/review-labels.jsonl`): send and `k` as a match, discard as not a match. In a dry run nothing is ever forwarded: send only records your choice, and the screen says so |
 | Search | `3` | Search everything the bot judged and see why; re-judge a post with the current settings (`j`, or `J` to follow links); paste any post to try it (`p`) |
-| Settings | `4` | Edit keywords, places, watched chats (by name), the target chat and the bot options; test a change on the corpus before saving (`t`); save (`ctrl+s`) with a backup, then restart the bot to apply it (offered only while it runs) |
+| Settings | `4` | Edit keywords, places, watched chats (by name), the target chat and the bot options; test a change on the corpus before saving (`t`); save (`ctrl+s`) with a backup, then restart the bot to apply it (offered only while it runs). Lists are explained below |
 
 `ctrl+r` refreshes the tab, `ctrl+q` quits (it asks first if Settings has unsaved changes).
+
+### Editing a keyword list (Settings)
+
+Pick a list on the left, then work in the list on the right:
+
+- **Pick an item**: click it, or use the arrow keys. In the filter box, type part of a word to narrow the list, then press down or enter to move into it (in the filter box, delete and backspace only edit the filter text).
+- **Delete**: `del` or `x` on the picked item, or the Delete button.
+- **Edit**: `enter` or a double click on the item, or the Edit button; change the text in the bottom box and press enter (`esc` cancels).
+- **Add**: `a` or the Add button (or click the bottom box), type the word and press enter.
+- **Duplicates**: a list with the same word twice (ignoring case and spacing) gets a warning naming the list and the word. `D` (shift+d, outside a text box) or the Remove duplicates button keeps the first spelling of each word in every list.
+
+Nothing is written until you save with `ctrl+s`.
 
 ## Install and run
 

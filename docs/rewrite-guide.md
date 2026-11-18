@@ -466,7 +466,7 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 |---|---|
 | `processed` | every judged message with verdict, role, reasons and action |
 | `published` | what was published, for duplicate checks |
-| `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`). Those decisions are labels for the corpus: stage 5 adds an export |
+| `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`, or `kept`: a match the terminal screen marked "don't send", because it already reached the channel; the bot never sends it or counts it as forwarded). Those decisions are labels for the corpus: stage 5 adds an export |
 | `meta` | the heartbeat, and which watched chats you lost access to (`chat_access:<chat id>`) |
 
 `config.json` is now only *read*. The old bot rewrote it on every forward, which could throw away your edits.
@@ -577,7 +577,7 @@ A live screen you open from a terminal when you want it: `tui/.venv/bin/telenoti
 **Why Python and Textual, next to a Nim bot.** You picked [Textual](https://github.com/Textualize/textual): it has real widgets (tables, tabs, dialogs), mouse support and good-looking defaults, and Nim has nothing close (illwill is low-level; nimwave hasn't been updated since 2023). The cost is a second language, so the line between them is kept sharp:
 
 - The **bot** does all the work and owns the state database.
-- The **screen** only reads the database, writes your review decisions (exactly as `telenotify review` does: `pending` → `to_send`, and only if it's still pending, so nothing is approved twice), edits `config.json`, and runs the `telenotify` program for anything that needs the filter (explain, re-judge, test settings on the corpus). There is only one filter, so the screen and the bot can't disagree.
+- The **screen** only reads the database, writes your review decisions (exactly as `telenotify review` does: `pending` → `to_send` or `discarded`, and only if it's still pending, so nothing is approved twice; plus `kept`, a match it must not send because it already reached the channel), edits `config.json`, and runs the `telenotify` program for anything that needs the filter (explain, re-judge, test settings on the corpus). There is only one filter, so the screen and the bot can't disagree.
 
 **What the bot shares for it** (all in `state.sqlite3`):
 

@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+DUPLICATE_FIX = " (press D or \"Remove duplicates\" to keep one of each)"
+
 MISSING: Any = object()   # "key not in the file" (the bot then uses its default)
 
 # Keyword lists: key -> what it means (shown under the list).
@@ -132,6 +134,14 @@ def norm_keyword(k: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", k).casefold().split())
 
 
+def same_entry(k: str) -> str:
+    """When the bot sees two list entries as the same word: it trims them and
+    lower-cases them (Nim's toLower), nothing more. Stricter than
+    `norm_keyword` (which also folds "ß"/"ss", ligatures and the like, fine for
+    filtering but not for deciding what to delete)."""
+    return " ".join(k.split()).lower()
+
+
 def duplicates(items: list) -> list[str]:
     """Items that appear more than once (ignoring case and spacing), first spelling of each."""
     seen: dict[str, str] = {}
@@ -139,11 +149,58 @@ def duplicates(items: list) -> list[str]:
     for x in items:
         if not isinstance(x, str):
             continue
-        n = norm_keyword(x)
+        n = same_entry(x)
         if n in seen and seen[n] not in dups:
             dups.append(seen[n])
         seen.setdefault(n, x)
     return dups
+
+
+def _dedupe_key(x: Any) -> Any:
+    """What counts as "the same" entry: words ignoring case and spacing, other values as they are."""
+    if isinstance(x, str):
+        return ("str", same_entry(x))
+    if isinstance(x, bool):
+        return ("bool", x)
+    return (type(x).__name__, x) if isinstance(x, (int, float)) else None
+
+
+def dedupe(items: list) -> tuple[list, list]:
+    """(the list with each entry once, keeping its first spelling and the
+    order; the entries taken out). Entries that can't be compared stay."""
+    seen: set = set()
+    kept: list = []
+    removed: list = []
+    for x in items:
+        k = _dedupe_key(x)
+        if k is not None and k in seen:
+            removed.append(x)
+            continue
+        if k is not None:
+            seen.add(k)
+        kept.append(x)
+    return kept, removed
+
+
+# extra_job_sites is left out: the bot compares a site exactly as written, so
+# of "Jobs.Example.com" and "jobs.example.com" only the second works, and
+# "keep the first spelling" could keep the broken one.
+NO_DEDUPE = ("extra_job_sites",)
+DEDUPE_KEYS = (*(k for k in LIST_KEYS if k not in NO_DEDUPE), "chats")
+
+
+def dedupe_all(cfg: dict) -> dict[str, list]:
+    """Take repeated entries out of every list in `cfg` (in place): the first
+    spelling of each stays. Returns {key: the entries taken out}."""
+    out: dict[str, list] = {}
+    for key in DEDUPE_KEYS:
+        v = cfg.get(key)
+        if isinstance(v, list):
+            kept, removed = dedupe(v)
+            if removed:
+                cfg[key] = kept
+                out[key] = removed
+    return out
 
 
 def _is_int(v: Any) -> bool:
@@ -187,7 +244,8 @@ def validate(cfg: dict) -> list[Problem]:
             p.append(Problem(key, "has an empty entry", False))
         dups = duplicates(v)
         if dups:
-            p.append(Problem(key, "listed twice: " + ", ".join(dups), False))
+            p.append(Problem(key, "listed twice: " + ", ".join(f'"{d}"' for d in dups)
+                             + ("" if key in NO_DEDUPE else DUPLICATE_FIX), False))
 
     def has_words(keys: tuple[str, ...]) -> bool:
         return any(isinstance(cfg.get(k), list) and any(isinstance(x, str) and x.strip() for x in cfg[k])
@@ -224,7 +282,7 @@ def validate(cfg: dict) -> list[Problem]:
         if bad:
             p.append(Problem("chats", "not chat IDs (whole numbers): " + ", ".join(bad), True))
         elif len(set(chats)) != len(chats):
-            p.append(Problem("chats", "a chat is listed twice", False))
+            p.append(Problem("chats", "a chat is listed twice" + DUPLICATE_FIX, False))
         if not chats:
             p.append(Problem("chats", "no chats are watched: the bot will read nothing", False))
     t = cfg.get("target_chat", MISSING)

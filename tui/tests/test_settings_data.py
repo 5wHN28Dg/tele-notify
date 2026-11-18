@@ -104,6 +104,27 @@ def test_duplicates_ignore_case_and_spacing():
     assert sd.duplicates(["Help  Desk", "help desk", "x", "X", "y"]) == ["Help  Desk", "x"]
 
 
+def test_dedupe_keeps_the_first_spelling_and_the_order():
+    assert sd.dedupe(["Help  Desk", "y", "help desk", "x", "X", "y"]) == (
+        ["Help  Desk", "y", "x"], ["help desk", "X", "y"])
+    assert sd.dedupe([-1, -2, -1, True, 1]) == ([-1, -2, True, 1], [-1])   # true isn't the chat 1
+
+
+def test_dedupe_all_changes_only_lists_with_repeats():
+    cfg = {"location_keywords_en": ["basra", "Basra"], "location_keywords_ar": ["التنومة", "التنومة"],
+           "certifications": ["pmp"], "chats": [-1, -1, -2], "target_chat": -1, "api_hash": "x"}
+    removed = sd.dedupe_all(cfg)
+    assert removed == {"location_keywords_en": ["Basra"], "location_keywords_ar": ["التنومة"], "chats": [-1]}
+    assert cfg == {"location_keywords_en": ["basra"], "location_keywords_ar": ["التنومة"],
+                   "certifications": ["pmp"], "chats": [-1, -2], "target_chat": -1, "api_hash": "x"}
+
+
+def test_duplicate_warning_quotes_the_words_and_says_how_to_fix():
+    probs = [p for p in sd.validate({"location_keywords_en": ["basra", "Basra"]}) if "twice" in p.message]
+    assert [p.key for p in probs] == ["location_keywords_en"]
+    assert probs[0].message.startswith('listed twice: "basra"') and "Remove duplicates" in probs[0].message
+
+
 # --------------------------------------------------------- diff and merge
 
 def test_absent_key_set_to_default_is_not_a_change():
@@ -288,3 +309,20 @@ def test_chat_rows_toggle_and_target():
     assert sd.toggle_watched(cfg, -1) is False and cfg["chats"] == [-77, -4]
     sd.set_target(cfg, -4)
     assert cfg["target_chat"] == -4
+
+
+def test_dedupe_leaves_job_sites_alone():
+    """Only the lower-case site works in the bot; "keep the first" would keep the broken one."""
+    cfg = {"extra_job_sites": ["Jobs.Example.com", "jobs.example.com"],
+           "extra_not_a_job": ["kurs", "Kurs"]}
+    assert sd.dedupe_all(cfg) == {"extra_not_a_job": ["Kurs"]}
+    assert cfg["extra_job_sites"] == ["Jobs.Example.com", "jobs.example.com"]
+    msgs = [p.message for p in sd.validate(cfg) if p.key == "extra_job_sites"]
+    assert any("listed twice" in m and "press D" not in m for m in msgs)
+
+
+def test_dedupe_only_merges_what_the_bot_sees_as_the_same():
+    """The bot trims and lower-cases; it doesn't fold "ß" into "ss" or ligatures."""
+    cfg = {"extra_not_a_job": ["kurs straße", "kurs strasse", "ﬁle", "file", "A  b", "a b"]}
+    assert sd.dedupe_all(cfg) == {"extra_not_a_job": ["a b"]}
+    assert sd.duplicates(cfg["extra_not_a_job"]) == []

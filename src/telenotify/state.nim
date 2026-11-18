@@ -153,7 +153,9 @@ proc approvedReviews*(s: State): seq[Review] =
 
 proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"): bool =
   ## Move a review from `fromStatus` to `status`: "to_send" (you approved
-  ## it; the bot will send it), "sent" (published) or "discarded". Does
+  ## it; the bot will send it), "sent" (published), "discarded" or "kept"
+  ## (a match you don't want sent, e.g. the old bot already forwarded it;
+  ## set by the terminal screen, never sent or counted as forwarded). Does
   ## nothing and returns false if it's no longer in `fromStatus` (e.g.
   ## another `review` window already decided it), so a post is never
   ## approved, and sent, twice.
