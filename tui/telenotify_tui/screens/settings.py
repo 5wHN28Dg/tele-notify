@@ -39,6 +39,7 @@ from textual.widgets.option_list import Option
 
 from .. import bot
 from ..clean import clean
+from ..rtl import visual
 from . import settings_data as sd
 
 FORM_HELP = {
@@ -74,7 +75,7 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(Text(clean(self.message)), id="confirm-text")
+            yield Static(Text(visual(self.message)), id="confirm-text")
             with Horizontal():
                 yield Button(f"{self.yes} (y)", variant="warning", id="yes")
                 yield Button("Cancel (n)", id="no")
@@ -269,7 +270,7 @@ class KeywordEditor(Vertical):
         old = ol.highlighted
         ol.clear_options()
         if shown:
-            ol.add_options([Option(Text(clean(x)), id=str(i)) for i, x in shown])
+            ol.add_options([Option(Text(visual(x)), id=str(i)) for i, x in shown])
             ol.highlighted = min(old or 0, len(shown) - 1)
         else:
             ol.add_option(Option(Text("(empty)" if not items else "(nothing matches)", style="dim"),
@@ -684,7 +685,7 @@ class SettingsPane(Vertical):
                     grouped.setdefault((p.error, p.message), []).append(p.key)
             t = Text()
             for (error, message), ks in sorted(grouped.items(), key=lambda x: not x[0][0]):
-                t.append(clean(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}") + "\n",
+                t.append(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}") + "\n",
                          style="red" if error else "yellow")
             t.rstrip()
             self.query_one(f"#problems-{sec}", Static).update(t)
@@ -738,10 +739,10 @@ class SettingsPane(Vertical):
         keep = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
         table.clear()
         for r in rows:
-            status = Text(clean(r.status), style="red" if r.status not in ("ok", "") else "")
-            title = Text(clean(r.title), style="italic dim" if not r.known else "")
+            status = Text(visual(r.status), style="red" if r.status not in ("ok", "") else "")
+            title = Text(visual(r.title), style="italic dim" if not r.known else "")
             table.add_row(Text("[x]" if r.watched else "[ ]", style="bold green" if r.watched else "dim"), Text("->", style="bold green") if r.target else "",
-                          title, Text(clean(r.kind)), status, Text(str(r.id), style="dim"), key=str(r.id))
+                          title, Text(visual(r.kind)), status, Text(str(r.id), style="dim"), key=str(r.id))
         if table.row_count:
             ids = [str(r.id) for r in rows]
             table.move_cursor(row=ids.index(keep) if keep in ids else min(cursor, table.row_count - 1))

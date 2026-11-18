@@ -43,6 +43,31 @@ python3 -m venv .venv
 
 `"dry_run": true` in config.json also means the dry run, as it does for the bot. The state file is worked out once at start from `data_dir` (blank means `~/.local/share/tele-notify`; a relative path is relative to the config file's folder), so after changing `data_dir` or `dry_run` in Settings, reopen the screen.
 
+### Arabic and other right-to-left text
+
+Terminals draw each line left to right in the order the characters are stored, so on its own an Arabic sentence would come out with its words in the wrong order. The screen puts right-to-left text in order itself: each paragraph is wrapped first and then reordered line by line, Arabic paragraphs are right-aligned, mixed Arabic / English / numbers land in the right places, brackets are mirrored, and emoji and accents stay whole. Terminals differ in what they do with Arabic, so there are three modes:
+
+| Mode | For | What the screen does |
+|---|---|---|
+| `full` | most terminals: Alacritty, xterm, GNOME Terminal, Ptyxis (VTE) | puts every line in visual order and joins the letters itself. While it is open it switches the terminal to *explicit* bidi mode (`ESC [ 8 l`, from the [Terminal-WG BiDi recommendation](https://terminal-wg.pages.freedesktop.org/bidi/)) so VTE doesn't reverse the text again, and back to the usual *implicit* mode (`ESC [ 8 h`) when it closes, also after a crash. Terminals that don't know the mode ignore it |
+| `words` | kitty | kitty joins the letters and draws each Arabic word right to left by itself, but keeps the words in stored order (its `force_ltr` docs: "HELLO WORLD" in an RTL script shows as "WORLD HELLO"). So only the word order is changed, and each word is left for kitty to draw. Nothing is sent to the terminal |
+| `off` | a terminal whose own bidi you prefer | text as stored, the terminal left alone |
+
+The mode is picked by itself: `words` in kitty (`TERM=xterm-kitty`, which ssh passes on, or `$KITTY_WINDOW_ID` inside a tmux or screen started from kitty; another terminal started from a kitty shell inherits `$KITTY_WINDOW_ID` too, so on its own it doesn't count), `full` anywhere else. An unknown `TELENOTIFY_BIDI` value is reported when the screen starts, and the automatic choice is used. To choose:
+
+```bash
+TELENOTIFY_BIDI=words .venv/bin/telenotify-tui --config:/path/to/config.json   # full, words, off or auto
+.venv/bin/telenotify-tui --config:/path/to/config.json --bidi=words            # the flag wins over the variable
+.venv/bin/telenotify-tui --config:/path/to/config.json --no-bidi               # the same as --bidi=off
+```
+
+- With `force_ltr yes` in kitty.conf kitty draws cells as they are: use `--bidi=full` there.
+- Inside tmux or screen the `ESC [ 8 l` switch doesn't reach the outer terminal, and the auto choice only sees tmux's `TERM`. In tmux inside GNOME Terminal or Ptyxis, VTE then reorders the screen's already-ordered text again: use `--bidi=off` there and let VTE do it. Elsewhere, if Arabic looks reversed, pick the mode yourself.
+- kitty shapes the text between spaces and emoji as one piece in one direction, so a word that starts with Arabic and ends with Latin letters with no space between ("بايثونPython" in an Arabic sentence) can't come out right there.
+- If the screen is killed hard (`kill -9`) in `full` mode and Arabic in that terminal looks wrong afterwards, `printf '\e[8h'` restores it.
+- Selecting a post with the mouse and copying it gives the text as stored (reading order, plain letters), not the drawn order. Short values in tables and headers copy as drawn.
+- Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
+
 It finds the `telenotify` program next to the config, in `~/tele-notify`, on `$PATH`, or at `$TELENOTIFY_BIN`. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
 
 ## How it fits with the bot
