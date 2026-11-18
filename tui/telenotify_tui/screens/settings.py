@@ -12,18 +12,29 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import sqlite3
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, ClassVar
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import (Button, Checkbox, DataTable, Input, Label, OptionList, Static,
-                             TabbedContent, TabPane)
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Input,
+    Label,
+    OptionList,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 from textual.widgets.option_list import Option
 
 from .. import bot
@@ -54,7 +65,7 @@ class ConfirmModal(ModalScreen[bool]):
     ConfirmModal Horizontal { height: auto; margin-top: 1; }
     ConfirmModal Button { margin-right: 2; }
     """
-    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
 
     def __init__(self, message: str, yes: str = "Yes"):
         super().__init__()
@@ -84,7 +95,7 @@ class EvalModal(ModalScreen[None]):
     EvalModal DataTable { height: auto; margin: 1 0; }
     EvalModal #eval-summary { height: auto; }
     """
-    BINDINGS = [Binding("escape,q,enter", "close", "Close")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape,q,enter", "close", "Close")]
 
     def __init__(self, before: bot.EvalResult, after: bot.EvalResult, corpus: Path):
         super().__init__()
@@ -150,7 +161,7 @@ class KeywordEditor(Vertical):
     KeywordEditor #kw-items { height: 1fr; }
     KeywordEditor Input { margin: 0; }
     """
-    BINDINGS = [Binding("delete,x", "delete_item", "Delete item"),
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("delete,x", "delete_item", "Delete item"),
                 Binding("a", "add", "Add item"),
                 Binding("escape", "cancel_edit", "Cancel edit", show=False)]
 
@@ -264,7 +275,7 @@ class KeywordEditor(Vertical):
 
 
 class ChatTable(DataTable):
-    BINDINGS = [Binding("space", "toggle_watch", "Watch on/off"),
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("space", "toggle_watch", "Watch on/off"),
                 Binding("m", "make_target", "Send matches here")]
 
     def _row_id(self) -> int | None:
@@ -312,7 +323,7 @@ class SettingsPane(Vertical):
     SettingsPane #chat-ids { height: 1fr; }
     SettingsPane .hidden { display: none; }
     """
-    BINDINGS = [Binding("ctrl+s", "save", "Save settings"),
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("ctrl+s", "save", "Save settings"),
                 Binding("t", "test_corpus", "Test on corpus")]
 
     class ChatAction(Message):
@@ -435,7 +446,7 @@ class SettingsPane(Vertical):
             with self.app.store() as s:  # type: ignore[attr-defined]
                 self.has_chat_table = s.has_table("chats")
                 self.store_chats = s.chats()
-        except Exception as e:  # a locked or broken state file mustn't break settings
+        except (sqlite3.Error, OSError, ValueError) as e:  # a locked or broken state file mustn't break settings
             self.has_chat_table, self.store_chats = False, []
             self.notify(f"Couldn't read the chat list: {e}", severity="warning")
 
@@ -599,7 +610,7 @@ class SettingsPane(Vertical):
             self._put("chats", chats)
         event.input.value = ""
 
-    def on_settings_pane_chat_action(self, event: "SettingsPane.ChatAction") -> None:
+    def on_settings_pane_chat_action(self, event: SettingsPane.ChatAction) -> None:
         event.stop()
         if self.original is None:
             return

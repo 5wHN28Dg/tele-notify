@@ -25,6 +25,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Self
 
 VERDICTS = ("publish", "review", "reject")
 
@@ -108,7 +109,7 @@ class Store:
             self.db.close()
             self.db = None
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

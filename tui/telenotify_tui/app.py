@@ -7,16 +7,18 @@ it is visible, so the numbers stay live while the bot runs.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
 
 from .paths import Paths
-from .store import Store
 from .screens.dashboard import DashboardPane
 from .screens.review import ReviewPane
 from .screens.search import SearchPane
 from .screens.settings import ConfirmModal, SettingsPane
+from .store import Store
 
 REFRESH_SECONDS = 5
 
@@ -24,7 +26,7 @@ REFRESH_SECONDS = 5
 class TeleNotifyApp(App):
     TITLE = "tele-notify"
     CSS_PATH = "app.tcss"
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("1", "show('dashboard')", "Dashboard"),
         Binding("2", "show('review')", "Review"),
         Binding("3", "show('search')", "Search"),

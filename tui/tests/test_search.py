@@ -1,9 +1,9 @@
 import dataclasses
 import sqlite3
 
+from conftest import BAD, GOOD
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
-from conftest import BAD, GOOD
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.screens import search_data

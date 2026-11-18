@@ -48,7 +48,7 @@ async def run(*args: str, timeout: float = 120) -> tuple[int, str, str]:
         return 127, "", str(e)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.wait()
         return 124, "", f"timed out after {timeout:.0f} s"
@@ -73,7 +73,7 @@ async def service_action(mode: str, action: str) -> tuple[bool, str]:
 
 # -------------------------------------------------------------- filter
 
-_VERDICT = re.compile(r"^verdict:\s*(\w+)", re.M)
+_VERDICT = re.compile(r"^verdict:\s*(\w+)", re.MULTILINE)
 _TEXT_START, _TEXT_END = "----- text the filter reads -----", "---------------------------------"
 
 
@@ -101,7 +101,7 @@ async def check(binary: Path, config: Path, text: str, scrape: bool = False,
             args.append("--no-scrape")
         if show_text:
             args.append("--show-text")
-        code, out, err = await run(*args, post, timeout=90)
+        _code, out, err = await run(*args, post, timeout=90)
     finally:
         Path(post).unlink(missing_ok=True)
     v = parse_check(out)
@@ -110,7 +110,7 @@ async def check(binary: Path, config: Path, text: str, scrape: bool = False,
     return v
 
 
-_EVAL_ROW = re.compile(r"^\s*(TRUE|FALSE|UNSURE)\s+publish:\s*(\d+)\s+review:\s*(\d+)\s+reject:\s*(\d+)", re.M)
+_EVAL_ROW = re.compile(r"^\s*(TRUE|FALSE|UNSURE)\s+publish:\s*(\d+)\s+review:\s*(\d+)\s+reject:\s*(\d+)", re.MULTILINE)
 
 
 def parse_eval(out: str) -> EvalResult:
@@ -124,7 +124,7 @@ def parse_eval(out: str) -> EvalResult:
 
 
 async def evaluate(binary: Path, config: Path, corpus: Path) -> EvalResult:
-    code, out, err = await run(str(binary), "eval", f"--config:{config}", str(corpus), timeout=300)
+    _code, out, err = await run(str(binary), "eval", f"--config:{config}", str(corpus), timeout=300)
     r = parse_eval(out)
     if not r.rows and err:
         r.error = err.strip()

@@ -15,11 +15,12 @@ current settings what they would say now.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
@@ -97,7 +98,7 @@ def verdict_report(v: bot.Verdict, then: str | None = None, show_text: bool = Fa
 class SearchPane(Vertical):
     live = False  # the search re-runs on ctrl+r or when the tab is shown
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("j", "rejudge(False)", "Re-judge"),
         Binding("J", "rejudge(True)", "Re-judge + links"),
         Binding("p", "paste", "Paste a post"),

@@ -14,19 +14,31 @@ finish. A missing state file, table, or systemctl shows a muted note.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import (Button, ContentSwitcher, DataTable, Label, RadioButton, RadioSet, Static,
-                             TabbedContent, Tabs)
+from textual.widgets import (
+    Button,
+    ContentSwitcher,
+    DataTable,
+    Label,
+    RadioButton,
+    RadioSet,
+    Static,
+    TabbedContent,
+    Tabs,
+)
+from textual.widgets.data_table import CellDoesNotExist
 
 from .. import bot
 from ..store import Alert, ChatStats, Judged, Store
@@ -150,7 +162,7 @@ def load_snapshot(path: Path, stat_days: int) -> Snapshot:
             snap.feed = s.recent(FEED_ROWS)
             snap.alerts = s.alerts(100)
             snap.problems = dd.chat_problems(s, now)
-    except Exception as e:  # a locked or half-written file: say so, try again next tick
+    except (sqlite3.Error, OSError, ValueError) as e:  # a locked or half-written file: say so, try again next tick
         snap.error = f"{type(e).__name__}: {e}"
     return snap
 
@@ -170,7 +182,7 @@ class ConfirmScreen(ModalScreen[bool]):
     ConfirmScreen Horizontal { height: auto; align-horizontal: right; }
     ConfirmScreen Button { margin-left: 2; }
     """
-    BINDINGS = [Binding("escape", "answer(False)", "Cancel"), Binding("y", "answer(True)", "Yes", show=False),
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "answer(False)", "Cancel"), Binding("y", "answer(True)", "Yes", show=False),
                 Binding("n", "answer(False)", "No", show=False)]
 
     def __init__(self, question: str):
@@ -227,7 +239,7 @@ class DashboardPane(Vertical):
     DashboardPane .section { text-style: bold; height: 1; }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("f", "view('feed')", "Feed", show=False),
         Binding("c", "view('chats')", "Chats", show=False),
         Binding("a", "view('alerts')", "Alerts", show=False),
@@ -347,7 +359,7 @@ class DashboardPane(Vertical):
         async def one(mode: str) -> str:
             try:
                 return await bot.service_state(mode)
-            except Exception:
+            except OSError:
                 return "unknown"
         states = await asyncio.gather(*(one(m) for m in bot.SERVICES))
         self.services = dict(zip(bot.SERVICES, states))
@@ -456,7 +468,7 @@ class DashboardPane(Vertical):
         if table.row_count and table.cursor_row is not None:
             try:
                 keep = table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value
-            except Exception:
+            except CellDoesNotExist:
                 keep = None
         table.clear()
         self._feed = {}
@@ -586,7 +598,7 @@ class DashboardPane(Vertical):
         result.update(Text(f"{action} {name}…", style="dim"))
         try:
             ok, msg = await bot.service_action(self.mode, action)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             ok, msg = False, str(e)
         finally:
             self._busy = False

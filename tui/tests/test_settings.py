@@ -8,14 +8,18 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from conftest import BAD, GOOD
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.screens import settings_data as sd
-from telenotify_tui.screens.settings import ConfirmModal, EvalModal, KeywordEditor, SettingsPane
-
-from conftest import BAD, GOOD
+from telenotify_tui.screens.settings import (
+    ConfirmModal,
+    EvalModal,
+    KeywordEditor,
+    SettingsPane,
+)
 
 
 @pytest.fixture
