@@ -60,7 +60,10 @@ def short(s: str, n: int) -> str:
 
 
 def when(at: int, fmt: str) -> str:
-    return datetime.fromtimestamp(at).strftime(fmt) if at else "?"
+    try:
+        return datetime.fromtimestamp(at).strftime(fmt) if at else "?"
+    except (OverflowError, ValueError, OSError, TypeError):   # a broken time in the state file
+        return "?"
 
 
 def row_key(j: Judged) -> str:

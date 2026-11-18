@@ -549,7 +549,8 @@ async def test_keep_labels_a_match_but_never_sends(paths, state, labels, now):
         assert s.reviews("to_send") == []                       # the bot sends only to_send
         basra = next(c for c in s.stats(7) if c.chat == "Basra Jobs")
         assert basra.forwarded == 1                             # only #10, which was forwarded
-        assert dd.totals(s, now - 7 * 86400).forwarded == 1
+        week = dd.resolve(dd.PeriodChoice("7d"), dd.today(now))
+        assert dd.period_stats(s, week, 46).totals.forwarded == 1
 
 
 async def test_keep_button_and_history(paths, state, labels):
