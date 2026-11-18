@@ -92,13 +92,15 @@ class Chat:
 class Store:
     """One connection to the bot's state file. Open it, use it, close it."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, timeout: float = 10):
+        """`timeout`: seconds to wait for the bot's write lock before giving up
+        (sqlite3.OperationalError). Keep it short for reads on the UI thread."""
         self.path = Path(path)
         self.db: sqlite3.Connection | None = None
         if self.path.exists():
-            self.db = sqlite3.connect(self.path, timeout=10)
+            self.db = sqlite3.connect(self.path, timeout=timeout)
             self.db.row_factory = sqlite3.Row
-            self.db.execute("PRAGMA busy_timeout=10000")
+            self.db.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
 
     @property
     def exists(self) -> bool:
@@ -166,14 +168,17 @@ class Store:
 
     def search(self, query: str, verdict: str | None = None, limit: int = 200,
                chat_id: int | None = None) -> list[Judged]:
-        """Judged messages whose text, chat, role or reasons contain `query` (any case)."""
+        """Judged messages whose text, chat, role or reasons contain `query`, taken
+        literally (% and _ are plain characters). Case is ignored for ASCII
+        letters only (SQLite's LIKE); Arabic has no case."""
         cols = self._columns("processed")
         if not cols:
             return []
         has_text = "raw_text" in cols
         fields = ["chat_title", "role", "reasons"] + (["raw_text"] if has_text else [])
-        like = f"%{query}%"
-        where = " OR ".join(f"COALESCE({f}, '') LIKE ?" for f in fields)
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        where = " OR ".join(f"COALESCE({f}, '') LIKE ? ESCAPE '\\'" for f in fields)
         sql = f"SELECT * FROM processed WHERE ({where})"
         args: tuple = tuple(like for _ in fields)
         if verdict:
@@ -258,6 +263,12 @@ class Store:
     def chats(self) -> list[Chat]:
         if not self.has_table("chats"):
             return []
-        return [Chat(r["id"], r["title"] or "", r["kind"] or "", bool(r["watched"]), r["status"] or "ok",
-                     r["updated_at"] or 0)
-                for r in self._rows("SELECT * FROM chats ORDER BY title COLLATE NOCASE")]
+        cols = self._columns("chats")
+
+        def col(r: sqlite3.Row, name: str):
+            return r[name] if name in cols else None
+
+        order = "title COLLATE NOCASE" if "title" in cols else "id"
+        return [Chat(r["id"], col(r, "title") or "", col(r, "kind") or "", bool(col(r, "watched")),
+                     col(r, "status") or "ok", col(r, "updated_at") or 0)
+                for r in self._rows(f"SELECT * FROM chats ORDER BY {order}")]

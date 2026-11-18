@@ -96,6 +96,61 @@ async def test_per_chat_table_and_day_selector(paths):
         assert got["Iraq Jobs"] == ["1", "0", "0", "1", "0"]  # the 3-day-old reject drops out
 
 
+async def test_slow_reads_never_pile_up(paths, monkeypatch, fake_systemctl):
+    """A state file the bot keeps locked: day changes, refreshes and service
+    actions while a read is stuck wait for it instead of starting more threads."""
+    import threading
+
+    from textual.widgets import RadioButton
+
+    from telenotify_tui.screens import dashboard as dash
+
+    real = dash.load_snapshot
+    gate = threading.Event()
+    guard = threading.Lock()
+    running: list[int] = []
+    peak = [0]
+    days_read: list[int] = []
+
+    def slow(path, days):
+        with guard:
+            running.append(days)
+            peak[0] = max(peak[0], len(running))
+        gate.wait(10)
+        with guard:
+            running.remove(days)
+        days_read.append(days)
+        return real(path, days)
+
+    monkeypatch.setattr(dash, "load_snapshot", slow)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            for _ in range(50):
+                await pilot.pause(0.02)
+                if running:
+                    break
+            assert running, "the first read never started"
+            pane = app.query_one(DashboardPane)
+            await pilot.press("c")
+            app.query_one("#days-1", RadioButton).value = True
+            await pilot.pause()
+            app.query_one("#days-30", RadioButton).value = True
+            await pilot.pause()
+            pane.reload()
+            pane._run_service("restart")
+            await pilot.pause(0.2)
+            assert peak[0] == 1
+            gate.set()
+            await settle(app, pilot)
+            await settle(app, pilot)
+            assert peak[0] == 1
+            assert days_read[-1] == 30 and pane.snapshot is not None and pane.stat_days == 30
+            assert len(days_read) <= 3
+    finally:
+        gate.set()
+
+
 async def test_per_chat_sort_by_header(paths):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:

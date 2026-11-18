@@ -254,6 +254,7 @@ class DashboardPane(Vertical):
         self._sort: tuple[str, bool] = ("total", True)
         self._busy = False
         self._reading = False
+        self._read_again = False   # asked for a fresh read while one was running
         self._feed: dict[str, Judged] = {}
 
     # ------------------------------------------------------------ layout
@@ -340,10 +341,17 @@ class DashboardPane(Vertical):
         return "dry-run" if self.paths.dry_run else "real"
 
     def reload(self) -> None:
-        # A read stuck on a locked file must not pile up threads tick after tick.
+        self._request_state(again=False)
+        self._load_services()
+
+    def _request_state(self, again: bool = True) -> None:
+        """Read the state file, unless a read is already running: a read stuck on
+        a locked file must not pile up threads. With `again` (the days or the
+        service changed), one more read follows the running one."""
         if not self._reading:
             self._load_state()
-        self._load_services()
+        elif again:
+            self._read_again = True
 
     @work(exclusive=True, group="dash-state")
     async def _load_state(self) -> None:
@@ -354,6 +362,9 @@ class DashboardPane(Vertical):
             self._reading = False
         if self.is_mounted:
             self._apply(snap)
+            if self._read_again:
+                self._read_again = False
+                self._load_state()
 
     @work(exclusive=True, group="dash-services")
     async def _load_services(self) -> None:
@@ -480,7 +491,7 @@ class DashboardPane(Vertical):
             self._feed[key] = j
             style = VERDICT_STYLE.get(j.verdict, "")
             table.add_row(fmt_time(j.at, snap.now), Text(j.chat_title, overflow="ellipsis"),
-                          Text(j.verdict, style=style), j.role, Text(first_reason(j.reasons), style=style),
+                          Text(j.verdict, style=style), Text(j.role), Text(first_reason(j.reasons), style=style),
                           key=key)
         if not snap.feed:
             self._detail(None, "Nothing judged yet." if snap.exists else "No state file yet.")
@@ -518,7 +529,7 @@ class DashboardPane(Vertical):
         table = self.query_one("#chat-stats", DataTable)
         table.clear()
         for s in snap.stats:
-            table.add_row(s.chat or "?", s.total, s.publish, s.review, s.reject, s.forwarded)
+            table.add_row(Text(s.chat or "?"), s.total, s.publish, s.review, s.reject, s.forwarded)
         self._sort_stats()
 
     def _sort_stats(self) -> None:
@@ -539,18 +550,18 @@ class DashboardPane(Vertical):
     @on(RadioSet.Changed, "#days")
     def _days_changed(self, event: RadioSet.Changed) -> None:
         self.stat_days = int(str(event.pressed.id).split("-")[1])
-        self._load_state()
+        self._request_state()
 
     def _show_alerts(self, snap: Snapshot) -> None:
         alerts = self.query_one("#alerts", DataTable)
         alerts.clear()
         for a in snap.alerts:
-            alerts.add_row(fmt_time(a.at, snap.now), a.text)
+            alerts.add_row(fmt_time(a.at, snap.now), Text(a.text))
         health = self.query_one("#health", DataTable)
         health.clear()
         for p in snap.problems:
             style = "dim" if p.status == "silent" else "red"
-            health.add_row(p.title, Text(p.status, style=style), p.detail)
+            health.add_row(Text(p.title), Text(p.status, style=style), Text(p.detail))
         note = self.query_one("#dash-note", Static)
         bits = []
         if snap.problems:
@@ -610,4 +621,4 @@ class DashboardPane(Vertical):
         else:
             result.update(Text(f"{action} {name} failed: {msg or 'no reason given'}", style="red"))
         self._load_services()
-        self._load_state()
+        self._request_state()

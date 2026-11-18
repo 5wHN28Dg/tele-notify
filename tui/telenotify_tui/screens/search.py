@@ -1,9 +1,9 @@
 """Search & explain: find any post the bot judged, see why, and ask the
 current settings what they would say now.
 
-* The search box matches text, chat, role and reasons (any case); results
-  update when you stop typing or press Enter. Verdict and chat filters
-  narrow it down.
+* The search box matches text, chat, role and reasons, taken literally
+  (case is ignored for Latin letters only); results update when you stop
+  typing or press Enter. Verdict and chat filters narrow it down.
 * The panel on the right explains the selected post: chat, time, verdict,
   what the bot did, every reason, and the full text.
 * `j` re-judges that text with the current config (the real `telenotify
@@ -212,7 +212,7 @@ class SearchPane(Vertical):
                 chats = search_data.judged_chats(s) if s.exists else []
         except Exception:  # noqa: BLE001 - a locked or odd state file shouldn't crash the screen
             chats = []
-        options = [("all chats", "all")] + [(short(title, 24), cid) for cid, title in chats]
+        options = [("all chats", "all")] + [(Text(short(title, 24)), cid) for cid, title in chats]
         if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])]:
             self._chat_options = options
             with sel.prevent(Select.Changed):
@@ -254,8 +254,8 @@ class SearchPane(Vertical):
             if k in self._rows:
                 continue
             self._rows[k] = j
-            table.add_row(when(j.at, "%m-%d %H:%M"), short(j.chat_title, 14), verdict_text(j.verdict),
-                          short(j.role, 14), short(search_data.main_reason(j.reasons), 32), key=k)
+            table.add_row(when(j.at, "%m-%d %H:%M"), Text(short(j.chat_title, 14)), verdict_text(j.verdict),
+                          Text(short(j.role, 14)), Text(short(search_data.main_reason(j.reasons), 32)), key=k)
         if keep in self._rows:
             table.move_cursor(row=table.get_row_index(keep))
             self._show_detail(self._rows[keep], keep_result=True)
@@ -331,7 +331,7 @@ class SearchPane(Vertical):
         can = not binary_note and bool(j.text.strip())
         for b in buttons:
             b.disabled = not can
-        note.update(binary_note)
+        note.update(Text(binary_note))
 
     # ---------------------------------------------------------- re-judge
 

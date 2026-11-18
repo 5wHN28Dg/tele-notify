@@ -13,11 +13,13 @@ Decisions are written exactly as `telenotify review` writes them
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import time
 import webbrowser
 from typing import ClassVar
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -32,6 +34,7 @@ from ..store import Review
 from .review_data import history, write_label
 
 DECISION_KEYS = ("send", "discard", "next", "open_link", "check")
+UI_TIMEOUT = 1.0   # seconds to wait for the bot's lock: these reads and writes run on the UI thread
 
 
 def when(at: int | None) -> str:
@@ -140,8 +143,11 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     def __init__(self) -> None:
         super().__init__()
         self._items: list[Review] = []
-        self._shown_id: int | None = None
+        self._shown_key: tuple | None = None       # the post drawn on the right, and its content
         self._history_mode = False
+        self._await_pick = False                   # the open post vanished: nothing selected until the reader moves
+        self._just_decided: int | None = None      # decided here: moving on to the next post is expected
+        self._read_error = False
 
     # ------------------------------------------------------------ layout
 
@@ -207,6 +213,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action in DECISION_KEYS and self.is_mounted:
+            if action == "next":   # also picks the first post when nothing is selected
+                return True if self._items and not self._history_mode else None
             if self.current is None:
                 return None  # shown, but disabled
             if action == "check" and self.app.paths.binary is None:
@@ -217,8 +225,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         none = self.current is None
         for bid in ("#btn-send", "#btn-discard", "#btn-next", "#btn-open", "#btn-check"):
             button = self.query_one(bid, Button)
-            button.display = not none  # with nothing open, only History is offered
-            button.disabled = none or (bid == "#btn-check" and self.app.paths.binary is None)
+            off = none and not (bid == "#btn-next" and self._items and not self._history_mode)
+            button.display = not off  # with nothing open, only History (and Next, to pick one) is offered
+            button.disabled = off or (bid == "#btn-check" and self.app.paths.binary is None)
         self.query_one("#btn-history", Button).label = "Queue" if self._history_mode else "History"
         self.refresh_bindings()
 
@@ -226,10 +235,22 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def reload(self) -> None:
         paths = self.app.paths
-        with self.app.store() as st:
-            exists, has_table = st.exists, st.has_table("reviews")
-            items = st.reviews("pending")
-            past = history(st) if self._history_mode else []
+        try:
+            with self.app.store(UI_TIMEOUT) as st:
+                exists, has_table = st.exists, st.has_table("reviews")
+                items = st.reviews("pending")
+                past = history(st) if self._history_mode else []
+        except (sqlite3.Error, OSError) as e:   # the bot holds a lock, or the file is broken
+            self._read_error = True
+            self.note(f"can't read the state file: {e}", "warn")
+            if self._history_mode or not self._items:
+                self.query_one("#review-empty", Static).update(Content(f"Can't read the state file: {e}"))
+                self._show_only("#review-empty")
+            self._sync_controls()
+            return
+        if self._read_error:
+            self._read_error = False
+            self.note("")
         mode = " · dry run" if paths.dry_run else ""
         self.query_one("#review-summary", Static).update(
             Content(f"Recently decided{mode}" if self._history_mode
@@ -250,7 +271,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     def _fill_queue(self, items: list[Review], exists: bool, has_table: bool) -> None:
         if not items:
             self._items = []
-            self._shown_id = None
+            self._shown_key = None
+            self._await_pick = False
+            self._just_decided = None
             self.query_one("#review-list", OptionList).clear_options()
             empty = self.query_one("#review-empty", Static)
             if not exists:
@@ -269,12 +292,24 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         old_keys = [(r.id, r.chat_title, r.role, r.at) for r in self._items]
         prev = self.current
         prev_idx = ol.highlighted or 0
+        just_decided, self._just_decided = self._just_decided, None
         self._items = items
         if new_keys != old_keys:
-            ol.set_options(Option(entry(r), id=str(r.id)) for r in items)
             ids = [r.id for r in items]
-            ol.highlighted = ids.index(prev.id) if prev is not None and prev.id in ids else min(prev_idx, len(items) - 1)
-        elif ol.highlighted is None:
+            if prev is not None and prev.id not in ids and prev.id != just_decided:
+                # The open post was decided elsewhere (another window, `telenotify review`).
+                # Don't slide another post under the cursor: a quick s / d would act on
+                # a post nobody has read yet.
+                self._await_pick = True
+                self.note(f"#{prev.msg_id} was decided elsewhere; pick the next one", "warn")
+            ol.set_options(Option(entry(r), id=str(r.id)) for r in items)
+            if self._await_pick:
+                ol.highlighted = None
+            elif prev is not None and prev.id in ids:
+                ol.highlighted = ids.index(prev.id)
+            else:
+                ol.highlighted = min(prev_idx, len(items) - 1)
+        elif ol.highlighted is None and not self._await_pick:
             ol.highlighted = 0
         self._sync_detail()
 
@@ -290,24 +325,27 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         table.clear()
         labels = {"to_send": "approved", "sent": "sent", "discarded": "discarded"}
         for r in past:
-            table.add_row(when(r.decided_at or r.at), labels.get(r.status, r.status), cut(r.chat_title, 20),
-                          cut(r.role, 22), cut(r.text, 40), key=str(r.id))
+            table.add_row(when(r.decided_at or r.at), Text(labels.get(r.status, r.status)),
+                          Text(cut(r.chat_title, 20)), Text(cut(r.role, 22)), Text(cut(r.text, 40)), key=str(r.id))
         table.move_cursor(row=min(row, len(past) - 1))
 
     # ------------------------------------------------------------ detail
 
     @on(OptionList.OptionHighlighted, "#review-list")
     def _highlighted(self, _event: OptionList.OptionHighlighted) -> None:
+        self._await_pick = False   # the reader picked a post (only they move the cursor while we wait)
         self._sync_detail()
 
     def _sync_detail(self) -> None:
         r = self.current
+        key = (r.id, r.chat_title, r.msg_id, r.at, r.link, r.role, r.reasons, r.text,
+               tuple(r.album_ids)) if r is not None else None
         if r is None:
-            self._shown_id = None
+            self._shown_key = None
             self.query_one("#detail-head", Static).update("")
             self.query_one("#detail-text", Static).update("")
-        elif r.id != self._shown_id:   # same post still open: leave the reader alone
-            self._shown_id = r.id
+        elif key != self._shown_key:   # same post, unchanged: leave the reader alone
+            self._shown_key = key
             when_full = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.at)) if r.at else "-"
             album = f"  ({len(r.album_ids)} messages)" if len(r.album_ids) > 1 else ""
             head = (f"chat:  {r.chat_title}  #{r.msg_id}{album}\n"
@@ -326,15 +364,20 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         r = self.current
         if r is None:
             return
-        with self.app.store() as st:
-            ok = st.decide(r.id, status)
+        try:
+            with self.app.store(UI_TIMEOUT) as st:
+                ok = st.decide(r.id, status)
+        except (sqlite3.Error, OSError) as e:   # the bot holds a lock, or the file is broken
+            self.note(f"#{r.msg_id} NOT recorded (the state file can't be written: {e}); try again", "bad")
+            return
+        self._just_decided = r.id
         if not ok:
             self.note(f"#{r.msg_id} was already decided elsewhere", "warn")
         else:
             label_note = ""
             try:
                 write_label(r, status)
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 label_note = f" (corpus label not saved: {e})"
             if status == "to_send":
                 msg = ("approved: recorded only (dry run, nothing is sent)" if self.app.paths.dry_run
@@ -342,7 +385,6 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             else:
                 msg = "discarded"
             self.note(f"#{r.msg_id} {msg}{label_note}", "warn" if label_note else "good")
-        self._shown_id = None if self._shown_id == r.id else self._shown_id
         self.reload()
 
     def action_send(self) -> None:
@@ -355,7 +397,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         if not self._items or self._history_mode:
             return
         ol = self.query_one("#review-list", OptionList)
-        ol.highlighted = ((ol.highlighted or 0) + 1) % len(self._items)
+        ol.highlighted = 0 if ol.highlighted is None else (ol.highlighted + 1) % len(self._items)
 
     def action_open_link(self) -> None:
         r = self.current

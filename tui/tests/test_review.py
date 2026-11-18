@@ -1,7 +1,9 @@
 import dataclasses
 import json
+import multiprocessing
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -224,7 +226,7 @@ async def test_history_toggle(paths, state):
         await pilot.pause()
         table = app.query_one("#review-history", DataTable)
         assert table.display and table.row_count == 2  # the one just approved and the older sent one
-        assert table.get_row_at(0)[1] == "approved"
+        assert str(table.get_row_at(0)[1]) == "approved"
         await pilot.press("h")
         await pilot.pause()
         assert not table.display
@@ -245,3 +247,159 @@ async def test_missing_reviews_table(paths, tmp_path):
     async with app.run_test() as pilot:
         await open_review(pilot)
         assert "no review queue" in str(app.query_one("#review-empty", Static).content)
+
+
+# ------------------------------------------------- a locked or broken state file
+
+def lock(state: Path) -> sqlite3.Connection:
+    """Another process (the bot) holding the write lock."""
+    db = sqlite3.connect(state, isolation_level=None)
+    db.execute("BEGIN EXCLUSIVE")
+    return db
+
+
+async def test_locked_state_file_is_a_note_not_a_crash(paths, state, labels, monkeypatch):
+    monkeypatch.setattr(review_mod, "UI_TIMEOUT", 0.1)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await open_review(pilot)
+        db = lock(state)
+        try:
+            await pilot.press("s")                               # the decision can't be written
+            await pilot.pause()
+            assert "NOT recorded" in note(app) and "locked" in note(app)
+            app.query_one(ReviewPane).reload()                   # nor can the queue be read
+            await pilot.pause()
+            assert "can't read the state file" in note(app)
+            assert app.is_running
+        finally:
+            db.execute("ROLLBACK")
+            db.close()
+        assert status_of(state, 11) == "pending"
+        app.query_one(ReviewPane).reload()                       # lock gone: back to normal
+        await pilot.pause()
+        assert note(app) == ""
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+    assert len(read_labels(labels)) == 1
+
+
+async def test_ui_reads_give_up_quickly_on_a_lock(paths, state):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await open_review(pilot)
+        db = lock(state)
+        try:
+            t = time.monotonic()
+            app.query_one(ReviewPane).reload()
+            assert time.monotonic() - t < 3                      # not the 10 s busy timeout
+        finally:
+            db.execute("ROLLBACK")
+            db.close()
+
+
+async def test_corrupt_state_file_is_a_note_not_a_crash(paths, state):
+    state.write_bytes(b"not a database" * 100)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await open_review(pilot)
+        assert "Can't read the state file" in str(app.query_one("#review-empty", Static).content)
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("h", "s", "d")
+        await pilot.pause()
+        assert app.is_running
+
+
+# ------------------------------------------- the list changing under the open post
+
+async def test_open_post_decided_elsewhere_selects_nothing(paths, state, labels, now):
+    add_pending(state, 7, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await open_review(pilot)
+        assert str(app.query_one("#detail-text", Static).content) == UNCLEAR
+        with Store(state) as st:  # another window decides the open post
+            rid = next(r.id for r in st.reviews("pending") if r.msg_id == 11)
+            assert st.decide(rid, "discarded")
+        app.query_one(ReviewPane).reload()
+        await pilot.pause()
+        assert "decided elsewhere; pick the next one" in note(app)
+        assert app.query_one("#review-list", OptionList).highlighted is None
+        assert str(app.query_one("#detail-text", Static).content) == ""
+        await pilot.press("s", "d")                              # nothing open: nothing decided
+        await pilot.pause()
+        assert status_of(state, 7) == "pending"
+        app.query_one(ReviewPane).reload()                       # a later refresh doesn't pick one either
+        await pilot.pause()
+        assert app.query_one("#review-list", OptionList).highlighted is None
+        await pilot.press("n")                                   # the reader picks: the first post
+        await pilot.pause()
+        assert str(app.query_one("#detail-text", Static).content) == "second post"
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 7) == "to_send"
+    assert [l["id"] for l in read_labels(labels)] == ["-2:7"]
+
+
+async def test_open_post_changed_is_redrawn(paths, state):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await open_review(pilot)
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET text = 'edited text', reasons = 'new reason' WHERE msg_id = 11")
+        db.commit()
+        db.close()
+        app.query_one(ReviewPane).reload()
+        await pilot.pause()
+        assert str(app.query_one("#detail-text", Static).content) == "edited text"
+        assert "new reason" in str(app.query_one("#detail-head", Static).content)
+
+
+# ----------------------------------------------------------- the labels file
+
+def review(msg_id: int) -> Review:
+    return Review(id=msg_id, chat_id=-1, msg_id=msg_id, chat_title="c", text=f"t{msg_id}", reasons="",
+                  role="", link="", status="pending", at=0)
+
+
+def test_label_file_with_bad_bytes_keeps_them(labels):
+    labels.parent.mkdir(parents=True)
+    labels.write_bytes(b'{"id": "-5:1", "text": "keep", "label": "TRUE"}\n\xff\xfe broken\n')
+    write_label(review(11), "to_send", now=1)
+    lines = labels.read_bytes().splitlines()
+    assert lines[:2] == [b'{"id": "-5:1", "text": "keep", "label": "TRUE"}', b"\xff\xfe broken"]
+    assert json.loads(lines[2])["id"] == "-1:11"
+
+
+async def test_label_error_after_decision_is_a_note(paths, state, monkeypatch):
+    def broken(*_a, **_k):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(review_mod, "write_label", broken)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "corpus label not saved" in note(app)
+        assert status_of(state, 11) == "to_send"
+
+
+def _write_many(path: Path, start: int) -> None:
+    for i in range(start, start + 30):
+        write_label(review(i), "discarded", path)
+
+
+def test_two_writers_lose_no_labels(labels):
+    """Two Review windows labelling at once (separate processes, as in real use)."""
+    labels.parent.mkdir(parents=True)
+    ctx = multiprocessing.get_context("fork")
+    procs = [ctx.Process(target=_write_many, args=(labels, start)) for start in (1000, 2000)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(60)
+        assert p.exitcode == 0
+    assert len({l["id"] for l in read_labels(labels)}) == 60

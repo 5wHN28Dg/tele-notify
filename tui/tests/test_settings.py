@@ -41,8 +41,20 @@ def services(monkeypatch):
         calls.append((mode, action))
         return True, ""
 
+    async def running(mode):
+        return "active"
+
     monkeypatch.setattr(bot, "service_action", fake)
+    monkeypatch.setattr(bot, "service_state", running)
     return calls
+
+
+async def save(pilot) -> None:
+    """ctrl+s, then wait for the restart question (it asks systemd first)."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
 
 
 async def open_settings(pilot) -> SettingsPane:
@@ -90,8 +102,7 @@ async def test_edit_save_round_trip_backup_and_restart_cancel(paths, cfg_path, s
         assert pane.dirty
         assert str(app.query_one(TabbedContent).get_tab("settings").label).endswith("*")
         assert json.loads(cfg_path.read_text(encoding="utf-8")) == json.loads(before)   # not saved yet
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await save(pilot)
         assert isinstance(app.screen, ConfirmModal)
         await pilot.press("n")
         await pilot.pause()
@@ -113,12 +124,84 @@ async def test_restart_confirmed_uses_the_dry_run_service(paths, cfg_path, servi
     async with app.run_test(size=(120, 40)) as pilot:
         pane = await open_settings(pilot)
         await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await save(pilot)
         await pilot.press("y")
         await app.workers.wait_for_complete()
         await pilot.pause()
-    assert services == [("dry-run", "restart")]
+    assert services == [("dry-run", "try-restart")]
+
+
+async def test_stopped_service_is_not_started_by_a_save(paths, cfg_path, services, monkeypatch):
+    async def stopped(mode):
+        return "inactive"
+
+    monkeypatch.setattr(bot, "service_state", stopped)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await save(pilot)
+        assert not isinstance(app.screen, ConfirmModal)          # no restart offered
+        assert any("isn't running" in n.message and "wasn't restarted" in n.message
+                   for n in app._notifications)
+    assert services == []
+    assert json.loads(cfg_path.read_text(encoding="utf-8"))["extra_seniority"] == ["lead"]
+
+
+async def test_conflict_can_take_the_files_value_and_keep_other_edits(paths, cfg_path, services):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        pane._put("chats", [-1, -2, -3, -8])
+        on_disk = json.loads(cfg_path.read_text(encoding="utf-8"))
+        on_disk["chats"] = [-1, -9]                              # changed elsewhere meanwhile
+        on_disk["recent_messages"] = ["bot wrote this"]
+        cfg_path.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        await save(pilot)
+        assert isinstance(app.screen, ConfirmModal)
+        assert "chats" in str(app.screen.query_one("#confirm-text", Static).render())
+        await pilot.press("y")                                   # use the file's chats
+        await pilot.pause()
+        assert pane.edited["chats"] == [-1, -9] and pane.edited["extra_seniority"] == ["lead"]
+        assert pane.dirty
+        await save(pilot)                                        # saves now, then offers the restart
+        assert isinstance(app.screen, ConfirmModal)
+        await pilot.press("n")
+        await pilot.pause()
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["chats"] == [-1, -9] and saved["extra_seniority"] == ["lead"]
+    assert saved["recent_messages"] == ["bot wrote this"] and saved["api_hash"] == "do-not-show"
+
+
+async def test_conflict_declined_saves_nothing(paths, cfg_path, services):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane._put("chats", [-1, -2, -3, -8])
+        on_disk = json.loads(cfg_path.read_text(encoding="utf-8"))
+        on_disk["chats"] = [-1, -9]
+        cfg_path.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        await save(pilot)
+        await pilot.press("n")
+        await pilot.pause()
+        assert pane.edited["chats"] == [-1, -2, -3, -8]
+    assert json.loads(cfg_path.read_text(encoding="utf-8"))["chats"] == [-1, -9] and backups(cfg_path) == []
+
+
+async def test_chat_id_with_markup_is_shown_literally(paths, cfg_path):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-chats"
+        await pilot.pause()
+        entry = pane.query_one("#chat-add", Input)
+        entry.focus()
+        entry.value = "x[/]"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.is_running
+        assert any("x[/]" in n.message and not n.markup for n in app._notifications)
 
 
 async def test_validation_errors_block_save(paths, cfg_path, services):
@@ -162,8 +245,7 @@ async def test_chat_toggles_and_target(paths, cfg_path, services):
         await pilot.press("m")                        # send matches to Family
         await pilot.pause()
         assert pane.edited["chats"] == [-2, -3, -4] and pane.edited["target_chat"] == -4
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await save(pilot)
         await pilot.press("n")
         await pilot.pause()
     saved = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -288,8 +370,8 @@ async def test_corpus_test_shows_before_and_after(paths, cfg_path, tmp_path, mon
         assert "true matches lost (TRUE rejected): 0 -> 1 (worse)" in summary
         await pilot.press("escape")
     assert seen["edited"]["extra_not_a_job"] == ["course"]
-    assert seen["edited"]["api_hash"] == "do-not-show"           # the temp copy is a working config
-    assert not seen["path"].exists()                             # temp copy (with secrets) removed
+    assert "api_hash" not in seen["edited"] and "api_id" not in seen["edited"]   # judging needs no secrets
+    assert not seen["path"].exists()                             # temp copy removed
 
 
 async def test_corpus_test_without_corpus(paths, cfg_path, tmp_path, monkeypatch):
