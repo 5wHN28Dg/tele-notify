@@ -11,7 +11,7 @@
 ##   was right;
 ##
 ## Posts are matched by where they came from, or else by the message text
-## (the dry run keeps it in `processed.raw_text`). A forward of a forward
+## (kept in `processed.raw_text`). A forward of a forward
 ## points at the first channel, and links to channels without a username
 ## can't be resolved, so text matching catches those too.
 ## * **Nim only**: what Nim would have published and Python didn't.

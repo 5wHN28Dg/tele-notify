@@ -128,6 +128,8 @@ JOBS=2 deploy/build-tdlib.sh      # يضع lib/libtdjson.so بجانب البر�
 
 للتشغيل التلقائي، راجع [`deploy/tele-notify.service`](deploy/tele-notify.service).
 
+لمتابعة البوت وإدارته (لوحة المتابعة، قائمة المراجعة، البحث، الإعدادات) افتح شاشة الطرفية: [`tui/`](tui/README.md).
+
 ## تشغيل البوت (بايثون، إلى أن يكتمل الإصدار 4)
 
 1. احصل على بيانات Telegram API: الـ API ID والـ API hash من [my.telegram.org](https://my.telegram.org) ([الطريقة](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).

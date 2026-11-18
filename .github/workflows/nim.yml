@@ -29,3 +29,14 @@ jobs:
           printf 'مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة' > post.txt
           ./telenotify check --config:tests/keywords.json post.txt | tee out.txt
           grep -q "verdict: publish" out.txt
+      # the terminal screen (tui/, Python + Textual); after the build, so the
+      # tests that run the real filter use this commit's telenotify
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: TUI lint and tests
+        working-directory: tui
+        run: |
+          python -m pip install -q -e '.[dev]'
+          ruff check --target-version py311 .
+          python -m pytest -q

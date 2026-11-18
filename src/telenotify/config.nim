@@ -26,6 +26,9 @@
 ##   (your login) and `state.sqlite3`. Keep it private.
 ## * `tdlib_path`: path to `libtdjson.so` if it isn't found automatically.
 ## * `dry_run` (default false): judge and record, forward nothing.
+## * `keep_text_days` (default 90): how long the text of each judged post
+##   is kept in the state database (for searching it in the terminal
+##   screen); 0 keeps it forever. Verdicts and reasons are always kept.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
 ##
@@ -59,6 +62,7 @@ type
     dryRun*: bool              ## judge and record, but forward nothing
     alerts*: bool              ## send downtime alerts to Saved Messages
     alertAfterMinutes*: int    ## downtime shorter than this is only logged
+    keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
     apiId*: int
     apiHash*: string
     chats*: seq[int64]
@@ -148,11 +152,15 @@ proc parseConfig*(j: JsonNode): Config =
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
   result.extraJobSites = j.strings("extra_job_sites")
 
-  result.dataDir = j{"data_dir"}.getStr(getHomeDir() / ".local" / "share" / "tele-notify")
+  # "" means the default too (a blank field in the terminal screen's settings)
+  result.dataDir = j{"data_dir"}.getStr("").strip.expandTilde
+  if result.dataDir == "":
+    result.dataDir = getHomeDir() / ".local" / "share" / "tele-notify"
   result.tdlibPath = j{"tdlib_path"}.getStr("")
   result.dryRun = j{"dry_run"}.getBool(false)
   result.alerts = j{"alerts"}.getBool(true)
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
+  result.keepTextDays = j{"keep_text_days"}.getInt(90)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)
@@ -169,4 +177,8 @@ proc loadConfig*(path: string): Config =
              except IOError as e: raise newException(ConfigError, "cannot read " & path & ": " & e.msg)
   let j = try: parseJson(text)
           except JsonParsingError as e: raise newException(ConfigError, path & " is not valid JSON: " & e.msg)
-  parseConfig(j)
+  result = parseConfig(j)
+  # a relative data_dir is next to config.json, whatever folder the bot
+  # (or the terminal screen) was started from
+  if not result.dataDir.isAbsolute:
+    result.dataDir = absolutePath(path).parentDir / result.dataDir

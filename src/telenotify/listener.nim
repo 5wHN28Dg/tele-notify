@@ -84,6 +84,8 @@ proc duration(seconds: int64): string =
 proc alert*(l: Listener, text: string) {.async.} =
   ## Log loudly and, if alerts are on, tell you in Saved Messages.
   l.say "⚠️  " & text
+  try: l.state.addAlert(text)        # for the terminal screen
+  except CatchableError as e: l.say "   (could not record the alert: " & e.msg & ")"
   if not l.cfg.alerts: return
   try:
     if l.selfChat == 0: l.selfChat = await l.tg.selfChat()
@@ -132,6 +134,7 @@ proc onChatAccess*(l: Listener, chat: int64, access: ChatAccess, detail = "",
       # get "can't access the chat".
       if before notin ["", "unavailable"]:
         l.state.setMeta(key, "")
+        l.state.setChatStatus(chat, "ok")
         l.say &"✅ can read {title} again"
       return
     # While the start-up check runs, a live update for a chat it hasn't
@@ -151,6 +154,7 @@ proc onChatAccess*(l: Listener, chat: int64, access: ChatAccess, detail = "",
       detail = "it's no longer public and this account isn't a member"
     if before == a.status: return
     l.state.setMeta(key, a.status)   # before the await: no double alert
+    l.state.setChatStatus(chat, a.status)
   except CatchableError as e:
     l.say &"   could not record access to {title}: {e.msg}"
     return
@@ -161,6 +165,7 @@ proc chatReadable(l: Listener, chat: int64, title: string) =
   try:
     if l.state.getMeta(accessKey(chat)) == "unavailable":
       l.state.setMeta(accessKey(chat), "")
+      l.state.setChatStatus(chat, "ok")
       let t = if title != "": title else: l.titles.getOrDefault(chat, &"chat {chat}")
       l.say &"✅ can read {t} again"
   except CatchableError as e:
@@ -305,7 +310,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   for x in group:
     try:
       l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
-                            rawText = (if l.dryRun: x.text else: ""),   # for compare
+                            rawText = x.text,   # compare; search in the terminal screen
                             albumId = x.albumId)
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
@@ -481,10 +486,21 @@ proc checkDowntimeAtStart*(l: Listener) {.async.} =
     let since = fromUnix(parseBiggestInt(last)).local.format("yyyy-MM-dd HH:mm")
     await l.alert(&"was not running for {duration(gap)} (since {since}). Back now.")
 
+proc forgetOldTexts*(l: Listener) =
+  ## `keep_text_days`: clear old post texts. Not in a dry run: `compare`
+  ## matches the other bot's posts by text, over any number of days.
+  if l.dryRun: return
+  try: l.state.forgetOldTexts(l.cfg.keepTextDays)
+  except CatchableError as e: l.say "   could not clear old post texts: " & e.msg
+
 proc heartbeat*(l: Listener) {.async.} =
+  var lastCleanup = 0'i64
   while not l.stop[]:
     try: l.state.setMeta("last_alive", $getTime().toUnix)
     except CatchableError as e: l.say "   heartbeat: " & e.msg
+    if getTime().toUnix - lastCleanup >= 86_400:   # at start, then daily
+      lastCleanup = getTime().toUnix
+      l.forgetOldTexts()
     for _ in 0 ..< 60:
       if l.stop[]: break
       await sleepAsync(1000)
@@ -492,6 +508,9 @@ proc heartbeat*(l: Listener) {.async.} =
 proc onConnectionState*(l: Listener, state: string) =
   ## Called with TDLib's connection state ("connectionStateReady", ...).
   let t = getTime().toUnix
+  # for the terminal screen: "ready", "updating", "connecting", ...
+  try: l.state.setMeta("connection", state.replace("connectionState", "").toLowerAscii)
+  except CatchableError: discard
   # "Updating" means connected and catching up on missed updates: not down
   if state in ["connectionStateReady", "connectionStateUpdating"]:
     if l.downSince > 0:

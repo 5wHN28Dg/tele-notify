@@ -93,7 +93,7 @@ proc cmdEval(cfg: Config, path, show, outPath: string) =
       of "wrong": wrong
       else: false
     if pick:
-      echo "=== id ", j{"id"}.getInt, "  label ", label, "  ", j{"note"}.getStr
+      echo "=== id ", corpusId(j), "  label ", label, "  ", j{"note"}.getStr
       echo j["text"].getStr.runeSafe(0, 600)
       printDecision(d)
       echo ""

@@ -570,3 +570,29 @@ Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
 3. Install and start the Nim service (`deploy/tele-notify.service`, without `--dry-run`).
 4. Move `main.py`, `main_simple.py`, `requirements.txt` to `legacy/`.
 
+## 10. The terminal screen (`tui/`, issue #10)
+
+A live screen you open from a terminal when you want it: `tui/.venv/bin/telenotify-tui --config:config.json` (add `--dry-run` for the dry run). Four tabs: **Dashboard**, **Review**, **Search** and **Settings**; `tui/README.md` lists the keys.
+
+**Why Python and Textual, next to a Nim bot.** You picked [Textual](https://github.com/Textualize/textual): it has real widgets (tables, tabs, dialogs), mouse support and good-looking defaults, and Nim has nothing close (illwill is low-level; nimwave hasn't been updated since 2023). The cost is a second language, so the line between them is kept sharp:
+
+- The **bot** does all the work and owns the state database.
+- The **screen** only reads the database, writes your review decisions (exactly as `telenotify review` does: `pending` → `to_send`, and only if it's still pending, so nothing is approved twice), edits `config.json`, and runs the `telenotify` program for anything that needs the filter (explain, re-judge, test settings on the corpus). There is only one filter, so the screen and the bot can't disagree.
+
+**What the bot shares for it** (all in `state.sqlite3`):
+
+| Where | What |
+|---|---|
+| `alerts` table | every alert also sent to Saved Messages (newest 500) |
+| `chats` table | your chats with name, kind, whether watched, and access status (#16); refreshed in the background after start-up |
+| `meta` | `mode` (real / dry-run), `started_at`, `connection` (starting, ready, connecting, stopped…) and the heartbeat `last_alive` |
+| `processed.raw_text` | the text of each post, for searching; cleared after `keep_text_days` (default 90; never in a dry run, `compare` needs it). The file is private to you (0600) |
+
+**Things the reviews caught** (each is a test now):
+
+- Text from Telegram is written by strangers. In a table cell it was read as formatting (`[/]` crashed the app), and terminal escape codes in it reached your real terminal. Everything from the database is cleaned before it's shown, and table cells are plain text.
+- The "what did the filter read" view parsed the *first* `verdict:` line, so a post containing "verdict: publish" could fake its own verdict. It now reads the last one.
+- Pressing `s` twice, or holding it, approved the next post unread. Decisions are ignored for a moment after a new post appears, and `u` undoes the last one if the bot hasn't sent it yet.
+- The screen and the bot have to agree on which database: `dry_run` in config.json and `data_dir` (`~`, relative paths, which count from config.json's folder) follow the same rules in both.
+- Saving settings makes a timestamped backup, writes atomically, keeps keys it doesn't know and your API keys, refuses values the bot couldn't read back, and only offers a restart if the bot is running.
+
