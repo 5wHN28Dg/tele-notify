@@ -565,6 +565,50 @@ suite "watched chats you can't read any more (#16)":
     check "✅ can read chat2 again" in lines[]
     check f.forwarded == @[(-2'i64, 5'i64)]
 
+  test "a ban plus a failing backlog is one alert, also after restarts (review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Jobs", status: "banned")
+    f.unreadError[-1] = "CHANNEL_PRIVATE (400)"
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    waitFor l.bootstrap()
+    check f.texts.len == 1 and st.getMeta("chat_access:-1") == "banned"
+    let l2 = newListener(l.cfg, f.toTelegram, st, noFetch(), defaultOcr(), false)
+    l2.log = proc (line: string) {.closure, gcsafe.} = discard
+    waitFor l2.checkWatchedChats()
+    waitFor l2.bootstrap()
+    check f.texts.len == 1
+
+  test "no unread messages doesn't prove a chat readable (review)":
+    let f = FakeTg()
+    f.unreadError[-2] = "CHANNEL_PRIVATE (400)"
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check st.getMeta("chat_access:-2") == "unavailable"
+    f.unreadError.clear                       # read works, but there's nothing unread
+    waitFor l.retryFailedChats()
+    check st.getMeta("chat_access:-2") == "unavailable"
+    f.chats[-2] = @[msg(-2, 5, good)]         # next start, a real read clears it
+    let l2 = newListener(l.cfg, f.toTelegram, st, noFetch(), defaultOcr(), false)
+    l2.log = proc (line: string) {.closure, gcsafe.} = discard
+    waitFor l2.bootstrap()
+    check st.getMeta("chat_access:-2") == ""
+
+  test "a public channel never joined is not reported at start-up; leaving live is (review)":
+    let f = FakeTg()
+    f.access[-1] = ChatAccess(title: "Public", status: "left")
+    let (l, st) = setup(f)
+    waitFor l.checkWatchedChats()
+    check f.texts.len == 0 and st.getMeta("chat_access:-1") == "left"
+    waitFor l.onChatAccess(-2, ChatAccess(title: "Group", status: "left"))   # live update
+    check f.texts.len == 1 and "no longer a member of Group" in f.texts[0][1]
+
+  test "a dry run's alerts say so (review)":
+    let f = FakeTg()
+    let (l, _) = setup(f, dryRun = true)
+    waitFor l.alert("something")
+    check f.texts.len == 1 and f.texts[0][1].startsWith("⚠️ tele-notify [dry run]: something")
+
 suite "what the terminal screen reads":
   test "alerts are recorded; the chat list's status follows access changes":
     let f = FakeTg()
