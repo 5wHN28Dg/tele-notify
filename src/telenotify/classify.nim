@@ -380,7 +380,7 @@ proc classify*(text: string, cfg: Config): Decision =
   if not flat.contains(cfg.jobSignals):
     return Decision(verdict: vReject, reasons: @["no job-advert wording"])
 
-  let blocks = norm.splitJobs(cfg.entryRoles & cfg.titles, cfg.jobNouns)
+  let blocks = norm.splitJobs(cfg.entryRoles & cfg.titles, cfg.jobNouns, cfg.fields)
   var noWhole = WholePostPlace()
   if blocks.len == 1:
     return judgeBlock(blocks[0], Block(), cfg, noWhole)

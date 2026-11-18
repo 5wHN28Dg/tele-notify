@@ -15,12 +15,14 @@ type FakeTg = ref object
   afterForward: proc () {.closure, gcsafe.}
   forwardFails, linkFails: bool
   cutChats: HashSet[int64]
+  unreadFails: HashSet[int64]        # chats whose backlog can't be read (offline)
 
 proc toTelegram(f: FakeTg): Telegram =
   result = Telegram()
   result.unread = proc (chat: int64): Future[Unread] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
       if f.duringUnread != nil: f.duringUnread()
+      if chat in f.unreadFails: raise newException(IOError, "timeout")
       return Unread(messages: f.chats.getOrDefault(chat), cut: chat in f.cutChats)
   result.markRead = proc (chat: int64, ids: seq[int64]): Future[void] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
@@ -92,6 +94,40 @@ suite "listener":
     check st.pendingReviews()[0].link == "https://t.me/c/1/11"
     check f.read == @[(-1'i64, 10'i64), (-1'i64, 11'i64), (-1'i64, 12'i64)]
     check st.seen(-1, 12)
+
+  test "the backlog reports its progress (#11)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear)]
+    f.chats[-2] = @[msg(-2, 5, bad)]
+    let (l, _) = setup(f)
+    l.progressEvery = 2
+    var lines: seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines.add line
+    waitFor l.bootstrap()
+    var progress: seq[string]
+    for x in lines:
+      if x.startsWith("backlog: "): progress.add x
+    check progress == @["backlog: 2/3 checked", "backlog: 3/3 checked"]
+
+  test "a chat whose backlog couldn't be read is tried again (#5)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    f.chats[-2] = @[msg(-2, 5, "We are hiring a junior network technician in Basra. Fresh graduates welcome.")]
+    f.unreadFails.incl -2
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 10'i64)]
+    waitFor l.retryFailedChats()          # still offline: kept for later
+    waitFor l.processQueue()
+    check f.forwarded.len == 1
+    f.unreadFails.clear
+    waitFor l.retryFailedChats()
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 10'i64), (-2'i64, 5'i64)]
+    waitFor l.retryFailedChats()          # nothing left to retry
+    waitFor l.processQueue()
+    check f.forwarded.len == 2
 
   test "a chat that forbids forwarding gets the role and a link":
     let f = FakeTg()

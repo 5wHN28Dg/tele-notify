@@ -171,11 +171,13 @@ type StatRow* = object
 
 proc stats*(s: State, days: int): seq[StatRow] =
   ## Per chat over the last `days` days: how many messages got each verdict
-  ## and how many were actually forwarded (#12, #13, #15).
+  ## and how many were actually forwarded (#12, #13, #15), including posts
+  ## you approved in `telenotify review` once they've been sent.
   # An album is one post, however many pictures: count its first row only.
   for r in s.db.fastRows(sql"""SELECT chat_title,
       SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
-      SUM(action = 'forwarded' OR action = 'linked')
+      SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
+        WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent'))
       FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
         (SELECT MIN(msg_id) FROM processed q WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))
       GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):

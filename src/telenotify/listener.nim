@@ -50,6 +50,9 @@ type
     held: seq[TgMessage]          # live messages that arrived during bootstrap
     stop*: ref bool               # set to stop after the current message
     albumWaitMs*: int             # how long to wait for the rest of an album
+    progressEvery*: int           # backlog progress line every this many messages (#11)
+    backlogTotal, backlogDone: int
+    retryChats: seq[int64]        # chats whose backlog couldn't be read yet (#5)
     log*: proc (line: string) {.closure, gcsafe.}
     downSince: int64
     selfChat: int64
@@ -60,7 +63,7 @@ proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: O
            queue: initDeque[TgMessage](), stop: new bool,
            # live messages wait from the very start until the backlog is done
            # (they can arrive while chats are still being opened)
-           bootstrapping: true, albumWaitMs: 1500,
+           bootstrapping: true, albumWaitMs: 1500, progressEvery: 25,
            log: proc (line: string) {.closure, gcsafe.} =
              echo now().format("yyyy-MM-dd HH:mm:ss"), "  ", line)
 
@@ -253,6 +256,14 @@ proc processQueue*(l: Listener) {.async.} =
     if not l.dryRun:
       try: await l.tg.markRead(m.chatId, group.mapIt(it.id))
       except CatchableError as e: l.say "   could not mark read: " & e.msg
+    if l.bootstrapping and l.backlogTotal > 0:
+      # A progress bar doesn't suit a service whose output goes to the
+      # journal; a count every few messages does.
+      let before = l.backlogDone
+      l.backlogDone = min(l.backlogDone + group.len, l.backlogTotal)
+      if l.backlogDone == l.backlogTotal or
+          l.backlogDone div max(l.progressEvery, 1) > before div max(l.progressEvery, 1):
+        l.say &"backlog: {l.backlogDone}/{l.backlogTotal} checked"
 
 proc bootstrap*(l: Listener) {.async.} =
   ## Handle every chat's unread messages, oldest first, then the live
@@ -270,13 +281,35 @@ proc bootstrap*(l: Listener) {.async.} =
                         "messages; only the newest were checked.")
         for m in u.messages: l.queue.addLast m
       except CatchableError as e:
-        l.say &"   could not read chat {chat}: {e.msg}"
+        l.say &"   could not read chat {chat}: {e.msg} (will try again every minute)"
+        l.retryChats.add chat
+    l.backlogTotal = l.queue.len
+    l.backlogDone = 0
     await l.processQueue()
   finally:
     l.bootstrapping = false
     for m in l.held: l.queue.addLast m
     l.held.setLen 0
   await l.processQueue()
+
+proc retryFailedChats*(l: Listener) {.async.} =
+  ## Read the backlog of chats that failed at startup (no connection yet, a
+  ## timeout). Without this, their unread messages waited for the next
+  ## restart. Messages already handled live meanwhile are skipped as seen.
+  var still: seq[int64]
+  for chat in l.retryChats:
+    if l.stop[]:
+      still.add chat
+      continue
+    try:
+      let u = await l.tg.unread(chat)
+      if u.messages.len > 0:
+        l.say &"{u.messages.len} unread in {u.messages[0].chatTitle} (read on retry)"
+      for m in u.messages: l.queue.addLast m
+    except CatchableError as e:
+      l.say &"   could not read chat {chat} again: {e.msg}"
+      still.add chat
+  l.retryChats = still
 
 proc sendApproved*(l: Listener) {.async.} =
   ## Send the posts you approved in `telenotify review`. A failure puts the
@@ -308,6 +341,8 @@ proc worker*(l: Listener) {.async.} =
     if ticks mod 50 == 0 and not l.dryRun:
       try: await l.sendApproved()
       except CatchableError as e: l.say "   reviewed posts: " & e.msg
+    if ticks mod 600 == 0 and l.retryChats.len > 0:   # about every minute
+      await l.retryFailedChats()
 
 proc checkDowntimeAtStart*(l: Listener) {.async.} =
   let last = l.state.getMeta("last_alive")

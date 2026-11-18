@@ -108,6 +108,44 @@ suite "multi-job posts (3.8, #29)":
 1- بكالوريوس هندسة كهرباء
 2- خبرة لا تقل عن 5 سنوات""") == vReject
 
+  test "a listed job that matches only by its degree is judged alone (#29 sample 2)":
+    check verdict("""وظائف جديدة – البصرة
+1. Coordinators & Project Managers – جنوب العراق
+📍 Basra
+• 5+ سنوات خبرة في ادارة المشاريع.
+
+2. Bureau Veritas – Commissioning Engineer
+📍 Basra – On-site
+Requirements:
+• بكالوريوس هندسة كهرباء.
+• حديث التخرج.
+
+3. Technical Sales Engineer
+📍 Basrah
+• 5+ سنوات في Technical Sales.""") == vPublish
+
+  test "another job named in the plural doesn't share its requirements":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+1. Project Managers
+• 5+ سنوات خبرة.
+2. مهندس كهرباء حديث التخرج""") == vPublish
+
+  test "a job word inside a numbered requirement doesn't make it another job":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+1. Commissioning Engineer
+• بكالوريوس هندسة كهرباء.
+• 5+ سنوات خبرة، وخبرة مع EPC/Developer.""") == vReject
+
+  test "a bullet with a number before a list mark is still a list item":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+🔹 1- محاسب خبرة 5 سنوات
+🔹 2- مهندس كهرباء حديث التخرج""") == vPublish
+
+  test "a numbered degree requirement is not a job of its own":
+    check verdict("""مطلوب مهندس كهرباء للعمل في البصرة
+1- بكالوريوس هندسة كهرباء
+2- حديث التخرج""") == vPublish
+
 suite "not a job (3.9)":
   test "job seeker":
     check verdict("""أبحث حاليًا عن فرصة عمل في البصرة، خريج هندسة كهرباء حديث التخرج""") == vReject

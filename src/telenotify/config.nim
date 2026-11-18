@@ -124,7 +124,12 @@ proc parseConfig*(j: JsonNode): Config =
     if w notin ["اول", "اولي"]: headline.add w
   result.headlineSeniority = toKeywords(headline, strict = true)
   result.notAPlaceAfter = toKeywords(notAPlaceAfter)
-  result.jobNouns = toKeywords(jobNouns)
+  # plurals too: "1. Coordinators & Project Managers" is another job, not a
+  # requirement shared by every job in the post
+  var nouns = @jobNouns
+  for w in jobNouns:
+    if w.len > 2 and w[^1] in {'a'..'z'} and not w.endsWith("s"): nouns.add w & "s"
+  result.jobNouns = toKeywords(nouns)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))
   result.jobSignals = toKeywords(@jobSignals & j.strings("extra_job_signals"))
   result.otherPlaces = toKeywords(@otherPlaces & j.strings("extra_other_places"), strict = true)

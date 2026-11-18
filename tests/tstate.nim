@@ -38,6 +38,20 @@ suite "state":
     check s.len == 2
     check s[0].chat == "Jobs" and s[0].verdicts == [1, 0, 1] and s[0].forwarded == 1
 
+  test "a post you approved in review counts as forwarded (#13)":
+    st.markProcessed(-300, 7, "Third", "review", "", "", "queued for review")
+    st.addReview(-300, 7, "Third", "post", "no level", "electrical engineer", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -300: id = r.id
+    check st.decideReview(id, "to_send")
+    proc third(): StatRow =
+      for r in st.stats(7):
+        if r.chat == "Third": return r
+    check third().forwarded == 0                       # approved, not sent yet
+    check st.decideReview(id, "sent", fromStatus = "to_send")
+    check third().verdicts == [0, 1, 0] and third().forwarded == 1
+
   test "a new data folder is private to you":
     check getFilePermissions(dir) == {fpUserRead, fpUserWrite, fpUserExec}
 

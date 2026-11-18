@@ -12,15 +12,20 @@
 ##
 ## The splitting rule is deliberately simple:
 ## 1. Cut the post before every line that starts a list item ("1-", "2.",
-##    "3)", "1️⃣") and at separator lines ("━━━━", "-----"). The text before
+##    "3)", "1️⃣", "🔹 2-"; not "• 5+ years", a quantity) and at separator lines ("━━━━", "-----"). The text before
 ##    the first cut is the *header*.
 ## 2. If no list piece names one of your job titles, the post is one block
 ##    (a single job, the list being its requirements).
 ## 3. Otherwise every list piece that names one of your titles starts a job
-##    block. A numbered piece without one of your titles is either
+##    block. So does a numbered piece whose first line names *some* job and
+##    that mentions one of your fields ("3. Commissioning Engineer ...
+##    بكالوريوس هندسة كهرباء"): your degree is what that job asks for. A
+##    numbered degree line ("1- بكالوريوس هندسة كهرباء") names no job, so it
+##    stays a requirement. A numbered piece without one of your titles is either
 ##    * another job, if it names *some* job ("2- محاسب", see `jobNouns`):
 ##      dropped, or
-##    * a requirement ("2- خبرة 4 سنوات"): glued onto the job above it.
+##    * a requirement ("2- خبرة 4 سنوات"): glued onto the job above it, or
+##      dropped with it when the job above isn't yours.
 ##    An un-numbered piece after a job (cut off by a separator line) is glued
 ##    onto that job too. If a job block has no location of its own or in the
 ##    header, the whole post is searched (the address may be in a footer
@@ -42,14 +47,20 @@ type
     isHeader*: bool       ## true when the block is the header/whole post
 
 let
-  listItem = re2(r"^\s*(?:\(?\d{1,2}\s*[-.)ـ:](?:\s|$)|\d\x{FE0F}?\x{20E3}|[\x{2776}-\x{277F}\x{2460}-\x{2473}]|[•▪◾◽🔹🔸]\s*\d)")
+  listItem = re2(r"^\s*(?:\(?\d{1,2}\s*[-.)ـ:](?:\s|$)|\d\x{FE0F}?\x{20E3}|[\x{2776}-\x{277F}\x{2460}-\x{2473}]|[•▪◾◽🔹🔸]\s*\d{1,2}\s*[-.)ـ:](?:\s|$))")
   separator = re2(r"^\s*[━─—_=\-*~•.·]{3,}\s*$")
 
 proc mentionsTitle(lines: seq[string], titles: KeywordList): bool =
   for l in lines:
     if l.flatten.contains(titles): return true
 
-proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
+proc isOurJob(p: seq[string], numbered: bool, titles, fields, jobNouns: KeywordList): bool =
+  if p.mentionsTitle(titles): return true
+  numbered and fields.len > 0 and p.len > 0 and p[0].flatten.contains(jobNouns) and
+    p.mentionsTitle(fields)
+
+proc splitJobs*(normText: string, titles, jobNouns: KeywordList,
+                fields: KeywordList = @[]): seq[Block] =
   ## Returns either one block (the whole post, `isHeader = true`) or a
   ## header block followed by one block per job.
   let lines = normText.splitLines
@@ -68,7 +79,7 @@ proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
   let whole = @[Block(lines: lines, isHeader: true)]
   var titledPieces = 0
   for i in 1 ..< pieces.len:
-    if numbered[i] and pieces[i].mentionsTitle(titles): inc titledPieces
+    if numbered[i] and pieces[i].isOurJob(true, titles, fields, jobNouns): inc titledPieces
   if titledPieces == 0:
     return whole
 
@@ -90,12 +101,18 @@ proc splitJobs*(normText: string, titles, jobNouns: KeywordList): seq[Block] =
     pieces.setLen(lastNumbered + 1)
 
   result.add Block(lines: pieces[0] & footer, isHeader: true)
+  var inOtherJob = false       # the pieces after another job's belong to it
   for i in 1 ..< pieces.len:
     let p = pieces[i]
-    if p.mentionsTitle(titles):
+    if p.isOurJob(numbered[i], titles, fields, jobNouns):
       result.add Block(lines: p)
-    elif numbered[i] and p.mentionsTitle(jobNouns):
-      discard                  # another job that isn't yours
+      inOtherJob = false
+    elif numbered[i] and p.len > 0 and p[0].flatten.contains(jobNouns):
+      # another job that isn't yours; only its first line counts ("• 5+ years
+      # ... strong experience with EPC/Developer" is a requirement)
+      inOtherJob = true
+    elif inOtherJob:
+      discard                  # its requirements ("• 5+ years" looks numbered too)
     elif result.len > 1:
       result[^1].lines.add p   # a requirement, footer or continuation
     else:
