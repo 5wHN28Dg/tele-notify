@@ -105,60 +105,24 @@ proc isOtherDuration(line: string, a, b: int): bool =
   let ctx = line.runeSafe(a - 40, b + 15)
   ctx.contains(notExperience)
 
-const leadingOptional = ["preferably", "يفضل", "ويفضل"]
-  ## Optional markers that point *forward*: after the years ("5 years,
-  ## preferably in banking", "3 سنوات ويفضل في النفط") they make what follows
-  ## optional, not the years.
-
+const forwardMarkers = ["preferably", "يفضل", "ويفضل", "preferred", "افضليه"]
 let
-  minimumBefore = re2(r"(?i)(?:(?:^|[^\p{L}])(?:minimum|min\.?|at least|not less than|no less than)|لا ?تقل عن|لا ?يقل عن|علي الاقل|كحد ادني)(?:\s+(?:of|a|an))*\s*:?\s*$")
-  minimumAfter = re2(r"(?i)^\s*(?:(?:of\s+)?(?:relevant\s+|work\s+)?experience\s+)?(?:minimum|at least)(?:[^\p{L}]|$)|^\s*(?:(?:من\s+)?(?:ال)?خبره\s+)?(?:علي الاقل|كحد ادني)(?:\s|$)")
-  # A marker followed by a preposition points forward: "preferred in oil
-  # companies", "مع افضليه لمن عمل", "يفضل في".
-  forwardAfter = re2(r"^\s*(?:in|for|with|from|at|لمن|لل|ل|في|من|ممن)(?:\s|$)")
-  # A new list item: what it says doesn't qualify the line before.
-  bulletStart = re2(r"^\s*(?:[-•*●▪◦–]|\d{1,2}\s*[.)-])")
-  wordAfter = re2(r"[\p{L}\p{N}]")
-  clauseEnd = {',', ';', ')', '.'}
-  window = 200
+  # what comes right after a forward-pointing marker: "preferably in ...",
+  # "ويفضل في ...", "مع افضليه لمن ..."
+  forwardPrep = re2(r"^\s*(?:in|with|from|at|في|لمن|ممن|من)(?:\s|$)")
+  beVerb = re2(r"(?:^|\s)(?:is|are|be|was)\s*$")
 
-proc markerOptional(after: string, optional: KeywordList): bool =
-  ## Does an optional marker in `after` (normalised text that follows the
-  ## years) make the years optional? "is preferred", "a plus" do;
-  ## "preferably in banking", "preferred in oil companies", "plus strong SQL"
-  ## (a conjunction) point at what follows instead.
-  let after = after.flatten
-  for h in after.hits(optional):
-    let rest = after[h.stop .. ^1]
-    if h.keyword == "plus" and not after[0 ..< h.start].strip.endsWith(" a") and
-        after[0 ..< h.start].strip != "a":
-      continue
-    if rest.contains(forwardAfter): continue
-    if h.keyword in leadingOptional and rest.contains(wordAfter): continue
-    return true
-  false
-
-proc optionalFor(line: string, a, b: int, next: string, optional: KeywordList): bool =
-  ## Is the quantity at line[a..<b] optional? Yes if an optional marker
-  ## comes before it in the same clause ("preferably 3 years", "يفضل خبرة 3
-  ## سنوات"), or after it ("3 years is preferred", "... is a plus", or that
-  ## on the next line when the sentence wraps), unless an explicit minimum
-  ## comes right before or after the years ("Minimum 7 years",
-  ## "3 سنوات علي الاقل").
-  # Look only near the years (`window` bytes each side): a far-away marker
-  # belongs to another sentence, and huge one-line posts stay fast.
-  var clause = line.runeSafe(a - window, a)
-  var cut = -1
-  for i in countdown(clause.high, 0):
-    if clause[i] in clauseEnd: cut = i; break
-  if cut >= 0: clause = clause[cut + 1 .. ^1]
-  if clause.flatten.contains(optional): return true
-  let after = line.runeSafe(b, b + window)
-  let atEnd = b + window >= line.len
-  if line.runeSafe(a - 25, a).contains(minimumBefore) or after.contains(minimumAfter):
-    return false
-  if after.markerOptional(optional): return true
-  atEnd and next.len > 0 and not next.contains(bulletStart) and (after & " " & next).markerOptional(optional)
+proc forwardOnly(flat: string, optional: KeywordList): bool =
+  ## Does `flat` (flattened text) have optional markers, all of them
+  ## pointing forward at a qualifier ("preferably in the oil and gas
+  ## industry", "ويفضل في الشركات النفطيه", "preferred in oil companies")
+  ## rather than at the years? "is preferred for this role", "a plus",
+  ## "يفضل" on its own, "preferably." are not.
+  for h in flat.hits(optional):
+    result = true
+    if h.keyword notin forwardMarkers: return false
+    if not flat[h.stop .. ^1].contains(forwardPrep): return false
+    if h.keyword == "preferred" and flat[0 ..< h.start].contains(beVerb): return false
 
 proc parseExperience*(normText: string): Experience =
   ## `normText` must already be normalised (see normalize.nim).
@@ -198,13 +162,22 @@ proc parseExperience*(normText: string): Experience =
       qtys.add (1, m.group(0).a, m.group(0).b + 1)
     # "preferably" often lands on the next line when a sentence wraps.
     # "required" on the same line wins over "preferably".
-    var next = ""
-    if li + 1 < lines.len and lines[li + 1].len < 60 and
+    let flat = line.flatten
+    let onLine = flat.contains(optional)
+    var lineOptional = onLine
+    var nextForward = false
+    if not onLine and li + 1 < lines.len and lines[li + 1].len < 60 and
         not (line.strip.len > 0 and line.strip[^1] in {'.', ':', ';', '!'}):
-      next = lines[li + 1]
-    let lineRequired = line.flatten.contains(required)
+      let next = lines[li + 1].flatten
+      lineOptional = next.contains(optional)
+      nextForward = lineOptional and next.forwardOnly(optional)
+    if lineOptional and flat.contains(required):
+      lineOptional = false
+    let lineForward = onLine and flat.forwardOnly(optional)
     for (q, a, b) in qtys:
-      let isOptional = not lineRequired and line.optionalFor(a, b, next, optional)
+      # "5 years, preferably in banking": the years themselves are required.
+      let isOptional = lineOptional and not nextForward and
+        not (lineForward and not line[0 ..< a].flatten.contains(optional))
       var years = q
       if years < 0 or years > 30: continue
       if not spans.nearExperienceWord(a, b): continue

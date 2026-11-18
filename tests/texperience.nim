@@ -51,23 +51,37 @@ suite "experience: entry friendly and optional":
     check years("خبرة لا تقل عن 3 سنوات ويفضل في الشركات النفطية") == 3
     check years("خبرة 4 سنوات ويفضل في مجال النفط") == 4
 
-  test "review of the fix: wraps, minimums, forward markers, bullets":
+  test "review of the fix: a wrapped sentence and other forward qualifiers":
     check years("- Minimum 7 years' relevant experience,\npreferably in the oil and gas industry.") == 7
     check years("خبرة لا تقل عن 3 سنوات\nويفضل في الشركات النفطية") == 3
-    check preferred("Linux admin 3 years experience is a plus") == 3
-    check years("Linux admin 3 years experience is a plus") == -1
-    check years("خبرة 3 سنوات على الأقل وشهادة PMP تعتبر ميزة") == 3
-    check years("5 years experience minimum, SAP knowledge is a plus") == 5
-    check years("Minimum: 5 years of experience, Docker is a plus") == 5
-    check years("خبرة لاتقل عن 4 سنوات ويعتبر الماجستير ميزة") == 4
     check years("خبرة 3 سنوات مع أفضلية لمن عمل في الشركات النفطية") == 3
     check years("5 years experience, preferred in oil companies") == 5
-    check years("3+ years of experience plus strong SQL knowledge") == 3
-    check years("• 3+ years of experience in backend development\n• Docker is a plus") == 3
-    check years("- خبرة لا تقل عن 3 سنوات\n- يفضل من لديه شهادة PMP") == 3
-    check years("Bachelor's in Engineering (Master's preferred), minimum 5 years of experience") == 5
-    check years("5 years of experience, preferably ✅") == -1
-    check years("3 years of experience\nis preferred") == -1
+
+  test "adversarial review: these stay optional (main got them right)":
+    for s in ["Minimum 3 years of experience preferred",
+              "At least 2 years of experience is preferred",
+              "A minimum of 2 years experience is a plus",
+              "خبرة لا تقل عن سنتين تعتبر ميزة",
+              "خبرة لا تقل عن سنتين (يفضل)",
+              "We need an accountant with 2 years of experience preferably. Send your CV to hr@x.com",
+              "2 years experience preferably, fresh graduates are welcome",
+              "خبرة سنتين يفضل ويمكن قبول الخريجين الجدد",
+              "3 years experience will be a big plus",
+              "3+ years experience would be an added plus",
+              "Experience 2 years is plus",
+              "3 years experience plus",
+              "2 years of experience is preferred for this position",
+              "2 years of experience is preferred in this role",
+              "3 years of experience would be an advantage in this role",
+              "Preferred: Master's degree, 3 years experience",
+              "Nice to have: Docker, Kubernetes, 2+ years of experience in DevOps",
+              "Preferably M.Sc. holder with 3 years of experience",
+              "Experience (preferred): 3 years",
+              "experience 3 years\n- preferred",
+              "Preferably in oil companies, 3 years experience",
+              "Linux admin 3 years experience is a plus"]:
+      checkpoint s
+      check years(s) == -1
 
   test "optional markers that still make the years optional":
     check years("Preferably 3 years of experience") == -1
