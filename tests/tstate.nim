@@ -52,6 +52,21 @@ suite "state":
     check st.decideReview(id, "sent", fromStatus = "to_send")
     check third().verdicts == [0, 1, 0] and third().forwarded == 1
 
+  test "a review kept as a match (already sent elsewhere) is never sent, pending or forwarded":
+    # the terminal screen's `k`: status "kept"
+    st.markProcessed(-400, 8, "Fourth", "review", "", "", "queued for review")
+    st.addReview(-400, 8, "Fourth", "post", "no level", "electrical engineer", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -400: id = r.id
+    check id != 0
+    check st.decideReview(id, "kept")
+    for r in st.pendingReviews(): check r.chatId != -400
+    for r in st.approvedReviews(): check r.chatId != -400   # sendApproved never sees it
+    check not st.decideReview(id, "to_send")                 # an old window can't approve it
+    for r in st.stats(7):
+      if r.chat == "Fourth": check r.verdicts == [0, 1, 0] and r.forwarded == 0
+
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")
     st.addAlert("second")

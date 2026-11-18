@@ -2,13 +2,15 @@
 
 Left, the posts waiting for a decision; right, the one under the cursor.
 `s` approves it (the running bot sends it within seconds), `d` discards it,
-`n` / down moves on, `o` opens the post in the browser, `r` shows what the
+`k` keeps it as a match without sending it (for a post that already reached
+the channel another way, e.g. the old bot forwarded it), `n` / down moves on, `o` opens the post in the browser, `r` shows what the
 filter read (it runs `telenotify check` with link scraping), `h` shows what
 was decided recently.
 
 `u` undoes the last decision made here, unless the bot has already sent
 the post. For a moment after a new post appears, `s` / `d` are ignored, so
-a double tap or a held key can't decide a post nobody has read.
+a double tap or a held key can't decide a post nobody has read. In a dry
+run nothing is ever sent: `s` only records the choice (the screen says so).
 
 Decisions are written exactly as `telenotify review` writes them
 (Store.decide), and each one is also a label for the test corpus
@@ -38,7 +40,7 @@ from ..clean import clean
 from ..store import Review
 from .review_data import history, remove_label, write_label
 
-DECISION_KEYS = ("send", "discard", "next", "open_link", "check")
+DECISION_KEYS = ("send", "keep", "discard", "next", "open_link", "check")
 UI_TIMEOUT = 1.0   # seconds to wait for the bot's lock: these reads and writes run on the UI thread
 
 
@@ -121,6 +123,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("s", "send", "Send"),
+        Binding("k", "keep", "Match, don't send"),
         Binding("d", "discard", "Discard"),
         Binding("n", "next", "Next"),
         Binding("o", "open_link", "Open link"),
@@ -136,6 +139,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     ReviewPane #review-top { height: 1; }
     ReviewPane #review-summary { width: auto; text-style: bold; }
     ReviewPane #review-note { width: 1fr; margin-left: 2; }
+    ReviewPane #review-dryrun { height: auto; }
     ReviewPane #review-empty { height: 1fr; content-align: center middle; text-align: center; }
     ReviewPane #review-split { height: 1fr; }
     ReviewPane #review-list { width: 40%; max-width: 56; min-width: 28; height: 1fr; }
@@ -143,7 +147,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     ReviewPane #detail-head { margin-bottom: 1; }
     ReviewPane #review-history { height: 1fr; }
     ReviewPane #review-buttons { height: 1; margin-top: 1; }
-    ReviewPane #review-buttons Button { margin-right: 1; }
+    ReviewPane #review-buttons Button { margin-right: 1; width: auto; min-width: 4; }
     """
 
     def __init__(self) -> None:
@@ -168,6 +172,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         with Horizontal(id="review-top"):
             yield Static("", id="review-summary")
             yield Static("", id="review-note", classes="muted")
+        yield Static(Content("DRY RUN: Send only records your choice (and the corpus label); "
+                             "nothing is forwarded to the channel."), id="review-dryrun", classes="warn")
         yield Static("", id="review-empty")
         with Horizontal(id="review-split"):
             yield OptionList(id="review-list")
@@ -178,9 +184,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         yield table
         with Horizontal(id="review-buttons"):
             yield KeyButton("Send", id="btn-send", variant="success", compact=True)
+            yield KeyButton("Match, no send", id="btn-keep", variant="primary", compact=True)
             yield KeyButton("Discard", id="btn-discard", variant="error", compact=True)
             yield KeyButton("Next", id="btn-next", compact=True)
-            yield KeyButton("Open link", id="btn-open", compact=True)
+            yield KeyButton("Link", id="btn-open", compact=True)
             yield KeyButton("Filter read", id="btn-check", compact=True)
             yield KeyButton("History", id="btn-history", compact=True)
             yield KeyButton("Undo", id="btn-undo", compact=True)
@@ -190,6 +197,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         table.add_columns("decided", "status", "chat", "role", "post")
         table.display = False
         self.query_one("#review-split").display = False
+        dry = self.app.paths.dry_run
+        self.query_one("#review-dryrun").display = dry
+        if dry:
+            self.query_one("#btn-send", Button).tooltip = "Dry run: records your choice only, forwards nothing"
+        self.query_one("#btn-keep", Button).tooltip = (
+            "A match, but don't send it (it already reached the channel): "
+            "labelled a match in the corpus, never forwarded")
         if self.app.paths.binary is None:
             self.query_one("#btn-check", Button).tooltip = "the telenotify program wasn't found"
             self.note("no telenotify program: Filter read is off", "warn")
@@ -239,7 +253,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def _sync_controls(self) -> None:
         none = self.current is None
-        for bid in ("#btn-send", "#btn-discard", "#btn-next", "#btn-open", "#btn-check"):
+        for bid in ("#btn-send", "#btn-keep", "#btn-discard", "#btn-next", "#btn-open", "#btn-check"):
             button = self.query_one(bid, Button)
             off = none and not (bid == "#btn-next" and self._items and not self._history_mode)
             button.display = not off  # with nothing open, only History (and Next, to pick one) is offered
@@ -340,7 +354,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._show_only("#review-history")
         row = table.cursor_row
         table.clear()
-        labels = {"to_send": "approved", "sent": "sent", "discarded": "discarded"}
+        labels = {"to_send": "approved", "sent": "sent", "discarded": "discarded",
+                  "kept": "match, not sent"}
         for r in past:
             table.add_row(when(r.decided_at or r.at), Text(labels.get(r.status, r.status)),
                           Text(cut(r.chat_title, 20)), Text(cut(r.role, 22)), Text(cut(r.text, 40)), key=str(r.id))
@@ -407,6 +422,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             if status == "to_send":
                 msg = ("approved: recorded only (dry run, nothing is sent)" if self.app.paths.dry_run
                        else "approved, the bot will send it in a few seconds")
+            elif status == "kept":
+                msg = "kept as a match, not sent"
             else:
                 msg = "discarded"
             self._decided_note = f"#{r.msg_id} {msg}{label_note} (u undoes)"
@@ -449,6 +466,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def action_send(self) -> None:
         self._decide("to_send")
+
+    def action_keep(self) -> None:
+        """A match, but don't send it: it already reached the channel another way."""
+        self._decide("kept")
 
     def action_discard(self) -> None:
         self._decide("discarded")
@@ -514,7 +535,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     @on(Button.Pressed)
     def _button(self, event: Button.Pressed) -> None:
-        actions = {"btn-send": self.action_send, "btn-discard": self.action_discard,
+        actions = {"btn-send": self.action_send, "btn-keep": self.action_keep,
+                   "btn-discard": self.action_discard,
                    "btn-next": self.action_next, "btn-open": self.action_open_link,
                    "btn-check": self.action_check, "btn-history": self.action_toggle_history,
                    "btn-undo": self.action_undo}
