@@ -1,0 +1,6 @@
+/* shared styles; each screen may add its own DEFAULT_CSS */
+TabPane { padding: 0 1; }
+.muted { color: $text-muted; }
+.warn { color: $warning; }
+.bad { color: $error; }
+.good { color: $success; }

@@ -1,0 +1,84 @@
+"""The app shell: four tabs, one per screen.
+
+Each screen is a widget in telenotify_tui/screens/ with a `reload()`
+method; the app calls it when the tab is shown and every few seconds while
+it is visible, so the numbers stay live while the bot runs.
+"""
+
+from __future__ import annotations
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.widgets import Footer, Header, TabbedContent, TabPane
+
+from .paths import Paths
+from .store import Store
+from .screens.dashboard import DashboardPane
+from .screens.review import ReviewPane
+from .screens.search import SearchPane
+from .screens.settings import SettingsPane
+
+REFRESH_SECONDS = 5
+
+
+class TeleNotifyApp(App):
+    TITLE = "tele-notify"
+    CSS_PATH = "app.tcss"
+    BINDINGS = [
+        Binding("1", "show('dashboard')", "Dashboard"),
+        Binding("2", "show('review')", "Review"),
+        Binding("3", "show('search')", "Search"),
+        Binding("4", "show('settings')", "Settings"),
+        Binding("ctrl+r", "reload", "Refresh"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
+        super().__init__()
+        self.paths = paths
+        self.refresh_seconds = refresh_seconds
+        self.sub_title = ("DRY RUN · " if paths.dry_run else "") + str(paths.config)
+
+    def store(self) -> Store:
+        """A fresh connection to the bot's state (use it in a `with` block)."""
+        return Store(self.paths.state)
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with TabbedContent(initial="dashboard"):
+            with TabPane("Dashboard", id="dashboard"):
+                yield DashboardPane()
+            with TabPane("Review", id="review"):
+                yield ReviewPane()
+            with TabPane("Search", id="search"):
+                yield SearchPane()
+            with TabPane("Settings", id="settings"):
+                yield SettingsPane()
+        yield Footer()
+
+    def on_mount(self) -> None:
+        if self.refresh_seconds > 0:
+            self.set_interval(self.refresh_seconds, self._tick)
+        self.call_after_refresh(self.action_reload)
+
+    def _active_pane(self):
+        tabs = self.query_one(TabbedContent)
+        pane = tabs.get_pane(tabs.active) if tabs.active else None
+        return pane.children[0] if pane is not None and pane.children else None
+
+    def _tick(self) -> None:
+        pane = self._active_pane()
+        if pane is not None and getattr(pane, "live", False):
+            pane.reload()
+
+    def action_reload(self) -> None:
+        pane = self._active_pane()
+        if pane is not None and hasattr(pane, "reload"):
+            pane.reload()
+
+    def action_show(self, tab: str) -> None:
+        self.query_one(TabbedContent).active = tab
+        self.call_after_refresh(self.action_reload)
+
+    def on_tabbed_content_tab_activated(self, _event: TabbedContent.TabActivated) -> None:
+        self.call_after_refresh(self.action_reload)
