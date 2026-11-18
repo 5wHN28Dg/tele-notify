@@ -170,13 +170,13 @@ def test_empty_and_missing_tables_give_zeros(tmp_path):
     new_db(path)
     p = dd.resolve(dd.PeriodChoice("all"), date(2026, 11, 18), None)
     with Store(path) as s:
-        assert dd.first_judged(s) is None
+        assert dd.first_judged(s) == (None, True)
         ps = dd.period_stats(s, p, 46)
     assert ps.totals == dd.Totals() and ps.chats == [] and [b.total for b in ps.bars] == [0]
     bare = tmp_path / "bare.sqlite3"
     sqlite3.connect(bare).close()
     with Store(bare) as s:
-        assert dd.first_judged(s) is None
+        assert dd.first_judged(s) == (None, True)
         assert dd.period_stats(s, p, 46).totals == dd.Totals()
 
 
@@ -242,8 +242,8 @@ def test_weeks_and_months_add_up_to_the_totals(tmp_path):
     path = tmp_path / "s.sqlite3"
     new_db(path, rows)
     with Store(path) as s:
-        start = dd.first_judged(s)
-        assert start == first
+        start, known = dd.first_judged(s)
+        assert start == first and known
         for kind, bucket in (("all", "month"), ("year", "week")):
             p = dd.resolve(dd.PeriodChoice(kind), date(2026, 8, 31), start)
             ps = dd.period_stats(s, p, 46 if kind == "all" else 60)
@@ -345,11 +345,74 @@ async def test_custom_range_form_checks_dates(paths, now):
         assert not isinstance(app.screen, RangeScreen)
         pane = app.query_one(DashboardPane)
         assert pane.choice == dd.PeriodChoice("custom", three_ago, three_ago)
-        assert app.query_one("#period", Select).value == "custom"
+        assert app.query_one("#period", Select).value == dash.CUSTOM_SHOWN
         assert numbers(app) == ["1", "0", "0", "1", "0"]
         assert text(app, "#chats-period").startswith("Custom:")
         rows = app.query_one("#chat-stats", DataTable)
         assert rows.row_count == 1
+
+
+def test_unreadable_first_time_gives_unknown_start(tmp_path):
+    """A corrupt `at` (too big for a date, negative, or text) mustn't crash all time."""
+    good = at(date(2026, 3, 4))
+    for bad in (10**15, -(10**15), "garbage"):
+        path = tmp_path / f"s{abs(hash(str(bad)))}.sqlite3"
+        new_db(path, [(-1, 1, "A", "reject", "rejected", bad, 0),
+                      (-1, 2, "A", "publish", "forwarded", good, 0)])
+        with Store(path) as s:
+            first, known = dd.first_judged(s)
+            ps = dd.period_stats(s, dd.resolve(dd.PeriodChoice("all"), date(2026, 11, 18), first, known), 46)
+        if bad != -(10**15):   # bigger than the good time (text sorts after numbers): not the first
+            assert (first, known) == (date(2026, 3, 4), True)
+            assert ps.totals == dd.Totals(publish=1, forwarded=1)
+            continue
+        assert (first, known) == (date(2026, 3, 4), False), bad
+        assert ps.period.describe() == "All time: start unknown"
+        assert ps.totals == dd.Totals(publish=1, forwarded=1)
+    path = tmp_path / "only-bad.sqlite3"
+    new_db(path, [(-1, 1, "A", "reject", "rejected", 10**15, 0)])
+    with Store(path) as s:
+        assert dd.first_judged(s) == (None, False)
+
+
+async def test_all_time_with_a_corrupt_time_on_screen(paths):
+    db = sqlite3.connect(paths.state)
+    db.execute("""INSERT INTO processed (chat_id, msg_id, chat_title, verdict, action, at)
+                  VALUES (-2, 99, 'Iraq Jobs', 'reject', 'rejected', ?)""", (-(10**15),))
+    db.execute("""INSERT INTO processed (chat_id, msg_id, chat_title, verdict, action, at)
+                  VALUES (-2, 98, 'Iraq Jobs', 'reject', 'rejected', ?)""", (10**15,))   # newest in the feed
+    db.commit()
+    db.close()
+    assert dash.load_snapshot(paths.state, dd.PeriodChoice("all")).error == ""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(110, 32)) as pilot:
+        await settle(app, pilot)
+        app.query_one("#period", Select).value = "all"
+        await settle(app, pilot)
+        assert "start unknown" in str(app.query_one("#dash-activity").border_subtitle)
+        assert numbers(app) == ["4", "1", "1", "2", "1"]
+        assert app.query_one("#feed", DataTable).get_row_at(0)[0] == "?"   # the broken row's time
+
+
+async def test_picking_custom_again_reopens_the_form(paths, now):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    today = dd.today(now)
+    async with app.run_test(size=(110, 32)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        pane._set_choice(dd.PeriodChoice("custom", today, today))
+        await settle(app, pilot)
+        sel = app.query_one("#period", Select)
+        assert sel.value == dash.CUSTOM_SHOWN
+        await pilot.press("p")   # the picker, then "Custom range…" (the last entry) again
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert isinstance(app.screen, RangeScreen)
+        assert app.screen.query_one("#range-from", Input).value == today.isoformat()
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert sel.value == dash.CUSTOM_SHOWN and pane.choice == dd.PeriodChoice("custom", today, today)
 
 
 async def test_custom_from_the_picker_and_cancel_goes_back(paths):

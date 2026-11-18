@@ -68,6 +68,7 @@ class Period:
     first: date        # first local day, included
     last: date         # last local day, included
     since: date | None = None   # all time: the day of the first judged post (None: nothing judged yet)
+    since_known: bool = True    # all time: False when the first post's time in the state file is unreadable
 
     @property
     def start(self) -> int:
@@ -86,6 +87,8 @@ class Period:
         """A short line for the screen, e.g. "Last 7 days: 12 Nov – 18 Nov 2026"."""
         name = "Custom" if self.kind == "custom" else PERIOD_NAMES.get(self.kind, self.kind)
         if self.kind == "all":
+            if not self.since_known:
+                return f"{name}: start unknown"
             return f"{name}: since {fmt_day(self.since)}" if self.since else f"{name}: nothing judged yet"
         if self.first == self.last:
             return f"{name}: {fmt_day(self.first)}"
@@ -133,9 +136,13 @@ def parse_range(first: str, last: str) -> tuple[date, date]:
     return a, b
 
 
-def resolve(choice: PeriodChoice, day: date, first_judged: date | None = None) -> Period:
+def resolve(choice: PeriodChoice, day: date, first_judged: date | None = None, first_known: bool = True) -> Period:
     """The days `choice` covers when today is `day`. Periods up to today end
-    today; "all" starts on the day of the first judged post (today if none)."""
+    today, and are whole calendar days: "last 7 days" is today and the 6 days
+    before it (`telenotify stats 7` counts the last 7 * 24 hours instead).
+    "all" starts on the day of the first judged post (today if none);
+    `first_known` False: that post's time was unreadable, `first_judged` is
+    the earliest readable one."""
     kind = choice.kind
     if kind == "today":
         return Period(kind, day, day)
@@ -149,7 +156,7 @@ def resolve(choice: PeriodChoice, day: date, first_judged: date | None = None) -
         return Period(kind, day.replace(month=1, day=1), day)
     if kind == "all":
         first = min(first_judged, day) if first_judged else day
-        return Period(kind, first, day, since=first_judged)
+        return Period(kind, first, day, since=first_judged, since_known=first_known)
     if kind == "custom" and choice.first and choice.last and choice.first <= choice.last:
         return Period(kind, choice.first, choice.last)
     raise ValueError(f"unknown period {choice!r}")
@@ -222,12 +229,31 @@ class PeriodStats:
     chats: list[ChatStats] = field(default_factory=list)
 
 
-def first_judged(store: Store) -> date | None:
-    """The local day of the first judged post, or None."""
-    if not store.has_table("processed"):
+def _day_of(at: float) -> date | None:
+    """The local day of a unix time, or None if it isn't one Python can show."""
+    try:
+        return datetime.fromtimestamp(at).date()
+    except (OverflowError, ValueError, OSError, TypeError):
         return None
+
+
+def first_judged(store: Store) -> tuple[date | None, bool]:
+    """(local day of the first judged post, whether that time was readable).
+
+    (None, True): nothing judged. A broken time in the state file (huge,
+    negative, text) gives the earliest readable day with False, so all time
+    still counts what it can and says its start is unknown."""
+    if not store.has_table("processed"):
+        return None, True
     rows = store._rows("SELECT MIN(at) FROM processed")
-    return datetime.fromtimestamp(rows[0][0]).date() if rows and rows[0][0] is not None else None
+    if not rows or rows[0][0] is None:
+        return None, True
+    day = _day_of(rows[0][0])
+    if day is not None and EARLIEST_YEAR <= day.year <= LATEST_YEAR:
+        return day, True
+    sane = store._rows("SELECT MIN(at) FROM processed WHERE at >= ? AND at < ?",
+                       (midnight(date(EARLIEST_YEAR, 1, 1)), midnight(date(LATEST_YEAR + 1, 1, 1))))
+    return (_day_of(sane[0][0]) if sane and sane[0][0] is not None else None), False
 
 
 def _first_of_album(store: Store) -> tuple[str, str]:

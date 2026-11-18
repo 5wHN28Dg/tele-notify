@@ -58,6 +58,7 @@ CHART_HEIGHT = 3
 # refresh tick; choosing a period always counts it afresh.
 SLOW_SECONDS = 0.25
 SLOW_REUSE_SECONDS = 60
+CUSTOM_SHOWN = "custom-shown"   # the picker entry naming the custom range shown now
 VERDICT_STYLE = {"publish": "green", "review": "yellow", "reject": "dim"}
 STAT_COLUMNS = ("chat", "total", "publish", "review", "reject", "forwarded")
 
@@ -81,7 +82,10 @@ def fmt_age(seconds: float) -> str:
 def fmt_time(at: int, now: float) -> str:
     if not at:
         return "?"
-    t = datetime.fromtimestamp(at)
+    try:
+        t = datetime.fromtimestamp(at)
+    except (OverflowError, ValueError, OSError, TypeError):   # a broken time in the state file
+        return "?"
     if t.date() == datetime.fromtimestamp(now).date():
         return t.strftime("%H:%M")
     return t.strftime("%d %b %H:%M")
@@ -209,14 +213,14 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
                 snap.period = reuse
             else:
                 started = time.perf_counter()
-                first = dd.first_judged(s) if choice.kind == "all" else None
-                snap.period = dd.period_stats(s, dd.resolve(choice, day, first), CHART_WIDTH)
+                first, known = dd.first_judged(s) if choice.kind == "all" else (None, True)
+                snap.period = dd.period_stats(s, dd.resolve(choice, day, first, known), CHART_WIDTH)
                 snap.period_cost = time.perf_counter() - started
             snap.stats = snap.period.chats
             snap.feed = s.recent(FEED_ROWS)
             snap.alerts = s.alerts(100)
             snap.problems = dd.chat_problems(s, now)
-    except (sqlite3.Error, OSError, ValueError) as e:  # a locked or half-written file: say so, try again next tick
+    except (sqlite3.Error, OSError, ValueError, OverflowError) as e:  # a locked or half-written file: say so, try again next tick
         snap.error = clean(f"{type(e).__name__}: {e}")
     return snap
 
@@ -610,7 +614,8 @@ class DashboardPane(Vertical):
             return
         by = {"day": "by day", "week": "by week", "month": "by month", "year": "by year"}[ps.bucket]
         box.border_subtitle = f"{ps.period.describe()} · {by}"
-        note.update(Text(f"{ps.period.describe()}   (p: change the period, d: pick dates)", style="dim"))
+        whole = "   whole days, today included" if ps.period.kind in ("7d", "30d") else ""
+        note.update(Text(f"{ps.period.describe()}{whole}   (p: change the period, d: pick dates)", style="dim"))
         tot = ps.totals
         t = Text()
         t.append(f"{'judged':>8}{'publish':>9}{'review':>8}{'reject':>8}{'forwarded':>11}\n", style="bold")
@@ -701,18 +706,27 @@ class DashboardPane(Vertical):
     # --------------------------------------------------------- period
 
     def _set_choice(self, choice: dd.PeriodChoice) -> None:
+        """Show `choice` and count it. A custom range gets its own entry in the
+        picker (CUSTOM_SHOWN), so picking "Custom range…" again is a change
+        that opens the dates form."""
         self.choice = choice
         sel = self.query_one("#period", Select)
-        if sel.value != choice.kind:
-            with sel.prevent(Select.Changed):
-                sel.value = choice.kind
+        options = [(name, kind) for kind, name in dd.PERIODS]
+        value = choice.kind
+        if choice.kind == "custom" and choice.first and choice.last:
+            p = dd.Period("custom", choice.first, choice.last)
+            options.insert(-1, (p.describe(), CUSTOM_SHOWN))
+            value = CUSTOM_SHOWN
+        with sel.prevent(Select.Changed):
+            sel.set_options(options)
+            sel.value = value
         self._request_state()
 
     @on(Select.Changed, "#period")
     def _period_changed(self, event: Select.Changed) -> None:
         event.stop()
         kind = str(event.value)
-        if kind == self.choice.kind:
+        if kind == CUSTOM_SHOWN or (kind == self.choice.kind and kind != "custom"):
             return
         if kind == "custom":
             self.action_custom_range()

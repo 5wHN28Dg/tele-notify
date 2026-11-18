@@ -13,7 +13,7 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 
 ### Numbers over a period
 
-The Activity box on the Dashboard counts posts over a period: today, the last 7 days (the default), the last 30 days, this month, this year, all time (since the first post the bot judged; the date is shown under the box) or a custom range. Press `p` (or click the picker) to choose one; press `d` (or click `Dates…`, or pick "Custom range…") to type a start and end day as `YYYY-MM-DD`. Both days are included, whole, in local time. The per-channel table (`c`) follows the same period.
+The Activity box on the Dashboard counts posts over a period: today, the last 7 days (the default), the last 30 days, this month, this year, all time (since the first post the bot judged; the date is shown under the box) or a custom range. Press `p` (or click the picker) to choose one; press `d` (or click `Dates…`, or pick "Custom range…") to type a start and end day as `YYYY-MM-DD`. Both days are included, whole, in local time. Every period is made of whole local days: "the last 7 days" is today and the 6 days before it, from midnight, so it can cover up to a day more than `telenotify stats 7`, which counts the last 7 × 24 hours. If the first post's time in the state file is unreadable, all time says "start unknown" and starts at the earliest readable one. Picking "Custom range…" again while a custom range is shown opens the dates form again. The per-channel table (`c`) follows the same period.
 
 "Forwarded" is what reached your channel: posts published straight away plus reviews you approved once the bot has sent them (not pending, discarded or only kept ones). A dry run forwards nothing. An album counts as one post.
 
