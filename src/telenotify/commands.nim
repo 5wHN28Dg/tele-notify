@@ -40,6 +40,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   var sessionLost = ""
   var titles = initTable[int64, string]()
   let watched = cfg.chats
+  var accessReady = false   # the start-up check reads the current state first
   let s = await connect(cfg, interactive = false, onUpdate =
     proc (u: JsonNode) {.closure, gcsafe.} =
       if l == nil: return
@@ -68,6 +69,13 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
               l.enqueue m
             except CatchableError: discard   # deleted meanwhile, etc.
           asyncCheck refetch()
+      of "updateSupergroup", "updateBasicGroup":
+        # banned from / left a watched channel or group (#16). TDLib sends
+        # these for every chat while starting up: until the start-up check
+        # has run (and the titles are known) they're left to it.
+        if not accessReady: return
+        let (chat, access) = parseAccessUpdate(u)
+        if chat in watched: asyncCheck l.onChatAccess(chat, access)
       of "updateConnectionState":
         l.onConnectionState(u{"state", "@type"}.getStr)
       of "updateAuthorizationState":
@@ -102,6 +110,9 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
+  l.titles = titles
+  accessReady = true
+  await l.checkWatchedChats()
   asyncCheck l.heartbeat()
   await l.bootstrap()
   if not stopRequested[]: l.log &"watching {titles.len} chats"

@@ -39,3 +39,46 @@ suite "parseMessage":
                             "content": {"@type": "messagePhoto", "caption": {"text": ""}}})
     check m.albumId == 13867035834384742'i64
     check parseMessage(%*{"id": 6, "content": {"@type": "messageText", "text": {"text": "x"}}}).albumId == 0
+
+suite "chat access (#16)":
+  test "updateSupergroup: a channel that banned you, or that you left":
+    let (chat, a) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {
+      "@type": "supergroup", "id": 1234567890, "is_channel": true,
+      "status": {"@type": "chatMemberStatusBanned", "banned_until_date": 0}}})
+    check chat == -1001234567890'i64 and a.status == "banned"
+    check parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
+      "status": {"@type": "chatMemberStatusLeft"}}}).access.status == "left"
+    check parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
+      "status": {"@type": "chatMemberStatusMember"}}}).access.status == "ok"
+
+  test "restricted: still reading unless not a member":
+    check memberAccess(%*{"@type": "chatMemberStatusRestricted", "is_member": true}) == "ok"
+    check memberAccess(%*{"@type": "chatMemberStatusRestricted", "is_member": false}) == "left"
+    check memberAccess(%*{"@type": "chatMemberStatusAdministrator"}) == "ok"
+    check memberAccess(%*{"@type": "chatMemberStatusCreator"}) == "ok"
+    check memberAccess(newJNull()) == ""
+
+  test "updateBasicGroup: kicked, and upgraded to a supergroup":
+    let (chat, a) = parseAccessUpdate(%*{"@type": "updateBasicGroup", "basic_group": {
+      "@type": "basicGroup", "id": 77, "is_active": true,
+      "status": {"@type": "chatMemberStatusBanned"}}})
+    check chat == -77 and a.status == "banned"
+    let (chat2, b) = parseAccessUpdate(%*{"@type": "updateBasicGroup", "basic_group": {
+      "id": 78, "is_active": false, "upgraded_to_supergroup_id": 9,
+      "status": {"@type": "chatMemberStatusMember"}}})
+    check chat2 == -78 and b.status == "upgraded" and b.newChat == -1000000000009'i64
+    check parseAccessUpdate(%*{"@type": "updateBasicGroup", "basic_group": {
+      "id": 79, "is_active": false, "status": {"@type": "chatMemberStatusMember"}}}).access.status ==
+      "unavailable"
+
+  test "other updates are about no chat":
+    check parseAccessUpdate(%*{"@type": "updateNewMessage"}).chat == 0
+    check parseAccessUpdate(%*{"@type": "updateSupergroup"}).chat == 0
+
+  test "access errors vs passing problems":
+    check isAccessError("CHANNEL_PRIVATE (400)")
+    check isAccessError("Chat not found (400)")
+    check isAccessError("Can't access the chat (400)")
+    check not isAccessError("no answer from TDLib after 300 s")
+    check not isAccessError("TDLib closed")
+    check not isAccessError("Too Many Requests: retry after 5 (429)")
