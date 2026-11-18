@@ -155,6 +155,17 @@ suite "listener":
     check f.forwarded == @[(-2'i64, 5'i64)]
     check (-2'i64, 9'i64) in f.read                 # marked once the retry worked
 
+  test "a retried chat whose backlog was cut short is reported":
+    let f = FakeTg()
+    f.chats[-2] = @[msg(-2, 5, bad)]
+    f.unreadFails.incl -2
+    f.cutChats.incl -2
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()
+    f.unreadFails.clear
+    waitFor l.retryFailedChats()
+    check f.texts.len == 1 and "only the newest were checked" in f.texts[0][1]
+
   test "a chat that forbids forwarding gets the role and a link":
     let f = FakeTg()
     f.noForward.incl -2

@@ -163,6 +163,32 @@ Requirements:
 2. Must work closely with site managers and technicians
 3. Minimum 10 years of experience""") == vReject
 
+  test "adversarial review of the #29 fix":
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- محاسبة خبرة 5 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- مندوبة مبيعات خبرة 5 سنوات
+3- مشرفين مواقع خبرة 10 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- مبرمجة خبرة 5 سنوات
+3- مساعدة مدير خبرة 4 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+🔸 1 محاسب خبرة 5 سنوات
+🔸 2 مهندس كهرباء حديث التخرج""") == vPublish
+    check verdict("""We are hiring - Location: Basra
+Requirements:
+1. Engineer with B.Sc. in Electrical Engineering
+2. Minimum 5 years experience as a site engineer in oil and gas
+3. Fresh graduates with internship experience are welcome to apply for the trainee track""") == vReject
+    check verdict("""مطلوب مهندس للعمل في شركة نفطية
+موقع العمل: البصرة
+الشروط:
+1- مهندس حاصل على بكالوريوس هندسة كهرباء
+2- خبرة لا تقل عن 7 سنوات كمهندس موقع""") == vReject
+
   test "a numbered degree requirement is not a job of its own":
     check verdict("""مطلوب مهندس كهرباء للعمل في البصرة
 1- بكالوريوس هندسة كهرباء

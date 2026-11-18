@@ -311,6 +311,9 @@ proc retryFailedChats*(l: Listener) {.async.} =
       let u = await l.tg.unread(chat)
       if u.messages.len > 0:
         l.say &"{u.messages.len} unread in {u.messages[0].chatTitle} (read on retry)"
+      if u.cut:
+        await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
+                      "messages; only the newest were checked.")
       for m in u.messages: l.queue.addLast m
     except CatchableError as e:
       l.say &"   could not read chat {chat} again: {e.msg}"

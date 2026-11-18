@@ -231,6 +231,16 @@ const
     "لا يشترط خبره", "لا تشترط خبره",
   ]
 
+  ## Words that start a requirement. In a numbered item, a job noun after
+  ## one of these is part of the requirement ("2- خبرة 7 سنوات كمهندس",
+  ## "2. Minimum 5 years as a site engineer"), not another job.
+  requirementWords* = [
+    "خبره", "سنوات", "سنه", "سنين", "سنتين", "لا تقل", "لا يقل", "حاصل", "بكالوريوس",
+    "شهاده", "القدره", "تحمل", "اجاده", "معرفه", "العمل مع", "experience", "years",
+    "year", "minimum", "at least", "degree", "bachelor", "b sc", "bsc", "must", "ability",
+    "knowledge", "proficiency", "work with", "working with", "reporting to", "report to",
+  ]
+
   ## Phrases only an employer writes.
   employerPhrases* = [
     "we are hiring", "is hiring", "hiring", "we are looking for", "join our team",

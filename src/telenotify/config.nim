@@ -49,7 +49,7 @@ type
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
     studentsOnly*, graduateWords*, programmes*, headlineProgrammes*, headlineSeniority*: KeywordList
-    cvHeadings*, freshGradWelcome*: KeywordList
+    cvHeadings*, freshGradWelcome*, requirementWords*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -129,8 +129,11 @@ proc parseConfig*(j: JsonNode): Config =
   var nouns = @jobNouns
   for w in jobNouns:
     if w.len > 2 and w[^1] in {'a'..'z'} and not w.endsWith("s"): nouns.add w & "s"
-  # whole words: "مسؤول" isn't "المسؤوليه", "مساعد" isn't "مساعده" (help)
-  result.jobNouns = toKeywords(nouns, strict = true)
+  # not whole words: Arabic feminine and plural forms ("محاسبه", "مشرفين")
+  # must count too. blocks.nim only trusts a job noun that comes before any
+  # requirement word, so "تحمل المسؤوليه" or "خبره كمهندس" aren't jobs.
+  result.jobNouns = toKeywords(nouns)
+  result.requirementWords = toKeywords(requirementWords)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))
   result.jobSignals = toKeywords(@jobSignals & j.strings("extra_job_signals"))
   result.otherPlaces = toKeywords(@otherPlaces & j.strings("extra_other_places"), strict = true)
