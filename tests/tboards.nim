@@ -34,7 +34,7 @@ suite "finding job links":
       "LinkedIn job https://www.linkedin.com/jobs/view/4490415622/",
       "LinkedIn post https://www.linkedin.com/posts/husain-a-jassem_share-7466376950174011392-7b04/",
       "lnkd.in short link https://lnkd.in/dGPh986F",
-      "Workable job board https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk",
+      # the board link to the same job is dropped for the API one
       "Workable https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12",
       "job page (JSON-LD) https://yadanoo.com/job/4505e77354fb9161",
       "job page (JSON-LD) https://shift-iraq.com/jobs/251f8967-5969-46b0-8184-ab4e1e0ffa24",
@@ -72,7 +72,9 @@ suite "finding job links":
     let c = findJobLinks("(digital-zone.workable.com/j/87323D1E12?x=1)قدم الآن")
     check c.len == 1 and c[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
     let d = findJobLinks("http://apply.workable.com/digital-zone/j/87323D1E12 http://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk")
-    check d.len == 2
+    check d.len == 1 and d[0].kind == bkWorkableApply   # one job: the API link is kept
+    let e = findJobLinks("http://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk")
+    check e.len == 1 and e[0].url == "https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk"
 
   test "mselect links keep www. (mselect.com alone has no DNS record)":
     let l = findJobLinks("mselect.com/job/drilling-fluids-engineer-5748")
@@ -102,7 +104,7 @@ suite "reading saved pages":
   test "mselect (JSON-LD)":
     let t = extract(bkJobPosting, page("mselect_job.html"))
     check "Job title: Drilling Fluids Engineer" in t
-    check "Maysān" in t
+    check "Location: Maysan\n" in t   # was "Muḩāfaz̧at Maysān" twice
     check "5–7 years of relevant experience" in t
 
   test "Workable job board (JSON-LD): hybrid Baghdad job, requirements once":
@@ -239,3 +241,63 @@ suite "review pass 2 (stage 2) findings":
 
   test "a trailing slash doesn't make two links":
     check findJobLinks("yadanoo.com/job/123ab and yadanoo.com/job/123ab/").len == 1
+
+suite "review pass 2 (PR #42) findings":
+  test "a remote Workable job outside Iraq is not marked remote":
+    let us = """{"title": "Engineer", "remote": true, "workplace": "remote",
+      "location": {"city": "Austin", "region": "Texas", "country": "United States", "countryCode": "US"}}"""
+    check "remote" notin extract(bkWorkableApply, us).toLowerAscii
+    let usCode = """{"title": "E", "remote": true, "locations": [{"city": "Austin", "countryCode": "US"}]}"""
+    check "remote" notin extract(bkWorkableApply, usCode).toLowerAscii
+    let iq = """{"title": "Engineer", "remote": true,
+      "location": {"city": "Basra", "country": "Iraq", "countryCode": "IQ"}}"""
+    check "Location: Basra, Iraq, remote\n" in extract(bkWorkableApply, iq)
+    let iqCode = """{"title": "E", "workplace": "remote", "locations": [{"city": "Austin", "countryCode": "US"}, {"countryCode": "iq"}]}"""
+    check extract(bkWorkableApply, iqCode).contains(", remote\n")
+
+  test "a remote US Workable job is not accepted by the filter":
+    let cfg = loadConfig(currentSourcePath.parentDir / "keywords.json")
+    let us = """{"title": "IT Support Engineer", "remote": true,
+      "location": {"city": "Austin", "region": "Texas", "country": "United States", "countryCode": "US"}}"""
+    check classify(extract(bkWorkableApply, us), cfg).verdict != vPublish
+
+  test "JSON-LD place names lose their accents and the Muhafazat prefix":
+    check stripLatinAccents("Muḩāfaz̧at Maysān Sulaymānīyah Al Başrah Çaḑāţ") ==
+      "Muhafazat Maysan Sulaymaniyah Al Basrah Cadat"
+    check stripLatinAccents("البصرة Basra") == "البصرة Basra"   # Arabic untouched
+    let ld = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "jobLocation": {"address": {"addressLocality": "Al Başrah", "addressRegion": "Muḩāfaz̧at al Başrah"}}}</script>"""
+    check "Location: Al Basrah\n" in extract(bkJobPosting, ld)
+    let region = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "jobLocation": {"address": {"addressRegion": "Al Başrah"}}}</script>"""
+    check "Location: Al Basrah\n" in extract(bkJobPosting, region)
+
+  test "requirements behind a non-breaking space are not added twice":
+    let ld = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "description": "<p>About us</p><p>Requirements:&nbsp;3 years of Python</p>",
+      "requirementsSection": "<p>Requirements: 3 years of Python</p>"}</script>"""
+    check extract(bkJobPosting, ld).count("of Python") == 1
+    let u3000 = """<script type="application/ld+json">{"@type": "JobPosting", "title": "X",
+      "description": "Requirements:\u20033 years of Python", "requirementsSection": "Requirements: 3 years of Python"}</script>"""
+    check extract(bkJobPosting, u3000).count("of Python") == 1
+
+  test "the same job by two links is one link":
+    check findJobLinks("mselect.com/job/Drilling-Fluids-Engineer-5748 https://www.mselect.com/job/drilling-fluids-engineer-5748").len == 1
+    let l = findJobLinks("https://jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk/hybrid-marketing-lead " &
+      "Apply: https://apply.workable.com/digital-zone/j/87323D1E12/apply")
+    check l.len == 1 and l[0].kind == bkWorkableApply and
+      l[0].url == "https://apply.workable.com/api/v2/accounts/digital-zone/jobs/87323D1E12"
+    # two board links stay two (different jobs)
+    check findJobLinks("jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk jobs.workable.com/view/aBwyYa9DZC2rUGyCY5Ldqk").len == 2
+
+  test "Workable hosts inside another host name or URL are not links":
+    check findJobLinks("https://notjobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk").len == 0
+    check findJobLinks("https://notapply.workable.com/digital-zone/j/87323D1E12").len == 0
+    check findJobLinks("https://evil.com/?x=acme.workable.com/j/0123456789").len == 0
+    check findJobLinks("https://evil.com/acme.workable.com/j/0123456789").len == 0
+    # still found at the start of the text, after a space, a bracket, "//"
+    check findJobLinks("acme.workable.com/j/0123456789").len == 1
+    check findJobLinks("(acme.workable.com/j/0123456789)").len == 1
+    check findJobLinks("قدم acme.workable.com/j/0123456789").len == 1
+    check findJobLinks("jobs.workable.com/view/rBwyYa9DZC2rUGyCY5Ldqk").len == 1
+    check findJobLinks("https://evil.com/?r=https://acme.workable.com/j/0123456789").len == 1

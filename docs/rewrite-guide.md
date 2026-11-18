@@ -357,9 +357,11 @@ These were chosen by counting links in the 3,834 latest posts of your channels o
 | LinkedIn job | `linkedin.com/jobs/view/<id>` | page title (it includes the location) + the `description__text` block |
 | LinkedIn post | `linkedin.com/posts/<slug>` | the post's own text plus, for a reshare, the reshared post. **Never comments**: anyone can write a comment, and a long one used to replace the post |
 | `lnkd.in` | `lnkd.in/<code>` | resolved first, then read if the target is supported |
-| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, `mselect.com/job/<slug>-<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block |
+| JSON-LD job pages | `yadanoo.com/job/<id>`, `shift-iraq.com/jobs/<id>`, `mselect.com/job/<slug>-<id>`, + `extra_job_sites` in config | **only** the page's schema.org `JobPosting` block. Place names lose their Latin accents and a leading "Muhafazat" (mselect writes "Muḩāfaz̧at Maysān"; the filter knows "Maysan"). mselect paths are lowercased so case variants are one link |
 | Workable job board | `jobs.workable.com/view/<id>/<slug>` | the page's `JobPosting` block, plus its separate `requirementsSection` only when the description doesn't already contain it. Its `jobLocationType` is ignored: Workable says `TELECOMMUTE` even for hybrid jobs, and a "remote" in the Location line would let a Baghdad job through |
-| Workable company page | `apply.workable.com/<company>/j/<shortcode>`, old-style `<company>.workable.com/j/<shortcode>` | Workable's JSON API: title, every place in `location` and `locations` (+ "remote"), description, requirements, benefits. Links without the company (`apply.workable.com/j/<code>`) are skipped: the API needs it |
+| Workable company page | `apply.workable.com/<company>/j/<shortcode>`, old-style `<company>.workable.com/j/<shortcode>` | Workable's JSON API: title, every place in `location` and `locations` (+ "remote", but only when the job's country is Iraq or not given: a remote job in Texas is not for us), description, requirements, benefits. Links without the company (`apply.workable.com/j/<code>`) are skipped: the API needs it. When a post has one `jobs.workable.com` link and one `apply.workable.com` link, only the API one is kept (almost always the same job, and a post's link is read only when it has just one) |
+
+Workable patterns need a link boundary before the host (start of text, a space or other non-URL character, or `//`), so `notjobs.workable.com/...` or `evil.com/?x=acme.workable.com/j/...` are not links.
 
 The scraped text starts with `Job title: …` and `Location: …` lines, which the filter's title and location rules understand.
 
