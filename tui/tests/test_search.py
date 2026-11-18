@@ -74,8 +74,8 @@ async def test_selecting_a_row_shows_reasons_and_text(paths):
         await pilot.pause()
         reasons = text_of(app, "#detail-reasons")
         assert "• role" in reasons and "• no sign of level either way" in reasons
-        assert "Basra Jobs" in text_of(app, "#detail-head") and "action: review" in text_of(app, "#detail-head")
-        assert "ارسال السيرة الذاتية" in text_of(app, "#detail-text")
+        assert "Basra Jobs" in text_of(app, "#search-detail-head") and "action: review" in text_of(app, "#search-detail-head")
+        assert "ارسال السيرة الذاتية" in text_of(app, "#search-detail-text")
 
 
 async def test_empty_text_says_so(paths, tmp_path):
@@ -92,7 +92,7 @@ async def test_empty_text_says_so(paths, tmp_path):
         app.query_one(SearchPane).run_search()
         await pilot.pause()
         assert app.query_one("#results", DataTable).row_count == 1
-        assert "wasn't stored" in text_of(app, "#detail-text")
+        assert "wasn't stored" in text_of(app, "#search-detail-text")
         assert app.query_one("#rejudge", Button).disabled
 
 

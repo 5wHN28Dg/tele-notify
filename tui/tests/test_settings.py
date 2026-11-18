@@ -195,9 +195,15 @@ async def test_reload_keeps_unsaved_edits_and_revert_asks(paths, cfg_path):
     async with app.run_test(size=(120, 40)) as pilot:
         pane = await open_settings(pilot)
         await add_keyword(pilot, pane, "roles", "level_keywords_en", "new grad")
-        await pilot.press("ctrl+r")
+        await pilot.press("ctrl+r")                 # asks before throwing edits away
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmModal)
+        await pilot.press("n")
         await pilot.pause()
         assert pane.dirty and "new grad" in pane.edited["level_keywords_en"]
+        pane.reload()                               # tab shown again: keeps edits, no question
+        await pilot.pause()
+        assert pane.dirty and not isinstance(app.screen, ConfirmModal)
         pane.action_revert()
         await pilot.pause()
         assert isinstance(app.screen, ConfirmModal)
@@ -336,3 +342,21 @@ async def test_layout_fits_small_terminal(paths, cfg_path, tmp_path):
         await pilot.pause()
         items = pane.query_one("#editor-roles #kw-items", OptionList)
         assert items.size.height >= 5 and items.size.width >= 40
+
+
+async def test_quit_with_unsaved_settings_asks_first(paths, cfg_path):
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "roles", "level_keywords_en", "new grad")
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmModal) and app.is_running
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.is_running and pane.dirty
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert not app.is_running

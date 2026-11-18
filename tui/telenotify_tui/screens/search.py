@@ -116,7 +116,7 @@ class SearchPane(Vertical):
     SearchPane #judge-buttons { height: auto; margin: 1 0 0 0; }
     SearchPane #judge-buttons Button { margin-right: 1; min-width: 10; }
     SearchPane #judge-result { margin: 1 0 0 0; }
-    SearchPane #detail-text { margin: 1 0 0 0; }
+    SearchPane #search-detail-text { margin: 1 0 0 0; }
     SearchPane #paste { display: none; height: 1fr; }
     SearchPane.pasting #paste { display: block; }
     SearchPane.pasting #search-body, SearchPane.pasting #search-bar { display: none; }
@@ -145,14 +145,14 @@ class SearchPane(Vertical):
             table = DataTable(id="results", cursor_type="row", zebra_stripes=True)
             yield table
             with VerticalScroll(id="detail"):
-                yield Static("Select a post to see why it got its verdict.", id="detail-head", classes="muted")
+                yield Static("Select a post to see why it got its verdict.", id="search-detail-head", classes="muted")
                 yield Static("", id="detail-reasons")
                 with Horizontal(id="judge-buttons"):
                     yield Button("Re-judge now (j)", id="rejudge", variant="primary")
                     yield Button("+ links (J)", id="rejudge-links")
                 yield Static("", id="judge-note", classes="muted")
                 yield Static("", id="judge-result")
-                yield Static("", id="detail-text")
+                yield Static("", id="search-detail-text")
         with Vertical(id="paste"):
             yield Static("Paste any post below and judge it with the current settings. "
                          "Esc goes back to search.", classes="muted")
@@ -292,9 +292,9 @@ class SearchPane(Vertical):
 
     def _show_detail(self, j: Judged | None, keep_result: bool = False) -> None:
         self._selected = j
-        head = self.query_one("#detail-head", Static)
+        head = self.query_one("#search-detail-head", Static)
         reasons = self.query_one("#detail-reasons", Static)
-        text = self.query_one("#detail-text", Static)
+        text = self.query_one("#search-detail-text", Static)
         note = self.query_one("#judge-note", Static)
         if not keep_result:
             self.query_one("#judge-result", Static).update("")

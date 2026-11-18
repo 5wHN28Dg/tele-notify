@@ -16,7 +16,7 @@ from .store import Store
 from .screens.dashboard import DashboardPane
 from .screens.review import ReviewPane
 from .screens.search import SearchPane
-from .screens.settings import SettingsPane
+from .screens.settings import ConfirmModal, SettingsPane
 
 REFRESH_SECONDS = 5
 
@@ -29,7 +29,7 @@ class TeleNotifyApp(App):
         Binding("2", "show('review')", "Review"),
         Binding("3", "show('search')", "Search"),
         Binding("4", "show('settings')", "Settings"),
-        Binding("ctrl+r", "reload", "Refresh"),
+        Binding("ctrl+r", "refresh_tab", "Refresh"),
         # not plain "q": it would quit while a table or list has focus
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
@@ -76,6 +76,28 @@ class TeleNotifyApp(App):
         pane = self._active_pane()
         if pane is not None and hasattr(pane, "reload"):
             pane.reload()
+
+    def action_refresh_tab(self) -> None:
+        """ctrl+r: on Settings with unsaved edits, offer to discard them and
+        re-read config.json (a plain reload there never throws edits away)."""
+        pane = self._active_pane()
+        if isinstance(pane, SettingsPane) and pane.dirty:
+            pane.action_revert()
+        else:
+            self.action_reload()
+
+    async def action_quit(self) -> None:
+        """Ask first when Settings has unsaved edits."""
+        settings = self.query_one(SettingsPane)
+        if not settings.dirty:
+            self.exit()
+            return
+
+        def done(yes: bool | None) -> None:
+            if yes:
+                self.exit()
+
+        self.push_screen(ConfirmModal("Settings has unsaved changes. Quit and lose them?", "Quit"), done)
 
     def action_show(self, tab: str) -> None:
         # Hand focus to the tab bar first: if a widget inside the old tab kept
