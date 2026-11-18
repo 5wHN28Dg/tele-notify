@@ -44,13 +44,14 @@ Nothing is written until you save with `ctrl+s`.
 
 ## Install and run
 
+`deploy/install.sh` (at the top of the repository) installs it with the bot. Then:
+
 ```bash
-cd tui
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/telenotify-tui --config:/path/to/config.json            # the real bot
-.venv/bin/telenotify-tui --config:/path/to/config.json --dry-run  # the dry run
+telenotify-tui             # the real bot
+telenotify-tui --dry-run   # the dry run
 ```
+
+It finds the config the way the bot does: `--config FILE` if given, else `$TELENOTIFY_CONFIG`, else `~/.config/tele-notify/config.json`, else `./config.json`. For working on the screen itself: `cd tui && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`, then `.venv/bin/telenotify-tui`.
 
 `"dry_run": true` in config.json also means the dry run, as it does for the bot. The state file is worked out once at start from `data_dir` (blank means `~/.local/share/tele-notify`; a relative path is relative to the config file's folder), so after changing `data_dir` or `dry_run` in Settings, reopen the screen.
 
@@ -79,7 +80,7 @@ TELENOTIFY_BIDI=words .venv/bin/telenotify-tui --config:/path/to/config.json   #
 - Selecting a post with the mouse and copying it gives the text as stored (reading order, plain letters), not the drawn order. Short values in tables and headers copy as drawn.
 - Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
 
-It finds the `telenotify` program next to the config, in `~/tele-notify`, on `$PATH`, or at `$TELENOTIFY_BIN`. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
+It finds the `telenotify` program at `$TELENOTIFY_BIN`, on `$PATH` (`~/.local/bin` after `deploy/install.sh`), or next to the config. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
 
 ## How it fits with the bot
 

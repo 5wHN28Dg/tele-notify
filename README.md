@@ -80,15 +80,32 @@ The Nim bot talks to Telegram through [TDLib](https://core.telegram.org/tdlib), 
 JOBS=2 deploy/build-tdlib.sh      # puts lib/libtdjson.so next to the program
 ```
 
+Then install it (no sudo; run it again after each `git pull` to update):
+
+```bash
+deploy/install.sh
+```
+
+It puts `telenotify` and `telenotify-tui` in `~/.local/bin`, and the systemd service in place. Everything lives in the usual places for your user:
+
+| What | Where |
+|---|---|
+| Programs | `~/.local/bin/telenotify`, `~/.local/bin/telenotify-tui` (TDLib and the screen's Python in `~/.local/lib/tele-notify/`) |
+| Your settings | `~/.config/tele-notify/config.json` (keep it private: `chmod 600`) |
+| State and the Telegram login | `~/.local/share/tele-notify/` |
+
 Then:
 
 ```bash
-./telenotify login --config:config.json          # once: phone number, code, 2FA password
-./telenotify run --config:config.json --dry-run  # judge everything, forward nothing
-./telenotify run --config:config.json            # the real thing
-./telenotify review --config:config.json         # unclear posts: approve or discard (works while the bot runs)
-./telenotify stats --config:config.json --days:7 # what each channel brought
+telenotify login                           # once: phone number, code, 2FA password
+systemctl --user enable --now tele-notify  # run it now and on every boot
+telenotify-tui                             # the terminal screen: dashboard, review queue, search, settings
+telenotify review                          # or review unclear posts on the command line
+telenotify stats --days:7                  # what each channel brought
+telenotify run --dry-run                   # try changes: judge everything, forward nothing
 ```
+
+Every command finds the config by itself; `--config:FILE` (or `$TELENOTIFY_CONFIG`) picks another one.
 
 What's different from the Python bot:
 - Unclear posts wait in tele-notify's own review queue (`telenotify review`) instead of your Saved Messages.
@@ -97,9 +114,7 @@ What's different from the Python bot:
 - If the bot was down or offline for more than 10 minutes, it tells you in Saved Messages when it's back.
 - If a watched channel or group bans you, you leave it, or it can't be read any more, it tells you in Saved Messages (once), since that chat's posts would otherwise just stop.
 
-To start it automatically, see [`deploy/tele-notify.service`](deploy/tele-notify.service).
-
-To watch it and manage it (dashboard, review queue, search, settings), open the terminal screen: [`tui/`](tui/README.md).
+More about the terminal screen: [`tui/README.md`](tui/README.md).
 
 ![The dashboard: bot status, numbers for a chosen period and a live feed of what was judged](docs/screenshots/dashboard.png)
 

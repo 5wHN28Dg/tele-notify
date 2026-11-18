@@ -7,7 +7,7 @@ import sys
 
 from . import rtl
 from .app import TeleNotifyApp
-from .paths import resolve
+from .paths import default_config, resolve
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -15,7 +15,9 @@ def main(argv: list[str] | None = None) -> None:
     # accept the bot's own style too: --config:FILE
     argv = [a.replace("--config:", "--config=", 1) if a.startswith("--config:") else a for a in argv]
     p = argparse.ArgumentParser(prog="telenotify-tui", description="tele-notify terminal screen")
-    p.add_argument("--config", default="config.json", help="the bot's config.json")
+    p.add_argument("--config", default=None,
+                   help="the bot's config.json (default: $TELENOTIFY_CONFIG, else "
+                        "~/.config/tele-notify/config.json, else ./config.json)")
     p.add_argument("--dry-run", action="store_true", help="show the dry run's state instead")
     p.add_argument("--bidi", choices=(*rtl.MODES, "auto"),
                    help="right-to-left text: full (reorder and join letters; most terminals), words (word "
@@ -35,7 +37,7 @@ def main(argv: list[str] | None = None) -> None:
         if bad is not None:
             print(f"telenotify-tui: TELENOTIFY_BIDI={bad!r} isn't full, words, off or auto; "
                   f"using {rtl.mode()} for this terminal", file=sys.stderr)
-    app = TeleNotifyApp(resolve(a.config, a.dry_run))
+    app = TeleNotifyApp(resolve(a.config if a.config else default_config(), a.dry_run))
     with rtl.terminal_mode():
         app.run()
 

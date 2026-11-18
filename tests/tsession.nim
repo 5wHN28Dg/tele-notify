@@ -86,3 +86,25 @@ suite "config":
     j3["data_dir"] = %"  ~/tn-data  "
     writeFile(d / "config.json", $j3)
     check loadConfig(d / "config.json").dataDir == getHomeDir() / "tn-data"
+
+  test "without --config: $TELENOTIFY_CONFIG, then ~/.config/tele-notify, then ./config.json":
+    let d = getTempDir() / "tn-cfg-lookup"
+    removeDir(d)
+    createDir(d / "xdg" / "tele-notify")
+    let oldXdg = getEnv("XDG_CONFIG_HOME")
+    let oldEnv = getEnv("TELENOTIFY_CONFIG")
+    defer:
+      putEnv("XDG_CONFIG_HOME", oldXdg)
+      if oldEnv.len > 0: putEnv("TELENOTIFY_CONFIG", oldEnv) else: delEnv("TELENOTIFY_CONFIG")
+      removeDir(d)
+    delEnv("TELENOTIFY_CONFIG")
+    putEnv("XDG_CONFIG_HOME", d / "xdg")
+    let std = d / "xdg" / "tele-notify" / "config.json"
+    # nothing there yet: the standard place, so the error names it
+    if not fileExists("config.json"): check defaultConfigPath() == std
+    writeFile(std, "{}")
+    check defaultConfigPath() == std
+    putEnv("TELENOTIFY_CONFIG", d / "mine.json")
+    check defaultConfigPath() == d / "mine.json"
+    putEnv("TELENOTIFY_CONFIG", "  ")
+    check defaultConfigPath() == std
