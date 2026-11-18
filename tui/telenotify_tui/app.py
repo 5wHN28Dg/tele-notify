@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Header, TabbedContent, TabPane
+from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
 
 from .paths import Paths
 from .store import Store
@@ -30,7 +30,8 @@ class TeleNotifyApp(App):
         Binding("3", "show('search')", "Search"),
         Binding("4", "show('settings')", "Settings"),
         Binding("ctrl+r", "reload", "Refresh"),
-        Binding("q", "quit", "Quit"),
+        # not plain "q": it would quit while a table or list has focus
+        Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
@@ -77,6 +78,10 @@ class TeleNotifyApp(App):
             pane.reload()
 
     def action_show(self, tab: str) -> None:
+        # Hand focus to the tab bar first: if a widget inside the old tab kept
+        # focus, Textual would move it to a sibling in that hidden tab and
+        # TabbedContent would switch straight back.
+        self.set_focus(self.query_one(Tabs))
         self.query_one(TabbedContent).active = tab
         self.call_after_refresh(self.action_reload)
 

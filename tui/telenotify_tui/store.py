@@ -163,7 +163,8 @@ class Store:
         sql += " ORDER BY at DESC, msg_id DESC LIMIT ?"
         return [self._judged(r, has_text) for r in self._rows(sql, args + (limit,))]
 
-    def search(self, query: str, verdict: str | None = None, limit: int = 200) -> list[Judged]:
+    def search(self, query: str, verdict: str | None = None, limit: int = 200,
+               chat_id: int | None = None) -> list[Judged]:
         """Judged messages whose text, chat, role or reasons contain `query` (any case)."""
         cols = self._columns("processed")
         if not cols:
@@ -171,13 +172,16 @@ class Store:
         has_text = "raw_text" in cols
         fields = ["chat_title", "role", "reasons"] + (["raw_text"] if has_text else [])
         like = f"%{query}%"
-        where = " OR ".join(f"{f} LIKE ?" for f in fields)
+        where = " OR ".join(f"COALESCE({f}, '') LIKE ?" for f in fields)
         sql = f"SELECT * FROM processed WHERE ({where})"
         args: tuple = tuple(like for _ in fields)
         if verdict:
             sql += " AND verdict = ?"
             args += (verdict,)
-        sql += " ORDER BY at DESC LIMIT ?"
+        if chat_id is not None:
+            sql += " AND chat_id = ?"
+            args += (chat_id,)
+        sql += " ORDER BY at DESC, msg_id DESC LIMIT ?"
         return [self._judged(r, has_text) for r in self._rows(sql, args + (limit,))]
 
     def stats(self, days: int) -> list[ChatStats]:

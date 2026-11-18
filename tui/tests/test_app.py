@@ -11,3 +11,14 @@ async def test_tabs_switch_with_number_keys(paths):
         for key, tab in [("2", "review"), ("3", "search"), ("4", "settings"), ("1", "dashboard")]:
             await pilot.press(key)
             assert tabs.active == tab
+
+
+async def test_plain_q_does_not_quit_but_ctrl_q_does(paths):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test() as pilot:
+        await pilot.press("3")                     # search: focus can sit on the results table
+        await pilot.press("q")
+        assert app.is_running
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        assert not app.is_running

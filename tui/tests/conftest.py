@@ -99,3 +99,19 @@ def binary() -> Path:
 def paths(config: Path, state: Path, tmp_path: Path) -> Paths:
     b = REPO / "telenotify"
     return Paths(config=config, data_dir=state.parent, state=state, binary=b if b.exists() else None, dry_run=True)
+
+
+@pytest.fixture(autouse=True)
+def no_systemctl(monkeypatch):
+    """Tests never talk to the real systemd: the services look stopped and
+    actions are refused (tests that need other answers patch these again)."""
+    from telenotify_tui import bot
+
+    async def state(mode: str) -> str:
+        return "inactive"
+
+    async def action(mode: str, action: str):
+        raise AssertionError("a test tried to control a real service")
+
+    monkeypatch.setattr(bot, "service_state", state)
+    monkeypatch.setattr(bot, "service_action", action)
