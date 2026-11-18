@@ -110,22 +110,55 @@ const leadingOptional = ["preferably", "يفضل", "ويفضل"]
   ## preferably in banking", "3 سنوات ويفضل في النفط") they make what follows
   ## optional, not the years.
 
-let minimumBefore = re2(r"(?i)(?:minimum|min\.?|at least|not less than|no less than|لا تقل عن|لا يقل عن|علي الاقل|كحد ادني)(?:\s+(?:of|a|an))*\s*$")
+let
+  minimumBefore = re2(r"(?i)(?:(?:^|[^\p{L}])(?:minimum|min\.?|at least|not less than|no less than)|لا ?تقل عن|لا ?يقل عن|علي الاقل|كحد ادني)(?:\s+(?:of|a|an))*\s*:?\s*$")
+  minimumAfter = re2(r"(?i)^\s*(?:(?:of\s+)?(?:relevant\s+|work\s+)?experience\s+)?(?:minimum|at least)(?:[^\p{L}]|$)|^\s*(?:(?:من\s+)?(?:ال)?خبره\s+)?(?:علي الاقل|كحد ادني)(?:\s|$)")
+  # A marker followed by a preposition points forward: "preferred in oil
+  # companies", "مع افضليه لمن عمل", "يفضل في".
+  forwardAfter = re2(r"^\s*(?:in|for|with|from|at|لمن|لل|ل|في|من|ممن)(?:\s|$)")
+  # A new list item: what it says doesn't qualify the line before.
+  bulletStart = re2(r"^\s*(?:[-•*●▪◦–]|\d{1,2}\s*[.)-])")
+  wordAfter = re2(r"[\p{L}\p{N}]")
+  clauseEnd = {',', ';', ')', '.'}
+  window = 200
 
-proc optionalFor(line: string, a, b: int, optional: KeywordList): bool =
-  ## Is the quantity at line[a..<b] optional? Yes if an optional marker
-  ## comes before it ("preferably 3 years", "يفضل خبرة 3 سنوات"), or after
-  ## it ("3 years is preferred", "... is a plus"), except a forward-pointing
-  ## one followed by more words, and except after an explicit minimum
-  ## ("Minimum 7 years, preferably in oil and gas, a plus if ...").
-  if line[0 ..< a].flatten.contains(optional): return true
-  if line.runeSafe(a - 25, a).contains(minimumBefore): return false
-  let after = line[b .. ^1].flatten
+proc markerOptional(after: string, optional: KeywordList): bool =
+  ## Does an optional marker in `after` (normalised text that follows the
+  ## years) make the years optional? "is preferred", "a plus" do;
+  ## "preferably in banking", "preferred in oil companies", "plus strong SQL"
+  ## (a conjunction) point at what follows instead.
+  let after = after.flatten
   for h in after.hits(optional):
-    if h.keyword notin leadingOptional: return true
-    if after[h.stop .. ^1].strip(chars = {' ', '.', ',', ';', '!', ')'}).len == 0:
-      return true # "3 years of experience, preferably."
+    let rest = after[h.stop .. ^1]
+    if h.keyword == "plus" and not after[0 ..< h.start].strip.endsWith(" a") and
+        after[0 ..< h.start].strip != "a":
+      continue
+    if rest.contains(forwardAfter): continue
+    if h.keyword in leadingOptional and rest.contains(wordAfter): continue
+    return true
   false
+
+proc optionalFor(line: string, a, b: int, next: string, optional: KeywordList): bool =
+  ## Is the quantity at line[a..<b] optional? Yes if an optional marker
+  ## comes before it in the same clause ("preferably 3 years", "يفضل خبرة 3
+  ## سنوات"), or after it ("3 years is preferred", "... is a plus", or that
+  ## on the next line when the sentence wraps), unless an explicit minimum
+  ## comes right before or after the years ("Minimum 7 years",
+  ## "3 سنوات علي الاقل").
+  # Look only near the years (`window` bytes each side): a far-away marker
+  # belongs to another sentence, and huge one-line posts stay fast.
+  var clause = line.runeSafe(a - window, a)
+  var cut = -1
+  for i in countdown(clause.high, 0):
+    if clause[i] in clauseEnd: cut = i; break
+  if cut >= 0: clause = clause[cut + 1 .. ^1]
+  if clause.flatten.contains(optional): return true
+  let after = line.runeSafe(b, b + window)
+  let atEnd = b + window >= line.len
+  if line.runeSafe(a - 25, a).contains(minimumBefore) or after.contains(minimumAfter):
+    return false
+  if after.markerOptional(optional): return true
+  atEnd and next.len > 0 and not next.contains(bulletStart) and (after & " " & next).markerOptional(optional)
 
 proc parseExperience*(normText: string): Experience =
   ## `normText` must already be normalised (see normalize.nim).
@@ -165,14 +198,13 @@ proc parseExperience*(normText: string): Experience =
       qtys.add (1, m.group(0).a, m.group(0).b + 1)
     # "preferably" often lands on the next line when a sentence wraps.
     # "required" on the same line wins over "preferably".
-    var nextOptional = false
-    if not line.flatten.contains(optional) and li + 1 < lines.len and lines[li + 1].len < 60 and
+    var next = ""
+    if li + 1 < lines.len and lines[li + 1].len < 60 and
         not (line.strip.len > 0 and line.strip[^1] in {'.', ':', ';', '!'}):
-      nextOptional = lines[li + 1].flatten.contains(optional)
+      next = lines[li + 1]
     let lineRequired = line.flatten.contains(required)
     for (q, a, b) in qtys:
-      let isOptional = not lineRequired and
-        (nextOptional or line.optionalFor(a, b, optional))
+      let isOptional = not lineRequired and line.optionalFor(a, b, next, optional)
       var years = q
       if years < 0 or years > 30: continue
       if not spans.nearExperienceWord(a, b): continue

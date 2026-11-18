@@ -51,6 +51,24 @@ suite "experience: entry friendly and optional":
     check years("خبرة لا تقل عن 3 سنوات ويفضل في الشركات النفطية") == 3
     check years("خبرة 4 سنوات ويفضل في مجال النفط") == 4
 
+  test "review of the fix: wraps, minimums, forward markers, bullets":
+    check years("- Minimum 7 years' relevant experience,\npreferably in the oil and gas industry.") == 7
+    check years("خبرة لا تقل عن 3 سنوات\nويفضل في الشركات النفطية") == 3
+    check preferred("Linux admin 3 years experience is a plus") == 3
+    check years("Linux admin 3 years experience is a plus") == -1
+    check years("خبرة 3 سنوات على الأقل وشهادة PMP تعتبر ميزة") == 3
+    check years("5 years experience minimum, SAP knowledge is a plus") == 5
+    check years("Minimum: 5 years of experience, Docker is a plus") == 5
+    check years("خبرة لاتقل عن 4 سنوات ويعتبر الماجستير ميزة") == 4
+    check years("خبرة 3 سنوات مع أفضلية لمن عمل في الشركات النفطية") == 3
+    check years("5 years experience, preferred in oil companies") == 5
+    check years("3+ years of experience plus strong SQL knowledge") == 3
+    check years("• 3+ years of experience in backend development\n• Docker is a plus") == 3
+    check years("- خبرة لا تقل عن 3 سنوات\n- يفضل من لديه شهادة PMP") == 3
+    check years("Bachelor's in Engineering (Master's preferred), minimum 5 years of experience") == 5
+    check years("5 years of experience, preferably ✅") == -1
+    check years("3 years of experience\nis preferred") == -1
+
   test "optional markers that still make the years optional":
     check years("Preferably 3 years of experience") == -1
     check preferred("Preferably 3 years of experience") == 3
