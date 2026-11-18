@@ -1,4 +1,4 @@
-"""python -m telenotify_tui --config:PATH [--dry-run] [--no-bidi]"""
+"""python -m telenotify_tui --config:PATH [--dry-run] [--bidi=full|words|off|auto] [--no-bidi]"""
 
 from __future__ import annotations
 
@@ -17,11 +17,20 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="telenotify-tui", description="tele-notify terminal screen")
     p.add_argument("--config", default="config.json", help="the bot's config.json")
     p.add_argument("--dry-run", action="store_true", help="show the dry run's state instead")
-    p.add_argument("--no-bidi", action="store_true",
-                   help="draw right-to-left text as stored and leave the terminal's own bidi alone "
-                        "(the same as TELENOTIFY_BIDI=off)")
+    p.add_argument("--bidi", choices=(*rtl.MODES, "auto"),
+                   help="right-to-left text: full (reorder and join letters; most terminals), words (word "
+                        "order only; kitty), off (as stored), auto (words in kitty, else full). "
+                        "Default: $TELENOTIFY_BIDI, else auto")
+    p.add_argument("--no-bidi", action="store_true", help="the same as --bidi=off")
     a = p.parse_args(argv)
-    rtl.set_enabled(rtl.env_enabled() and not a.no_bidi)
+    if a.no_bidi:
+        rtl.set_mode("off")
+    elif a.bidi == "auto":
+        rtl.set_mode(rtl.terminal_mode_for())
+    elif a.bidi:
+        rtl.set_mode(a.bidi)
+    else:
+        rtl.set_mode(rtl.env_mode())
     app = TeleNotifyApp(resolve(a.config, a.dry_run))
     with rtl.terminal_mode():
         app.run()

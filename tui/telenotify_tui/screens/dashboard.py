@@ -42,6 +42,7 @@ from textual.widgets.data_table import CellDoesNotExist
 
 from .. import bot
 from ..clean import clean
+from ..postview import PostView
 from ..rtl import Block, visual
 from ..store import Alert, ChatStats, Judged, Store
 from . import dashboard_data as dd
@@ -286,7 +287,7 @@ class DashboardPane(Vertical):
             with Vertical(id="view-feed"):
                 yield DataTable(id="feed", cursor_type="row", zebra_stripes=True)
                 with VerticalScroll(id="feed-detail-box"):
-                    yield Static("Select a message to see why it got its verdict.", id="feed-detail",
+                    yield PostView("Select a message to see why it got its verdict.", id="feed-detail",
                                  classes="muted")
             with Vertical(id="view-chats"):
                 with RadioSet(id="days"):

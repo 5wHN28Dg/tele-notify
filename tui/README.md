@@ -25,18 +25,27 @@ python3 -m venv .venv
 
 ### Arabic and other right-to-left text
 
-Terminals draw each line left to right in the order the characters are stored, so on its own an Arabic sentence would come out with its words in the wrong order. The screen puts right-to-left text in order itself: letters joined, each line reordered after it is wrapped, Arabic paragraphs right-aligned, mixed Arabic / English / numbers in the right places, brackets mirrored. That works the same in terminals that do no bidi of their own (Alacritty, kitty, xterm).
+Terminals draw each line left to right in the order the characters are stored, so on its own an Arabic sentence would come out with its words in the wrong order. The screen puts right-to-left text in order itself: each paragraph is wrapped first and then reordered line by line, Arabic paragraphs are right-aligned, mixed Arabic / English / numbers land in the right places, brackets are mirrored, and emoji and accents stay whole. Terminals differ in what they do with Arabic, so there are three modes:
 
-Terminals that do reorder text themselves (VTE: GNOME Terminal, Ptyxis) would undo that, so while the screen is open it switches the terminal to *explicit* bidi mode (`ESC [ 8 l`, from the [Terminal-WG BiDi recommendation](https://terminal-wg.pages.freedesktop.org/bidi/)) and back to the usual *implicit* mode (`ESC [ 8 h`) when it closes, also after a crash. Terminals that don't know the mode ignore both. If the screen is killed hard (`kill -9`) and Arabic in that terminal looks wrong afterwards, `printf '\e[8h'` restores it.
+| Mode | For | What the screen does |
+|---|---|---|
+| `full` | most terminals: Alacritty, xterm, GNOME Terminal, Ptyxis (VTE) | puts every line in visual order and joins the letters itself. While it is open it switches the terminal to *explicit* bidi mode (`ESC [ 8 l`, from the [Terminal-WG BiDi recommendation](https://terminal-wg.pages.freedesktop.org/bidi/)) so VTE doesn't reverse the text again, and back to the usual *implicit* mode (`ESC [ 8 h`) when it closes, also after a crash. Terminals that don't know the mode ignore it |
+| `words` | kitty | kitty joins the letters and draws each Arabic word right to left by itself, but keeps the words in stored order (its `force_ltr` docs: "HELLO WORLD" in an RTL script shows as "WORLD HELLO"). So only the word order is changed, and each word is left for kitty to draw. Nothing is sent to the terminal |
+| `off` | a terminal whose own bidi you prefer | text as stored, the terminal left alone |
 
-If your terminal does its own bidi well and you'd rather it did the work, turn the screen's off:
+The mode is picked by itself: `words` in kitty (`TERM=xterm-kitty`, which ssh passes on, or `$KITTY_WINDOW_ID`, which a tmux started from kitty keeps), `full` anywhere else. To choose:
 
 ```bash
-TELENOTIFY_BIDI=off .venv/bin/telenotify-tui --config:/path/to/config.json
-.venv/bin/telenotify-tui --config:/path/to/config.json --no-bidi    # the same
+TELENOTIFY_BIDI=words .venv/bin/telenotify-tui --config:/path/to/config.json   # full, words, off or auto
+.venv/bin/telenotify-tui --config:/path/to/config.json --bidi=words            # the flag wins over the variable
+.venv/bin/telenotify-tui --config:/path/to/config.json --no-bidi               # the same as --bidi=off
 ```
 
-Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
+- With `force_ltr yes` in kitty.conf kitty draws cells as they are: use `--bidi=full` there.
+- Inside tmux or screen the `ESC [ 8 l` switch may not reach the outer terminal, and the auto choice only sees tmux's `TERM`. If Arabic looks reversed there, pick the mode yourself (or `--no-bidi`).
+- If the screen is killed hard (`kill -9`) in `full` mode and Arabic in that terminal looks wrong afterwards, `printf '\e[8h'` restores it.
+- Selecting a post with the mouse and copying it gives the text as stored (reading order, plain letters), not the drawn order. Short values in tables and headers copy as drawn.
+- Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
 
 It finds the `telenotify` program next to the config, in `~/tele-notify`, on `$PATH`, or at `$TELENOTIFY_BIN`. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
 

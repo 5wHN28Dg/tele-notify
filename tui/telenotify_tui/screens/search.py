@@ -27,6 +27,7 @@ from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
 from .. import bot
 from ..clean import clean
+from ..postview import PostView
 from ..rtl import Block, visual
 from ..store import Judged
 from . import search_data
@@ -153,8 +154,8 @@ class SearchPane(Vertical):
                     yield Button("Re-judge now (j)", id="rejudge", variant="primary")
                     yield Button("+ links (J)", id="rejudge-links")
                 yield Static("", id="judge-note", classes="muted")
-                yield Static("", id="judge-result")
-                yield Static("", id="search-detail-text")
+                yield PostView("", id="judge-result")
+                yield PostView("", id="search-detail-text")
         with Vertical(id="paste"):
             yield Static("Paste any post below and judge it with the current settings. "
                          "Esc goes back to search.", classes="muted")
@@ -164,7 +165,7 @@ class SearchPane(Vertical):
                 yield Button("Judge following links", id="paste-judge-links")
                 yield Button("Back (esc)", id="paste-close")
             with VerticalScroll(id="paste-result-box"):
-                yield Static("", id="paste-result")
+                yield PostView("", id="paste-result")
 
     def on_mount(self) -> None:
         table = self.query_one("#results", DataTable)

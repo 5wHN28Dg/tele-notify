@@ -8,16 +8,18 @@ import io
 import json
 import os
 import pty
+import re
 import select
 import signal
 import sqlite3
 import sys
 import time
+import unicodedata
 
 import arabic_reshaper
 import pytest
+from bidi import get_display
 from conftest import REPO, SCHEMA, fill
-from rich.console import Console
 from textual.geometry import Region
 from textual.widgets import Static
 
@@ -32,7 +34,7 @@ def vw(word: str) -> str:
 
 
 def lines(text: str, width: int) -> list[tuple[str, int]]:
-    return rtl.Block(text).lines(Console(width=width), width)
+    return rtl.Block(text).lines(width)
 
 
 def test_arabic_paragraph_reads_right_to_left_and_is_right_aligned():
@@ -85,31 +87,47 @@ def test_each_paragraph_has_its_own_direction():
 
 def test_block_redraws_at_the_new_width():
     b = rtl.Block("مطلوب مهندس كهرباء حديث التخرج")
-    wide = b.lines(Console(width=60), 60)
-    narrow = b.lines(Console(width=12), 12)
+    wide = b.lines(60)
+    narrow = b.lines(12)
     assert len(wide) == 1 and len(narrow) > 1
     assert all(pad + len(s) == 12 for s, pad in narrow)
 
 
-def test_off_switch_leaves_text_as_stored(monkeypatch):
-    rtl.set_enabled(False)
+def test_off_switch_leaves_text_as_stored():
+    rtl.set_mode("off")
     assert rtl.visual("كيف حالك") == "كيف حالك"
     assert lines("كيف حالك", 20) == [("كيف حالك", 0)]
-    monkeypatch.setenv("TELENOTIFY_BIDI", "off")
-    assert not rtl.env_enabled()
-    monkeypatch.setenv("TELENOTIFY_BIDI", "on")
-    assert rtl.env_enabled()
-    monkeypatch.delenv("TELENOTIFY_BIDI")
-    assert rtl.env_enabled()
 
 
-@pytest.mark.parametrize(("argv", "env", "on"), [
-    ([], None, True),
-    (["--no-bidi"], None, False),
-    ([], "off", False),
-    ([], "OFF ", False),
+@pytest.mark.parametrize(("env", "mode"), [
+    ({}, "full"),
+    ({"TERM": "xterm-256color"}, "full"),
+    ({"TERM": "xterm-kitty"}, "words"),                       # kitty, or ssh from it
+    ({"TERM": "tmux-256color", "KITTY_WINDOW_ID": "3"}, "words"),   # tmux started in kitty
+    ({"TERM": "xterm-kitty", "TELENOTIFY_BIDI": "full"}, "full"),
+    ({"TELENOTIFY_BIDI": "words"}, "words"),
+    ({"TERM": "xterm-kitty", "TELENOTIFY_BIDI": "off"}, "off"),
+    ({"TELENOTIFY_BIDI": "OFF "}, "off"),
+    ({"TELENOTIFY_BIDI": "0"}, "off"),
+    ({"TERM": "xterm-kitty", "TELENOTIFY_BIDI": "auto"}, "words"),
+    ({"TELENOTIFY_BIDI": "on"}, "full"),
 ])
-def test_no_bidi_flag_and_env(monkeypatch, config, argv, env, on):
+def test_mode_from_terminal_and_env(env, mode):
+    assert rtl.env_mode(env) == mode
+
+
+@pytest.mark.parametrize(("argv", "env", "mode"), [
+    ([], {}, "full"),
+    ([], {"TERM": "xterm-kitty"}, "words"),
+    ([], {"TELENOTIFY_BIDI": "off"}, "off"),
+    (["--no-bidi"], {}, "off"),
+    (["--no-bidi"], {"TELENOTIFY_BIDI": "full"}, "off"),
+    (["--bidi=words"], {}, "words"),
+    (["--bidi", "full"], {"TERM": "xterm-kitty"}, "full"),
+    (["--bidi=off"], {"TELENOTIFY_BIDI": "full"}, "off"),
+    (["--bidi=auto"], {"TERM": "xterm-kitty", "TELENOTIFY_BIDI": "off"}, "words"),   # auto: the terminal decides
+])
+def test_bidi_flags_override_env(monkeypatch, config, argv, env, mode):
     seen = []
 
     class FakeApp:
@@ -117,15 +135,21 @@ def test_no_bidi_flag_and_env(monkeypatch, config, argv, env, on):
             pass
 
         def run(self):
-            seen.append(rtl.enabled())
+            seen.append(rtl.mode())
 
-    if env is None:
-        monkeypatch.delenv("TELENOTIFY_BIDI", raising=False)
-    else:
-        monkeypatch.setenv("TELENOTIFY_BIDI", env)
+    for k in ("TERM", "KITTY_WINDOW_ID", "TELENOTIFY_BIDI"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
     monkeypatch.setattr(entry, "TeleNotifyApp", FakeApp)
     entry.main(["--config", str(config), *argv])
-    assert seen == [on]
+    assert seen == [mode]
+
+
+def test_bad_bidi_flag_is_refused(config, capsys):
+    with pytest.raises(SystemExit):
+        entry.main(["--config", str(config), "--bidi=sideways"])
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_bidi_controls_in_a_post_reorder_nothing():
@@ -141,7 +165,7 @@ def test_bidi_controls_in_a_post_reorder_nothing():
 
 
 def test_escapes_are_still_stripped():
-    for s in (rtl.visual("كيف\x1b]0;X\x07 حالك\x9b31m"), rtl.Block("a\x1b[2Jكيف").lines(Console(width=20), 20)[0][0]):
+    for s in (rtl.visual("كيف\x1b]0;X\x07 حالك\x9b31m"), rtl.Block("a\x1b[2Jكيف").lines(20)[0][0]):
         assert "\x1b" not in s and "\x07" not in s and "\x9b" not in s
 
 
@@ -166,9 +190,10 @@ def test_terminal_mode_is_restored_after_a_crash():
 
 def test_terminal_mode_left_alone_when_off_or_not_a_terminal():
     out = FakeTTY()
-    rtl.set_enabled(False)
-    with rtl.terminal_mode(out):
-        pass
+    for m in ("off", "words"):   # words: kitty doesn't know the mode and logs an error for it
+        rtl.set_mode(m)
+        with rtl.terminal_mode(out):
+            pass
     assert out.getvalue() == ""
     rtl.set_enabled(True)
     piped = io.StringIO()
@@ -204,7 +229,8 @@ def test_real_terminal_gets_explicit_mode_and_it_back(tmp_path):
 
     pid, fd = pty.fork()
     if pid == 0:
-        os.environ.pop("TELENOTIFY_BIDI", None)
+        for k in ("TELENOTIFY_BIDI", "KITTY_WINDOW_ID"):
+            os.environ.pop(k, None)
         os.environ.update(TERM="xterm-256color", COLUMNS="120", LINES="35",
                           TELENOTIFY_LABELS=str(tmp_path / "labels.jsonl"), TELENOTIFY_BIN="/nonexistent")
         os.execv(sys.executable, [sys.executable, "-m", "telenotify_tui", "--config", str(config)])
@@ -298,3 +324,169 @@ async def test_review_screen_with_bidi_off_shows_text_as_stored(paths, state):
         shown = [s for s in strips(app.query_one("#detail-text", Static)) if s.strip()]
         assert [s.rstrip() for s in shown] == ["كيف حالك"]
 
+
+
+async def test_copying_a_post_gives_the_text_as_stored(paths, state):
+    """Selecting the drawn post and copying gives the stored text (reading
+    order, plain letters), not the reversed presentation forms on screen."""
+    from textual.geometry import Offset
+    from textual.selection import Selection
+
+    db = sqlite3.connect(state)
+    db.execute("UPDATE reviews SET text = ? WHERE msg_id = 11", (ARABIC_POST,))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.pause()
+        text = app.query_one("#detail-text", Static)
+        assert text.get_selection(Selection(None, None)) == (ARABIC_POST, "\n")
+        app.screen.selections = {text: Selection(None, None)}
+        assert app.screen.get_selected_text() == ARABIC_POST
+        # the rightmost word of the top line is the post's first word
+        first = strips(text)[0]
+        x = len(first) - len(vw("مطلوب"))
+        picked, _end = text.get_selection(Selection(Offset(x, 0), Offset(len(first), 0)))
+        assert picked == "مطلوب"
+        # the last line is the second paragraph
+        last = len([s for s in strips(text) if s.strip()]) - 1
+        picked, _end = text.get_selection(Selection(Offset(0, last), Offset(text.size.width, last)))
+        assert picked == "ارسال السيرة الذاتية"
+
+
+# -------------------------------------------------------------- the review's findings
+
+def test_emoji_sequences_stay_whole():
+    for post, emoji in [("وظيفة 👨\u200d💻 في بغداد", "👨\u200d💻"), ("مطلوب ✔\ufe0f فورا", "✔\ufe0f"),
+                        ("شكرا 👍🏽 لكم", "👍🏽"), ("علم 🇮🇶 العراق", "🇮🇶")]:
+        for m in ("full", "words"):
+            rtl.set_mode(m)
+            assert emoji in rtl.visual(post), (m, post, rtl.visual(post))
+            assert emoji in "".join(s for s, _p in lines(post, 40)), (m, post)
+
+
+def test_combining_marks_stay_on_their_letter():
+    for word in ("מִשְׁפָּט", "مُطَوِّر", "بِسْمِ الرَّحِيمِۖ"):
+        for m in ("full", "words"):
+            rtl.set_mode(m)
+            shown = rtl.visual(word)
+            assert not unicodedata.combining(shown[0]), (m, word)
+            for i, ch in enumerate(shown):
+                if unicodedata.combining(ch):        # a mark follows its letter (or another mark)
+                    assert unicodedata.combining(shown[i - 1]) or unicodedata.category(shown[i - 1])[0] == "L"
+    rtl.set_mode("full")
+    assert "ُ" in rtl.visual("مُطَوِّر")              # harakat are kept, not deleted
+
+
+def test_levels_come_from_the_whole_paragraph():
+    # numbers and Latin words next to each other stay one left-to-right run
+    # even when the paragraph is wrapped through them
+    for post, width, keep in [("خبرة في Python 3 4 سنوات", 15, "3 4"),
+                              ("مطلوب خبرة في C++ 3-5 سنوات عمل", 18, "C++"),
+                              ("وظيفة: React, Vue, 2 3 روابط", 17, "React,")]:
+        for m in ("full", "words"):
+            rtl.set_mode(m)
+            shown = " | ".join(s for s, _p in lines(post, width))
+            assert keep in shown, (m, post, shown)
+    rtl.set_mode("full")
+    assert "4 3" not in " ".join(s for s, _p in lines("خبرة في Python 3 4 سنوات", 15))
+    assert "++C" not in " ".join(s for s, _p in lines("مطلوب خبرة في C++ 3-5 سنوات عمل", 18))
+
+
+def test_lone_surrogates_dont_crash():
+    for m in ("full", "words", "off"):
+        rtl.set_mode(m)
+        assert rtl.visual("\ud800كيف") .count("�") == 1
+        assert lines("كيف \udfff حالك", 20)
+
+
+def test_unicode_line_and_paragraph_separators_break_lines():
+    for sep in ("\u2028", "\u2029", "\r\n", "\x85"):
+        out = lines(f"مرحبا بكم{sep}hello there", 30)
+        assert len(out) == 2 and out[1] == ("hello there", 0) and out[0][1] > 0
+        assert rtl.visual(f"كيف{sep}x") == f"{vw('كيف')}\nx"
+
+
+# ------------------------------------------------------------------- kitty: words
+
+def kitty_shows(sent: str) -> str:
+    """What kitty draws for a line of cells: each run of non-space cells
+    shaped on its own; a run whose first letter is from a right-to-left
+    script is drawn reversed (by grapheme cluster) with its brackets
+    mirrored; spaces stay where they are. This is what kitty 0.47 does
+    (kitty/fonts.c: render_line splits runs at blank cells, load_hb_buffer
+    lets HarfBuzz guess the direction; checked against kitty's own renderer
+    with `kitty +runpy` and kitty.fonts.render.render_string)."""
+    out = []
+    for word in re.split("( )", sent):
+        if rtl._kitty_rtl(word):
+            clusters = [word[a:b] for a, b in rtl._clusters(word, 0, len(word))]
+            out.append("".join(rtl._mirror(c) for c in reversed(clusters)))
+        else:
+            out.append(word)
+    return "".join(out)
+
+
+@pytest.mark.parametrize("post", [
+    "كيف حالك",
+    "خبرة 15 سنوات in Python",
+    "Python developer مطلوب في البصرة",
+    "مطلوب محاسب خبرة 5 سنوات في بغداد",
+    "راتب 1,500,000 دينار شهريا",
+    "١٥ سنة خبرة",
+    "خبرة 15سنة",
+    "email: a@b.com للتواصل",
+    "مرحبا. كيف الحال؟",
+    "٣ سنوات 50% خبرة",
+])
+def test_words_mode_shows_in_kitty_what_bidi_would(post):
+    """Sent in the words mode and drawn the way kitty draws, a line reads
+    as the Unicode bidi algorithm orders it (python-bidi's get_display),
+    with the letters left for kitty to join."""
+    rtl.set_mode("words")
+    sent = rtl.visual(post)
+    assert not any(0xfb50 <= ord(c) <= 0xfeff for c in sent)           # nothing reshaped: kitty joins letters
+    assert kitty_shows(sent) == get_display(post)
+
+
+def test_words_mode_examples():
+    rtl.set_mode("words")
+    assert rtl.visual("كيف حالك") == "حالك كيف"                        # words swapped, letters as stored
+    assert rtl.visual("خبرة 15 سنوات in Python") == "in Python سنوات 15 خبرة"
+    assert rtl.visual("١٥ سنة") == "سنة ٥١"                            # kitty reverses Arabic digits back
+    assert rtl.visual("خبرة 15سنة") == "51سنة خبرة"                     # and digits glued to Arabic letters
+    assert rtl.visual("مطلوب (عاجل)") == "(عاجل) مطلوب"                 # kitty mirrors brackets in Arabic words
+    assert kitty_shows(rtl.visual("مطلوب (عاجل)")) == f"({'عاجل'[::-1]}) {'مطلوب'[::-1]}"
+    # a bracket on its own is drawn left to right by kitty: mirrored here
+    assert rtl.visual("مطلوب ( عاجل )") == "( عاجل ) مطلوب"
+    assert rtl.visual("مرحبا.") == "مرحبا."                            # kitty puts the full stop on the left
+    # a word kitty draws left to right keeps its Arabic part in visual order, joined here
+    assert rtl.visual("Python/بايثون") == "Python/" + vw("بايثون")
+    [(shown, pad)] = lines("كيف حالك", 20)
+    assert shown == "حالك كيف" and pad == 20 - len(shown)               # right-aligned as in full
+
+
+async def test_words_mode_on_the_review_screen(paths, state):
+    rtl.set_mode("words")
+    db = sqlite3.connect(state)
+    db.execute("UPDATE reviews SET text = ? WHERE msg_id = 11", (ARABIC_POST,))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.pause()
+        text = app.query_one("#detail-text", Static)
+        shown = [s for s in strips(text) if s.strip()]
+        assert shown[0].endswith("مطلوب") and all(len(s) == text.size.width for s in shown)
+        assert shown[-1].strip() == "الذاتية السيرة ارسال"
+        assert text.get_selection(rtl_selection_all()) == (ARABIC_POST, "\n")
+
+
+def rtl_selection_all():
+    from textual.selection import Selection
+
+    return Selection(None, None)

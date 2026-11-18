@@ -35,6 +35,7 @@ from textual.widgets.option_list import Option
 
 from .. import bot
 from ..clean import clean
+from ..postview import PostView
 from ..rtl import Block, visual
 from ..store import Review
 from .review_data import history, remove_label, write_label
@@ -109,7 +110,7 @@ class CheckModal(ModalScreen[None]):
                     reasons = "\n".join(f"  - {visual(r)}" for r in v.reasons) or "  (no reasons given)"
                     yield Static(Content(reasons), id="check-reasons")
                     yield Static("─ text the filter read (post + links) ─", classes="muted")
-                    yield Static(Block(v.text or "(no text shown)"), id="check-text")
+                    yield PostView(Block(v.text or "(no text shown)"), id="check-text")
             yield Button("Close (Esc)", id="check-close", compact=True)
 
     @on(Button.Pressed, "#check-close")
@@ -174,7 +175,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             yield OptionList(id="review-list")
             with PostScroll(id="review-detail"):
                 yield Static("", id="detail-head")
-                yield Static("", id="detail-text")
+                yield PostView("", id="detail-text")
         table = DataTable(id="review-history", cursor_type="row", zebra_stripes=True)
         yield table
         with Horizontal(id="review-buttons"):

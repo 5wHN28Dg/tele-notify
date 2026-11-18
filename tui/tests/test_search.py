@@ -6,13 +6,17 @@ from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
+from telenotify_tui.postview import PostView
 from telenotify_tui.screens import search_data
 from telenotify_tui.screens.search import SearchPane
 from telenotify_tui.store import Store
 
 
 def text_of(app, selector: str) -> str:
-    return str(app.query_one(selector, Static).render())
+    """What the widget shows, in reading order (a post body is drawn right to
+    left where it should be; test_rtl.py checks how it is drawn)."""
+    w = app.query_one(selector, Static)
+    return str(w.content) if isinstance(w, PostView) else str(w.render())
 
 
 async def open_search(app, pilot):
