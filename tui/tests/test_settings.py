@@ -687,3 +687,131 @@ async def test_remove_duplicates_by_key(paths, dup_cfg):
         await pilot.press("D")                                         # in a text box D is just a letter
         await pilot.pause()
         assert pane.query_one("#editor-places #kw-filter", Input).value == "D"
+
+
+# ------------------------------------------ the list changing under an open edit
+
+@pytest.fixture
+def abc_cfg(cfg_path: Path) -> Path:
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["location_keywords_en"] = ["a", "A", "b", "c"]
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return cfg_path
+
+
+async def retype(pilot, editor: KeywordEditor, text: str) -> None:
+    entry = editor.query_one("#kw-entry", Input)
+    entry.value = text
+    entry.focus()
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def notes(app) -> str:
+    return "\n".join(str(n.message) for n in app._notifications)
+
+
+async def test_remove_duplicates_during_an_edit_keeps_editing_the_same_item(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await pilot.click("#editor-places #kw-items", offset=(2, 2), times=2)   # edit "b"
+        await pilot.pause()
+        assert editor.editing == 2
+        await pilot.click("#dedupe")
+        await pilot.pause()
+        assert pane.edited["location_keywords_en"] == ["a", "b", "c"]
+        await retype(pilot, editor, "bb")
+        assert pane.edited["location_keywords_en"] == ["a", "bb", "c"]
+
+
+async def test_remove_duplicates_cancels_an_edit_of_a_removed_repeat(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await pilot.click("#editor-places #kw-items", offset=(2, 1), times=2)   # edit "A", the repeat
+        await pilot.pause()
+        await pilot.click("#dedupe")
+        await pilot.pause()
+        assert editor.editing is None and editor.query_one("#kw-entry", Input).value == ""
+        assert "edit was cancelled" in notes(app)
+        await retype(pilot, editor, "zz")                       # now a plain add
+        assert pane.edited["location_keywords_en"] == ["a", "b", "c", "zz"]
+
+
+async def test_deleting_another_item_keeps_the_open_edit(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await pilot.click("#editor-places #kw-items", offset=(2, 3), times=2)   # edit "c"
+        await pilot.pause()
+        entry = editor.query_one("#kw-entry", Input)
+        entry.value = "c2"                                       # half typed
+        await pilot.click("#editor-places #kw-items", offset=(2, 0))            # pick "a"
+        await pilot.press("delete")
+        await pilot.pause()
+        assert pane.edited["location_keywords_en"] == ["A", "b", "c"]
+        assert editor.editing == 2 and entry.value == "c2"      # still open, on "c"
+        await retype(pilot, editor, "c2")
+        assert pane.edited["location_keywords_en"] == ["A", "b", "c2"]
+
+
+async def test_deleting_the_item_being_edited_ends_the_edit_and_says_so(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await pilot.click("#editor-places #kw-items", offset=(2, 2), times=2)   # edit "b"
+        await pilot.pause()
+        await pilot.click("#editor-places #kw-items", offset=(2, 2))
+        await pilot.press("delete")
+        await pilot.pause()
+        assert pane.edited["location_keywords_en"] == ["a", "A", "c"]
+        assert editor.editing is None and editor.query_one("#kw-entry", Input).value == ""
+        assert "edit you had open on it was cancelled" in notes(app)
+
+
+async def test_add_during_an_edit_clears_the_box(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await pilot.click("#editor-places #kw-items", offset=(2, 2), times=2)   # edit "b"
+        await pilot.pause()
+        await pilot.click("#editor-places #kw-add")
+        await pilot.pause()
+        entry = editor.query_one("#kw-entry", Input)
+        assert editor.editing is None and entry.value == "" and entry.has_focus
+        await pilot.press("enter")                               # nothing typed: nothing added
+        await pilot.pause()
+        assert pane.edited["location_keywords_en"] == ["a", "A", "b", "c"]
+
+
+async def test_delete_and_edit_buttons_need_a_picked_item(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await pilot.click("#editor-places #kw-filter")           # focus elsewhere, nothing picked
+        await pilot.click("#editor-places #kw-delete")
+        await pilot.pause()
+        assert pane.edited["location_keywords_en"] == ["a", "A", "b", "c"]
+        await pilot.click("#editor-places #kw-edit")
+        await pilot.pause()
+        assert editor.editing is None
+        assert "Pick an item in the list first" in notes(app)
+
+
+async def test_revert_during_an_edit_of_an_added_item_cancels_it(paths, abc_cfg):
+    app = TeleNotifyApp(replace(paths, config=abc_cfg), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, editor = await open_places(pilot)
+        await retype(pilot, editor, "new")                       # added, not saved
+        await pilot.click("#editor-places #kw-items", offset=(2, 4), times=2)   # edit "new"
+        await pilot.pause()
+        assert editor.editing == 4
+        pane.action_revert()
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert pane.edited["location_keywords_en"] == ["a", "A", "b", "c"]
+        assert editor.editing is None                            # "new" is gone: no stale index
+        await retype(pilot, editor, "x")
+        assert pane.edited["location_keywords_en"] == ["a", "A", "b", "c", "x"]

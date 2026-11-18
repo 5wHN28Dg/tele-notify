@@ -221,7 +221,8 @@ class KeywordEditor(Vertical):
         super().__init__(**kw)
         self.get, self.put, self.parse = get, put, parse
         self.key: str | None = None
-        self.editing: int | None = None
+        self.editing: int | None = None      # the index of the item open in the bottom box
+        self.editing_value: Any = None       # and its value, to find it again if the list changed
 
     def compose(self) -> ComposeResult:
         yield Static(id="kw-title")
@@ -246,6 +247,8 @@ class KeywordEditor(Vertical):
             self.key = key
             self.editing = None
             self.query_one("#kw-entry", Input).value = ""
+        else:
+            self.recheck_edit()   # the same list, re-read (revert, save): the edit follows its item
         self.refresh_items()
 
     def items(self) -> list:
@@ -294,12 +297,19 @@ class KeywordEditor(Vertical):
     @on(Button.Pressed, "#kw-buttons Button")
     def _button(self, event: Button.Pressed) -> None:
         event.stop()
+        if event.button.id == "kw-add":
+            self.action_add()
+            return
+        # Edit / Delete act on the item picked in the list (clicked or reached with the
+        # arrows), never on whatever happens to be highlighted while you type elsewhere.
+        if not self.query_one("#kw-items", OptionList).has_focus:
+            what = "edit" if event.button.id == "kw-edit" else "delete"
+            self.notify(f"Pick an item in the list first (click it), then {what}.", severity="warning")
+            return
         if event.button.id == "kw-edit":
             self.action_edit_item()
-        elif event.button.id == "kw-delete":
-            self.action_delete_item()
         else:
-            self.action_add()
+            self.action_delete_item()
 
     @on(Input.Submitted, "#kw-entry")
     def _submit(self, event: Input.Submitted) -> None:
@@ -309,14 +319,49 @@ class KeywordEditor(Vertical):
             self.action_cancel_edit()
             return
         items = self.items()
-        if self.editing is not None and self.editing < len(items):
-            items[self.editing] = self.parse(text)
+        if self.editing is not None:
+            i = self.edit_index()
+            if i is None:   # the list changed under the edit and the item is gone
+                self.editing = None
+                self.refresh_items()
+                self.notify("The item you were editing is no longer in the list, so nothing was "
+                            "changed; press enter again to add your text as a new item.",
+                            severity="warning", markup=False)
+                return
+            items[i] = self.parse(text)
         else:
             items.append(self.parse(text))
         self.editing = None
         event.input.value = ""
         self.put(self.key, items)
         self.refresh_items()
+
+    def edit_index(self) -> int | None:
+        """Where the item being edited is now: the list can change under an open
+        edit (another item deleted, duplicates removed, config re-read)."""
+        if self.editing is None:
+            return None
+        items = self.items()
+
+        def same(x: Any) -> bool:
+            return type(x) is type(self.editing_value) and x == self.editing_value
+
+        if self.editing < len(items) and same(items[self.editing]):
+            return self.editing
+        return next((j for j, x in enumerate(items) if same(x)), None)
+
+    def recheck_edit(self) -> None:
+        """After the list changed: follow the edited item to its new place, or
+        end the edit (with a note) if it is gone."""
+        if self.editing is None:
+            return
+        i = self.edit_index()
+        if i is None:
+            self.action_cancel_edit()
+            self.notify("The item you were editing was removed, so the edit was cancelled.",
+                        severity="warning", markup=False)
+        else:
+            self.editing = i
 
     @on(OptionList.OptionSelected, "#kw-items")
     def _edit(self, event: OptionList.OptionSelected) -> None:
@@ -328,7 +373,7 @@ class KeywordEditor(Vertical):
         items = self.items()
         if not 0 <= i < len(items):
             return
-        self.editing = i
+        self.editing, self.editing_value = i, items[i]
         entry = self.query_one("#kw-entry", Input)
         entry.value = clean(items[i])
         self.refresh_items()
@@ -349,16 +394,24 @@ class KeywordEditor(Vertical):
         items = self.items()
         if not 0 <= i < len(items):
             return
+        was_open = self.edit_index() == i
         gone = items.pop(i)
-        self.editing = None
-        self.query_one("#kw-entry", Input).value = ""
         self.put(self.key, items)
+        if was_open:   # deleted the very item open in the bottom box: that edit ends too
+            self.action_cancel_edit()
+        else:          # another item: an open edit stays open, on its item
+            self.recheck_edit()
         self.refresh_items()
-        self.notify(f"Deleted {clean(gone)!r} from {self.key} (not saved yet: ctrl+s saves).", markup=False)
+        note = " (the edit you had open on it was cancelled)" if was_open else ""
+        self.notify(f"Deleted {clean(gone)!r} from {self.key}{note} (not saved yet: ctrl+s saves).",
+                    markup=False)
 
     def action_add(self) -> None:
-        self.editing = None
-        self.query_one("#kw-entry", Input).focus()
+        entry = self.query_one("#kw-entry", Input)
+        if self.editing is not None:   # leave the edit: its text mustn't be added as a copy
+            self.editing = None
+            entry.value = ""
+        entry.focus()
         self.refresh_items()
 
     def action_cancel_edit(self) -> None:
@@ -782,9 +835,9 @@ class SettingsPane(Vertical):
             self.notify("No list has an entry twice.")
             return
         self.changed()
-        for sec in LIST_SECTIONS:
-            self.query_one(f"#editor-{sec}", KeywordEditor).refresh_items()
-        self.query_one("#editor-chats", KeywordEditor).refresh_items()
+        for editor in self.query(KeywordEditor):
+            editor.recheck_edit()   # an open edit follows its item, or ends if it was a repeat
+            editor.refresh_items()
         lines = [f"{k}: {', '.join(repr(clean(x)) for x in xs)}" for k, xs in removed.items()]
         self.notify("Removed the repeats (the first spelling stays; not saved yet: ctrl+s saves):\n"
                     + "\n".join(lines), timeout=10, markup=False)
