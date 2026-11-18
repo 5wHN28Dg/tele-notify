@@ -102,6 +102,8 @@ What's different from the Python bot:
 
 To start it automatically, see [`deploy/tele-notify.service`](deploy/tele-notify.service).
 
+To watch it and manage it (dashboard, review queue, search, settings), open the terminal screen: [`tui/`](tui/README.md).
+
 ## Run the bot (Python, until v4 is finished)
 
 1. Get Telegram API credentials: an API ID and API hash from [my.telegram.org](https://my.telegram.org) ([how](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).
