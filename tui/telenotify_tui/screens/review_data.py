@@ -1,8 +1,8 @@
 """Data helpers for the Review screen: decision history and corpus labels.
 
-Every send / discard made on the Review screen is also a label for the
-test corpus: "TRUE" (this should reach the channel) or "FALSE" (it
-shouldn't). The labels go to one JSON line per post, in the same shape as
+Every send / keep / discard made on the Review screen is also a label for
+the test corpus: "TRUE" (this should reach the channel; "keep" too, it is
+a match the old bot already sent) or "FALSE" (it shouldn't). The labels go to one JSON line per post, in the same shape as
 the eval corpus ({"id", "text", "label"}), so `telenotify eval` can run on
 the file directly.
 """
@@ -18,8 +18,9 @@ from pathlib import Path
 
 from ..store import Review, Store
 
-DECIDED = ("to_send", "sent", "discarded")
-LABELS = {"to_send": "TRUE", "discarded": "FALSE"}
+DECIDED = ("to_send", "sent", "discarded", "kept")
+# "kept" is a true match that must not be sent again: the same label as send
+LABELS = {"to_send": "TRUE", "kept": "TRUE", "discarded": "FALSE"}
 
 
 def labels_path() -> Path:
@@ -44,7 +45,7 @@ def _line_id(line: bytes) -> str | None:
 
 def write_label(review: Review, decision: str, path: Path | None = None,
                 now: int | None = None) -> Path:
-    """Record `decision` ("to_send" / "discarded") for `review` as a corpus label.
+    """Record `decision` ("to_send" / "kept" / "discarded") for `review` as a corpus label.
 
     A post already in the file gets its line replaced (the later decision
     wins); every other line is kept byte for byte, even one that isn't valid
@@ -95,7 +96,7 @@ def _rewrite(path: Path, lid: str, line: bytes | None) -> None:
 
 
 def history(store: Store, limit: int = 50) -> list[Review]:
-    """Recently decided reviews (approved, sent, discarded), newest decision first."""
+    """Recently decided reviews (approved, sent, kept, discarded), newest decision first."""
     rows = [r for status in DECIDED for r in store.reviews(status)]
     rows.sort(key=lambda r: (r.decided_at or r.at, r.id), reverse=True)
     return rows[:limit]
