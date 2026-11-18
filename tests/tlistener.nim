@@ -564,3 +564,28 @@ suite "watched chats you can't read any more (#16)":
     check st.getMeta("chat_access:-2") == ""
     check "✅ can read chat2 again" in lines[]
     check f.forwarded == @[(-2'i64, 5'i64)]
+
+suite "what the terminal screen reads":
+  test "alerts are recorded; the chat list's status follows access changes":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    st.saveChats(@[ChatRow(id: -1, title: "Basra Jobs", kind: "channel")], @[-1'i64, -2])
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Basra Jobs", status: "banned"))
+    check st.chatStatus(-1) == "banned"
+    check "banned from Basra Jobs" in st.alertTexts(1)[0]
+    waitFor l.onChatAccess(-1, ChatAccess(title: "Basra Jobs", status: "ok"))
+    check st.chatStatus(-1) == "ok"
+
+  test "the post text is kept for search, in the real run too":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    let (l, st) = setup(f)               # not a dry run
+    waitFor l.bootstrap()
+    check st.rawTextOf(-1, 10) == good
+
+  test "the connection state is published":
+    let (l, st) = setup(FakeTg())
+    l.onConnectionState("connectionStateConnecting")
+    check st.getMeta("connection") == "connecting"
+    l.onConnectionState("connectionStateReady")
+    check st.getMeta("connection") == "ready"

@@ -110,6 +110,16 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
+  # for the terminal screen: how the bot runs, since when, and your chats by name
+  st.setMeta("mode", if l.dryRun: "dry-run" else: "real")
+  st.setMeta("started_at", $getTime().toUnix)
+  try:
+    var rows: seq[ChatRow]
+    for (id, title, kind) in await s.chatRows():
+      rows.add ChatRow(id: id, title: title, kind: kind)
+    st.saveChats(rows, cfg.chats)
+  except CatchableError as e:
+    l.log "   could not save the chat list: " & e.msg
   l.titles = titles
   accessReady = true
   await l.checkWatchedChats()

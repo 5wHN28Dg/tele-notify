@@ -82,6 +82,8 @@ proc duration(seconds: int64): string =
 proc alert*(l: Listener, text: string) {.async.} =
   ## Log loudly and, if alerts are on, tell you in Saved Messages.
   l.say "⚠️  " & text
+  try: l.state.addAlert(text)        # for the terminal screen
+  except CatchableError as e: l.say "   (could not record the alert: " & e.msg & ")"
   if not l.cfg.alerts: return
   try:
     if l.selfChat == 0: l.selfChat = await l.tg.selfChat()
@@ -126,10 +128,12 @@ proc onChatAccess*(l: Listener, chat: int64, a: ChatAccess, detail = "") {.async
       # get "can't access the chat".
       if before notin ["", "unavailable"]:
         l.state.setMeta(key, "")
+        l.state.setChatStatus(chat, "ok")
         l.say &"✅ can read {title} again"
       return
     if before == a.status: return
     l.state.setMeta(key, a.status)   # before the await: no double alert
+    l.state.setChatStatus(chat, a.status)
   except CatchableError as e:
     l.say &"   could not record access to {title}: {e.msg}"
     return
@@ -140,6 +144,7 @@ proc chatReadable(l: Listener, chat: int64, title: string) =
   try:
     if l.state.getMeta(accessKey(chat)) == "unavailable":
       l.state.setMeta(accessKey(chat), "")
+      l.state.setChatStatus(chat, "ok")
       let t = if title != "": title else: l.titles.getOrDefault(chat, &"chat {chat}")
       l.say &"✅ can read {t} again"
   except CatchableError as e:
@@ -275,7 +280,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   for x in group:
     try:
       l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
-                            rawText = (if l.dryRun: x.text else: ""),   # for compare
+                            rawText = x.text,   # compare; search in the terminal screen
                             albumId = x.albumId)
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
@@ -459,6 +464,9 @@ proc heartbeat*(l: Listener) {.async.} =
 proc onConnectionState*(l: Listener, state: string) =
   ## Called with TDLib's connection state ("connectionStateReady", ...).
   let t = getTime().toUnix
+  # for the terminal screen: "ready", "updating", "connecting", ...
+  try: l.state.setMeta("connection", state.replace("connectionState", "").toLowerAscii)
+  except CatchableError: discard
   # "Updating" means connected and catching up on missed updates: not down
   if state in ["connectionStateReady", "connectionStateUpdating"]:
     if l.downSince > 0:

@@ -55,3 +55,11 @@ suite "session":
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"
     check statePath(cfg, true).endsWith "state-dryrun.sqlite3"
+
+suite "chat kinds":
+  test "channel, group or private, from TDLib's chat type":
+    check chatKind(%*{"type": {"@type": "chatTypeSupergroup", "is_channel": true}}) == "channel"
+    check chatKind(%*{"type": {"@type": "chatTypeSupergroup", "is_channel": false}}) == "group"
+    check chatKind(%*{"type": {"@type": "chatTypeBasicGroup"}}) == "group"
+    check chatKind(%*{"type": {"@type": "chatTypePrivate"}}) == "private"
+    check chatKind(%*{}) == ""

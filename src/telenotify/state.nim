@@ -51,13 +51,18 @@ proc openState*(path: string): State =
     reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER,
     decided_at INTEGER, UNIQUE (chat_id, msg_id))""")
   db.exec(sql"CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+  # for the terminal screen (tui/): the alerts sent to Saved Messages, and
+  # this account's chats with their names and whether they can be read
+  db.exec(sql"CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY, at INTEGER, text TEXT)")
+  db.exec(sql"""CREATE TABLE IF NOT EXISTS chats (
+    id INTEGER PRIMARY KEY, title TEXT, kind TEXT, watched INTEGER, status TEXT, updated_at INTEGER)""")
   # stage 4: what the Python bot sent to your channel during a dry run
   db.exec(sql"""CREATE TABLE IF NOT EXISTS other_bot (
     id INTEGER PRIMARY KEY, at INTEGER, msg_id INTEGER, origin_chat INTEGER,
     origin_msg INTEGER, text TEXT, UNIQUE (msg_id))""")
   # columns added in stage 4 (older state files get them here):
   #   processed.text_hash  a fingerprint of the text judged (edits)
-  #   processed.raw_text   the message text, dry run only (compare)
+  #   processed.raw_text   the message text (compare; search in the terminal screen)
   #   reviews.album_ids    every message of an album, so approving sends it all
   #   other_bot.album_id   pictures of one album count as one post
   #   processed.album_id   so a late picture of an album counts as handled
@@ -227,3 +232,52 @@ proc processedRow*(s: State, chat, msg: int64): (bool, ProcessedRow) =
 
 proc publishedText*(s: State, chat, msg: int64): string =
   s.db.getValue(sql"SELECT text FROM published WHERE chat_id = ? AND msg_id = ? LIMIT 1", chat, msg)
+
+# ------------------------------------------- the terminal screen (tui/)
+
+proc addAlert*(s: State, text: string) =
+  ## Keep an alert so the terminal screen can list it. Only the newest 500.
+  s.db.exec(sql"INSERT INTO alerts (at, text) VALUES (?, ?)", now(), text)
+  s.db.exec(sql"DELETE FROM alerts WHERE id <= (SELECT MAX(id) FROM alerts) - 500")
+
+proc alertTexts*(s: State, limit = 50): seq[string] =
+  ## Newest first.
+  for r in s.db.fastRows(sql"SELECT text FROM alerts ORDER BY id DESC LIMIT ?", limit):
+    result.add r[0]
+
+type ChatRow* = object
+  id*: int64
+  title*, kind*: string
+
+proc saveChats*(s: State, chats: seq[ChatRow], watched: seq[int64]) =
+  ## Replace the chat list (names for the terminal screen's settings). A
+  ## chat's access status is kept from the "chat_access:<id>" meta value
+  ## (#16); watched chats Telegram doesn't know are kept as "unavailable".
+  s.db.exec(sql"BEGIN")
+  try:
+    s.db.exec(sql"DELETE FROM chats")
+    var seenIds: seq[int64]
+    for c in chats:
+      let st = s.getMeta("chat_access:" & $c.id)
+      s.db.exec(sql"INSERT OR REPLACE INTO chats VALUES (?, ?, ?, ?, ?, ?)", c.id, c.title, c.kind,
+                (if c.id in watched: 1 else: 0), (if st == "": "ok" else: st), now())
+      seenIds.add c.id
+    for w in watched:
+      if w notin seenIds:
+        s.db.exec(sql"INSERT OR REPLACE INTO chats VALUES (?, ?, ?, ?, ?, ?)", w, "", "", 1,
+                  "unavailable", now())
+    s.db.exec(sql"COMMIT")
+  except DbError:
+    s.db.exec(sql"ROLLBACK")
+    raise
+
+proc setChatStatus*(s: State, id: int64, status: string) =
+  s.db.exec(sql"UPDATE chats SET status = ?, updated_at = ? WHERE id = ?",
+            (if status == "": "ok" else: status), now(), id)
+
+proc chatStatus*(s: State, id: int64): string =
+  s.db.getValue(sql"SELECT status FROM chats WHERE id = ?", id)
+
+proc rawTextOf*(s: State, chat, msg: int64): string =
+  ## The text a message had when it was judged ("" if not kept).
+  s.db.getValue(sql"SELECT COALESCE(raw_text, '') FROM processed WHERE chat_id = ? AND msg_id = ?", chat, msg)
