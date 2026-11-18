@@ -55,7 +55,8 @@ suite "experience: entry friendly and optional":
     check years("- Minimum 7 years' relevant experience,\npreferably in the oil and gas industry.") == 7
     check years("خبرة لا تقل عن 3 سنوات\nويفضل في الشركات النفطية") == 3
     check years("خبرة 3 سنوات مع أفضلية لمن عمل في الشركات النفطية") == 3
-    check years("5 years experience, preferred in oil companies") == 5
+    check years("3 years experience preferably in a similar role") == 3
+    check years("خبرة سنتين يفضل في نفس المجال") == 2
 
   test "adversarial review: these stay optional (main got them right)":
     for s in ["Minimum 3 years of experience preferred",
@@ -79,7 +80,19 @@ suite "experience: entry friendly and optional":
               "Experience (preferred): 3 years",
               "experience 3 years\n- preferred",
               "Preferably in oil companies, 3 years experience",
-              "Linux admin 3 years experience is a plus"]:
+              "Linux admin 3 years experience is a plus",
+              # second adversarial pass
+              "5 years experience, preferred in oil companies",
+              "2 years experience preferred in a similar role",
+              "3 years of experience is highly preferred in this role",
+              "3 years experience is strongly preferred in this role",
+              "Experience: 2 years (preferred) in accounting",
+              "2 years experience (preferred) at a bank",
+              "2+ years experience preferred, in a similar field",
+              "2 years experience preferred with a degree",
+              "3 years experience\npreferred in oil sector",
+              "خبرة سنتين (يفضل) في نفس المجال",
+              "3 years of experience, preferably, in banking"]:
       checkpoint s
       check years(s) == -1
 
