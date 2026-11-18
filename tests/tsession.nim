@@ -69,3 +69,9 @@ suite "corpus ids":
     check corpusId(%*{"id": 194637}) == "194637"
     check corpusId(%*{"id": "-1:11"}) == "-1:11"
     check corpusId(%*{"text": "x"}) == "?"
+
+suite "config":
+  test "an empty data_dir means the default folder (review)":
+    var j2 = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j2["data_dir"] = %""
+    check parseConfig(j2).dataDir == getHomeDir() / ".local" / "share" / "tele-notify"

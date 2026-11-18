@@ -152,7 +152,10 @@ proc parseConfig*(j: JsonNode): Config =
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
   result.extraJobSites = j.strings("extra_job_sites")
 
-  result.dataDir = j{"data_dir"}.getStr(getHomeDir() / ".local" / "share" / "tele-notify")
+  # "" means the default too (a blank field in the terminal screen's settings)
+  result.dataDir = j{"data_dir"}.getStr("")
+  if result.dataDir.strip == "":
+    result.dataDir = getHomeDir() / ".local" / "share" / "tele-notify"
   result.tdlibPath = j{"tdlib_path"}.getStr("")
   result.dryRun = j{"dry_run"}.getBool(false)
   result.alerts = j{"alerts"}.getBool(true)
