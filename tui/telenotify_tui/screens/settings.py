@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -154,19 +154,67 @@ class EvalModal(ModalScreen[None]):
 
 # ---------------------------------------------------------- keyword lists
 
+class KeywordFilter(Input):
+    """The filter box. Down or enter moves into the list below; every other
+    key (delete and backspace too) edits the filter text."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("down", "into_list", "Into the list", show=False)]
+
+    def action_into_list(self) -> None:
+        if isinstance(self.parent, KeywordEditor):
+            self.parent.focus_list()
+
+
+class KeywordList(OptionList):
+    """The items. A click only picks an item (so del / x and the buttons act
+    on it); enter or a double click edits it."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("delete,x", "delete_item", "Delete item"),
+                Binding("a", "add", "Add item")]
+
+    @property
+    def editor(self) -> KeywordEditor | None:
+        return self.parent if isinstance(self.parent, KeywordEditor) else None
+
+    async def _on_click(self, event: events.Click) -> None:
+        event.prevent_default()   # OptionList's own click handler would edit on every click
+        clicked = event.style.meta.get("option")
+        if clicked is None or self.get_option_at_index(clicked).disabled:
+            return
+        self.highlighted = clicked
+        if event.chain >= 2:
+            self.action_select()
+
+    def action_delete_item(self) -> None:
+        if self.editor is not None:
+            self.editor.action_delete_item()
+
+    def action_add(self) -> None:
+        if self.editor is not None:
+            self.editor.action_add()
+
+
+class EditorButton(Button, can_focus=False):
+    """A mouse button that leaves the focus (and the picked item) alone."""
+
+
+KEYS_HINT = "click picks · enter / double click: edit · del / x: delete · a: add"
+
+
 class KeywordEditor(Vertical):
-    """One keyword list: filter, add (enter in the bottom box), edit (enter on an
-    item), delete (del / x on an item)."""
+    """One keyword list: filter, add (enter in the bottom box, `a` or the Add
+    button), edit (enter or double click on an item), delete (del / x on an
+    item, or the Delete button)."""
 
     DEFAULT_CSS = """
     KeywordEditor { width: 1fr; height: 1fr; padding-left: 1; }
     KeywordEditor #kw-title { text-style: bold; }
     KeywordEditor #kw-items { height: 1fr; }
     KeywordEditor Input { margin: 0; }
+    KeywordEditor #kw-buttons { height: 1; }
+    KeywordEditor #kw-buttons Button { margin-right: 1; width: auto; min-width: 6; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("delete,x", "delete_item", "Delete item"),
-                Binding("a", "add", "Add item"),
-                Binding("escape", "cancel_edit", "Cancel edit", show=False)]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel_edit", "Cancel edit", show=False)]
 
     def __init__(self, get: Callable[[str], list], put: Callable[[str, list], None],
                  parse: Callable[[str], Any] = str, **kw: Any):
@@ -178,9 +226,20 @@ class KeywordEditor(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(id="kw-title")
         yield Static(id="kw-help", classes="muted")
-        yield Input(placeholder="filter...", id="kw-filter", compact=True)
-        yield OptionList(id="kw-items", compact=True)
+        yield Static(KEYS_HINT, id="kw-keys", classes="muted")
+        yield KeywordFilter(placeholder="filter... (↓ or enter: into the list)", id="kw-filter", compact=True)
+        yield KeywordList(id="kw-items", compact=True)
+        with Horizontal(id="kw-buttons"):
+            yield EditorButton("Edit (enter)", id="kw-edit", compact=True)
+            yield EditorButton("Delete (del)", id="kw-delete", compact=True, variant="error")
+            yield EditorButton("Add (a)", id="kw-add", compact=True, variant="success")
         yield Input(placeholder="add a keyword: type it and press enter", id="kw-entry", compact=True)
+
+    def focus_list(self) -> None:
+        ol = self.query_one("#kw-items", OptionList)
+        ol.focus()
+        if ol.highlighted is None and ol.option_count:
+            ol.highlighted = 0
 
     def show(self, key: str) -> None:
         if key != self.key:
@@ -227,6 +286,21 @@ class KeywordEditor(Vertical):
     def _filter(self) -> None:
         self.refresh_items()
 
+    @on(Input.Submitted, "#kw-filter")
+    def _filter_done(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.focus_list()
+
+    @on(Button.Pressed, "#kw-buttons Button")
+    def _button(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "kw-edit":
+            self.action_edit_item()
+        elif event.button.id == "kw-delete":
+            self.action_delete_item()
+        else:
+            self.action_add()
+
     @on(Input.Submitted, "#kw-entry")
     def _submit(self, event: Input.Submitted) -> None:
         event.stop()
@@ -247,23 +321,40 @@ class KeywordEditor(Vertical):
     @on(OptionList.OptionSelected, "#kw-items")
     def _edit(self, event: OptionList.OptionSelected) -> None:
         event.stop()
-        if event.option.id is None:
+        if event.option.id is not None:
+            self.edit(int(event.option.id))
+
+    def edit(self, i: int) -> None:
+        items = self.items()
+        if not 0 <= i < len(items):
             return
-        self.editing = int(event.option.id)
+        self.editing = i
         entry = self.query_one("#kw-entry", Input)
-        entry.value = clean(self.items()[self.editing])
+        entry.value = clean(items[i])
         self.refresh_items()
         entry.focus()
+
+    def action_edit_item(self) -> None:
+        i = self._highlighted_index()
+        if i is None:
+            self.notify("Pick an item in the list first (click it, or ↑↓).", severity="warning")
+            return
+        self.edit(i)
 
     def action_delete_item(self) -> None:
         i = self._highlighted_index()
         if i is None or self.key is None:
+            self.notify("Pick an item in the list first (click it, or ↑↓), then delete.", severity="warning")
             return
         items = self.items()
-        del items[i]
+        if not 0 <= i < len(items):
+            return
+        gone = items.pop(i)
         self.editing = None
+        self.query_one("#kw-entry", Input).value = ""
         self.put(self.key, items)
         self.refresh_items()
+        self.notify(f"Deleted {clean(gone)!r} from {self.key} (not saved yet: ctrl+s saves).", markup=False)
 
     def action_add(self) -> None:
         self.editing = None
@@ -327,7 +418,8 @@ class SettingsPane(Vertical):
     SettingsPane .hidden { display: none; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [Binding("ctrl+s", "save", "Save settings"),
-                Binding("t", "test_corpus", "Test on corpus")]
+                Binding("t", "test_corpus", "Test on corpus"),
+                Binding("D", "remove_duplicates", "Remove duplicates")]
 
     class ChatAction(Message):
         def __init__(self, chat_id: int, what: str):
@@ -345,6 +437,7 @@ class SettingsPane(Vertical):
         self.store_chats: list = []
         self.chat_filter = ""
         self._tab_label: str | None = None
+        self.has_dups = False   # some list has an entry twice: "Remove duplicates" is offered
 
     # -------------------------------------------------------- composing
 
@@ -354,6 +447,8 @@ class SettingsPane(Vertical):
             yield Button("Save ^s", id="save", compact=True, variant="primary")
             yield Button("Test t", id="test", compact=True)
             yield Button("Revert", id="revert", compact=True)
+            yield Button("Remove duplicates D", id="dedupe", compact=True, variant="warning",
+                         classes="hidden")
         with TabbedContent(id="sections"):
             for sec, title, keys in sd.SECTIONS:
                 with TabPane(title, id=f"sec-{sec}"):
@@ -500,6 +595,9 @@ class SettingsPane(Vertical):
 
     def changed(self) -> None:
         self.problems = sd.validate(self.edited) if self.original is not None else []
+        self.has_dups = self.original is not None and bool(sd.dedupe_all(copy.deepcopy(self.edited)))
+        self.query_one("#dedupe", Button).set_class(not self.has_dups, "hidden")
+        self.refresh_bindings()
         self.update_status()
         self.update_problems()
         self.update_pickers()
@@ -665,9 +763,31 @@ class SettingsPane(Vertical):
     @on(Button.Pressed, "#settings-bar Button")
     def _bar(self, event: Button.Pressed) -> None:
         event.stop()
-        {"save": self.action_save, "test": self.action_test_corpus, "revert": self.action_revert}[event.button.id]()
+        {"save": self.action_save, "test": self.action_test_corpus, "revert": self.action_revert,
+         "dedupe": self.action_remove_duplicates}[event.button.id]()
 
     # ------------------------------------------------------------ actions
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "remove_duplicates":
+            return self.has_dups
+        return True
+
+    def action_remove_duplicates(self) -> None:
+        """Every list: keep the first spelling of each entry, drop the repeats."""
+        if self.original is None:
+            return
+        removed = sd.dedupe_all(self.edited)
+        if not removed:
+            self.notify("No list has an entry twice.")
+            return
+        self.changed()
+        for sec in LIST_SECTIONS:
+            self.query_one(f"#editor-{sec}", KeywordEditor).refresh_items()
+        self.query_one("#editor-chats", KeywordEditor).refresh_items()
+        lines = [f"{k}: {', '.join(repr(clean(x)) for x in xs)}" for k, xs in removed.items()]
+        self.notify("Removed the repeats (the first spelling stays; not saved yet: ctrl+s saves):\n"
+                    + "\n".join(lines), timeout=10, markup=False)
 
     def action_revert(self) -> None:
         if not self.dirty:

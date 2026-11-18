@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable, OptionList, Static
 
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
+from telenotify_tui.screens import dashboard_data as dd
 from telenotify_tui.screens import review as review_mod
 from telenotify_tui.screens.review import CheckModal, ReviewPane
 from telenotify_tui.screens.review_data import labels_path, write_label
@@ -525,3 +526,95 @@ async def test_a_value_error_from_the_data_is_a_note_not_a_crash(paths, monkeypa
         await open_review(pilot)
         assert app.is_running
         assert "can't read the state file" in note(app)
+
+
+# ------------------------------------- "match, don't send" (already sent elsewhere)
+
+async def test_keep_labels_a_match_but_never_sends(paths, state, labels, now):
+    """k: the old bot already forwarded this post. It is a true match for the
+    corpus, but the bot must not send it again, show it as pending, or count
+    it as forwarded."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        assert status_of(state, 11) == "kept"
+        assert "kept as a match, not sent" in note(app)
+        assert app.query_one("#review-empty").display          # gone from the queue
+    lines = read_labels(labels)
+    assert [(l["id"], l["label"]) for l in lines] == [("-1:11", "TRUE")]   # same label as send
+    with Store(state) as s:
+        assert s.review_counts().get("pending", 0) == 0 and s.review_counts()["kept"] == 1
+        assert s.reviews("to_send") == []                       # the bot sends only to_send
+        basra = next(c for c in s.stats(7) if c.chat == "Basra Jobs")
+        assert basra.forwarded == 1                             # only #10, which was forwarded
+        assert dd.totals(s, now - 7 * 86400).forwarded == 1
+
+
+async def test_keep_button_and_history(paths, state, labels):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        assert app.query_one("#btn-keep", Button).display
+        await pilot.click("#btn-keep")
+        await pilot.pause()
+        assert status_of(state, 11) == "kept"
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        assert [str(table.get_row_at(i)[1]) for i in range(table.row_count)] == ["match, not sent", "sent"]
+
+
+async def test_undo_keep(paths, state, labels):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending"
+        assert app.query_one("#review-list", OptionList).option_count == 1
+        assert "back in the queue" in note(app)
+    assert read_labels(labels) == []
+
+
+def test_store_keep_and_undo(state):
+    with Store(state) as s:
+        r = s.reviews("pending")[0]
+        assert s.decide(r.id, "kept")
+        assert not s.decide(r.id, "to_send")                    # decided: can't be approved after
+        assert s.undo(r.id, "to_send") == (False, "kept")
+        assert s.undo(r.id, "kept") == (True, "pending")
+
+
+async def test_dry_run_says_send_only_records(paths):
+    app = TeleNotifyApp(paths, refresh_seconds=0)   # the fixture paths are a dry run
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        line = app.query_one("#review-dryrun", Static)
+        assert line.display
+        assert "only records your choice" in str(line.content) and "nothing is forwarded" in str(line.content)
+        assert line.region.height >= 1                     # on screen, not just in the tree
+        assert "forwards nothing" in str(app.query_one("#btn-send", Button).tooltip)
+
+
+async def test_real_run_has_no_dry_run_line(paths):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        assert not app.query_one("#review-dryrun", Static).display
+        assert app.query_one("#btn-send", Button).tooltip is None
+
+
+async def test_buttons_fit_an_80_column_terminal(paths, state, now):
+    add_pending(state, 7, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        await pilot.press("k")                      # so Undo shows too
+        await pilot.pause()
+        assert app.query_one("#btn-undo", Button).display
+        assert app.query_one("#btn-keep", Button).region.width > 0
+        assert app.query_one("#btn-undo", Button).region.right <= 80

@@ -104,6 +104,27 @@ def test_duplicates_ignore_case_and_spacing():
     assert sd.duplicates(["Help  Desk", "help desk", "x", "X", "y"]) == ["Help  Desk", "x"]
 
 
+def test_dedupe_keeps_the_first_spelling_and_the_order():
+    assert sd.dedupe(["Help  Desk", "y", "help desk", "x", "X", "y"]) == (
+        ["Help  Desk", "y", "x"], ["help desk", "X", "y"])
+    assert sd.dedupe([-1, -2, -1, True, 1]) == ([-1, -2, True, 1], [-1])   # true isn't the chat 1
+
+
+def test_dedupe_all_changes_only_lists_with_repeats():
+    cfg = {"location_keywords_en": ["basra", "Basra"], "location_keywords_ar": ["التنومة", "التنومة"],
+           "certifications": ["pmp"], "chats": [-1, -1, -2], "target_chat": -1, "api_hash": "x"}
+    removed = sd.dedupe_all(cfg)
+    assert removed == {"location_keywords_en": ["Basra"], "location_keywords_ar": ["التنومة"], "chats": [-1]}
+    assert cfg == {"location_keywords_en": ["basra"], "location_keywords_ar": ["التنومة"],
+                   "certifications": ["pmp"], "chats": [-1, -2], "target_chat": -1, "api_hash": "x"}
+
+
+def test_duplicate_warning_quotes_the_words_and_says_how_to_fix():
+    probs = [p for p in sd.validate({"location_keywords_en": ["basra", "Basra"]}) if "twice" in p.message]
+    assert [p.key for p in probs] == ["location_keywords_en"]
+    assert probs[0].message.startswith('listed twice: "basra"') and "Remove duplicates" in probs[0].message
+
+
 # --------------------------------------------------------- diff and merge
 
 def test_absent_key_set_to_default_is_not_a_change():

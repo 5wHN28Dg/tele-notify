@@ -12,7 +12,8 @@ Tables (see state.nim for the authoritative schema):
   at, text_hash, raw_text, album_id): every message judged.
 * reviews (id, chat_id, msg_id, chat_title, text, reasons, role, link,
   status, at, decided_at, album_ids): the review queue;
-  status pending -> to_send -> sent, or discarded.
+  status pending -> to_send -> sent, or discarded, or kept (a match that
+  must not be sent: it already reached the channel another way).
 * meta (key, value): last_alive, started_at, mode, connection, ...
 * alerts (id, at, text): warnings the bot sent to Saved Messages.
 * chats (id, title, kind, watched, status, updated_at): the account's chats,
@@ -36,6 +37,11 @@ from typing import Self
 from .clean import clean
 
 VERDICTS = ("publish", "review", "reject")
+# What the review screen can decide: "to_send" (the bot sends it), "discarded"
+# (not a match) and "kept" (a match, but never sent: it reached the channel
+# another way, e.g. the old bot already forwarded it). The bot only sends
+# "to_send", only shows "pending" and only counts "sent" as forwarded.
+DECISIONS = ("to_send", "discarded", "kept")
 
 
 @dataclass
@@ -259,9 +265,10 @@ class Store:
         return {r[0]: r[1] for r in self._rows("SELECT status, COUNT(*) FROM reviews GROUP BY status")}
 
     def decide(self, review_id: int, status: str, from_status: str = "pending") -> bool:
-        """Approve ("to_send") or discard ("discarded") a review. False when it was
-        already decided elsewhere (another window, `telenotify review`)."""
-        if status not in ("to_send", "discarded"):
+        """Approve ("to_send"), discard ("discarded") or keep ("kept": a match,
+        but never sent) a review. False when it was already decided elsewhere
+        (another window, `telenotify review`)."""
+        if status not in DECISIONS:
             raise ValueError(f"not a decision: {status}")
         if self.db is None:
             return False
@@ -271,11 +278,11 @@ class Store:
         return cur.rowcount == 1
 
     def undo(self, review_id: int, status: str) -> tuple[bool, str | None]:
-        """Put a review decided as `status` ("to_send" / "discarded") back to
+        """Put a review decided as `status` ("to_send" / "discarded" / "kept") back to
         pending, but only if it still has that status: once the bot has sent an
         approved post ("sent") it can't be taken back. Returns (undone, the
         status it has now; None when the row is gone)."""
-        if status not in ("to_send", "discarded"):
+        if status not in DECISIONS:
             raise ValueError(f"not a decision: {status}")
         if self.db is None:
             return False, None

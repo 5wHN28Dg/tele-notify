@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+DUPLICATE_FIX = " (press D or \"Remove duplicates\" to keep one of each)"
+
 MISSING: Any = object()   # "key not in the file" (the bot then uses its default)
 
 # Keyword lists: key -> what it means (shown under the list).
@@ -146,6 +148,49 @@ def duplicates(items: list) -> list[str]:
     return dups
 
 
+def _dedupe_key(x: Any) -> Any:
+    """What counts as "the same" entry: words ignoring case and spacing, other values as they are."""
+    if isinstance(x, str):
+        return ("str", norm_keyword(x))
+    if isinstance(x, bool):
+        return ("bool", x)
+    return (type(x).__name__, x) if isinstance(x, (int, float)) else None
+
+
+def dedupe(items: list) -> tuple[list, list]:
+    """(the list with each entry once, keeping its first spelling and the
+    order; the entries taken out). Entries that can't be compared stay."""
+    seen: set = set()
+    kept: list = []
+    removed: list = []
+    for x in items:
+        k = _dedupe_key(x)
+        if k is not None and k in seen:
+            removed.append(x)
+            continue
+        if k is not None:
+            seen.add(k)
+        kept.append(x)
+    return kept, removed
+
+
+DEDUPE_KEYS = (*LIST_KEYS, "chats")
+
+
+def dedupe_all(cfg: dict) -> dict[str, list]:
+    """Take repeated entries out of every list in `cfg` (in place): the first
+    spelling of each stays. Returns {key: the entries taken out}."""
+    out: dict[str, list] = {}
+    for key in DEDUPE_KEYS:
+        v = cfg.get(key)
+        if isinstance(v, list):
+            kept, removed = dedupe(v)
+            if removed:
+                cfg[key] = kept
+                out[key] = removed
+    return out
+
+
 def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
@@ -187,7 +232,8 @@ def validate(cfg: dict) -> list[Problem]:
             p.append(Problem(key, "has an empty entry", False))
         dups = duplicates(v)
         if dups:
-            p.append(Problem(key, "listed twice: " + ", ".join(dups), False))
+            p.append(Problem(key, "listed twice: " + ", ".join(f'"{d}"' for d in dups)
+                             + DUPLICATE_FIX, False))
 
     def has_words(keys: tuple[str, ...]) -> bool:
         return any(isinstance(cfg.get(k), list) and any(isinstance(x, str) and x.strip() for x in cfg[k])
@@ -224,7 +270,7 @@ def validate(cfg: dict) -> list[Problem]:
         if bad:
             p.append(Problem("chats", "not chat IDs (whole numbers): " + ", ".join(bad), True))
         elif len(set(chats)) != len(chats):
-            p.append(Problem("chats", "a chat is listed twice", False))
+            p.append(Problem("chats", "a chat is listed twice" + DUPLICATE_FIX, False))
         if not chats:
             p.append(Problem("chats", "no chats are watched: the bot will read nothing", False))
     t = cfg.get("target_chat", MISSING)
