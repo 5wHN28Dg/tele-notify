@@ -1,2 +1,0 @@
-[console_scripts]
-telenotify-tui = telenotify_tui.__main__:main

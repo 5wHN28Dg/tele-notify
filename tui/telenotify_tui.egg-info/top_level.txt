@@ -1,1 +1,0 @@
-telenotify_tui
