@@ -11,6 +11,17 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 
 `ctrl+r` refreshes the tab, `ctrl+q` quits (it asks first if Settings has unsaved changes).
 
+### The tab table
+
+What each tab is for, used by the [UI and UX policy](../docs/UI-UX-POLICY.md) (rules R1, R2, R13 and R14). Approved by the owner on 2026-11-18. Rows say what must be true; today's gaps are listed in the first audit.
+
+| Tab | Main tasks | Must be visible at 80 × 24 (no scrolling, no focus change) | Main action: key / click |
+|---|---|---|---|
+| Dashboard | see whether the bot is healthy; start / stop / restart it; check alerts; read the numbers for a period (pick it) | service state (running / stopped) and the Start, Stop and Restart buttons; dry run or real; Telegram connection; pending reviews; alert count and age of the last one (or "no alerts"); the period name and its judged / publish / review / reject / forwarded counts | `p` picks the period / click the period picker |
+| Review | read the next unsure post and decide: send, discard, match no send (`k`), undo; open its link | dry run or real; how many are waiting; the post's chat, reasons and the start of its text; the Send, Match no send and Discard buttons, and Undo after a decision | `s` sends / click Send |
+| Search | find a judged post and see why it got its verdict; re-judge it | the search box; the first results with their verdicts; the chosen result's verdict and reasons | typing in the search box searches / click a result row opens it |
+| Settings | add, edit or delete a keyword; watch or unwatch a chat; save or revert; test on the corpus | the saved / unsaved marker and the problem count in the status bar; Save, Test, Revert; in the list sections: the list picker, the chosen list, Edit / Delete / Add; in Chats: the chat table | `ctrl+s` saves / click Save |
+
 ### Numbers over a period
 
 The Activity box on the Dashboard counts posts over a period: today, the last 7 days (the default), the last 30 days, this month, this year, all time (since the first post the bot judged; the date is shown under the box) or a custom range. Press `p` (or click the picker) to choose one; press `d` (or click `Dates…`, or pick "Custom range…") to type a start and end day as `YYYY-MM-DD`. Both days are included, whole, in local time. Every period is made of whole local days: "the last 7 days" is today and the 6 days before it, from midnight, so it can cover up to a day more than `telenotify stats 7`, which counts the last 7 × 24 hours. If the first post's time in the state file is unreadable, all time says "start unknown" and starts at the earliest readable one. Picking "Custom range…" again while a custom range is shown opens the dates form again. The per-channel table (`c`) follows the same period.
