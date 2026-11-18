@@ -91,7 +91,7 @@ deploy/tele-notify.service systemd user unit
 .github/workflows/nim.yml  CI: style check, build, tests, CLI smoke test
 ```
 
-The Python files (`main.py`, `main_simple.py`, `tools/`) are untouched. They keep running in production until stage 4.
+The Python files (`main.py`, `main_simple.py`, `tools/`) were left untouched and kept running in production until the switch in stage 4; they're now in `legacy/`.
 
 ---
 
@@ -539,8 +539,12 @@ It reads the text with its punctuation, so "Contract No. 12. Strong experience r
 
 ### The switch (needs you)
 
-1. Look at `telenotify compare` after the week, and at `telenotify review --dry-run`.
-2. Stop the Python bot.
-3. Install and start the Nim service (`deploy/tele-notify.service`, without `--dry-run`).
-4. Move `main.py`, `main_simple.py`, `requirements.txt` to `legacy/`.
+1. Look at `telenotify compare` after the trial, and at `telenotify review --dry-run`.
+2. Stop the Python bot (Ctrl-C in its terminal). Don't run both for real: each would forward the same posts.
+3. Stop the dry run: `systemctl --user disable --now tele-notify-dryrun`. Both use the same TDLib login, and only one program can hold it at a time.
+4. Install the real service: copy `deploy/tele-notify.service` to `~/.config/systemd/user/`, point its `--config:` at your config, then `systemctl --user daemon-reload && systemctl --user enable --now tele-notify`. Keep `loginctl enable-linger` on so it runs while you're logged out.
+5. Watch the first minutes: `journalctl --user -u tele-notify -f`. The real bot starts with its own empty `state.sqlite3`, so it judges whatever is unread. The Python bot marked what it handled as read, so that's only what it missed (a crashed chat, for example).
+6. Merge the `legacy/` move (the Python files go to `legacy/`; the READMEs say the Nim bot is the one that runs).
+
+To go back: `systemctl --user disable --now tele-notify`, then start the Python bot from `legacy/` as before.
 

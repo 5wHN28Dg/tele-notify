@@ -24,12 +24,12 @@
 
 <div dir="rtl">
 
-## الحالة: إعادة كتابة بلغة Nim
+## الحالة: أُعيدت كتابته بلغة Nim
 
 | | ما هو | الحالة |
 |---|---|---|
-| **الإصدار 3، بايثون** (`main.py`) | البوت الذي يعمل حاليًا | يعمل، ومجمّد: لا ميزات جديدة |
-| **الإصدار 4، Nim** (`src/`) | النسخة الجديدة، تُبنى على مراحل | اكتملت المراحل 1 إلى 3: الفلتر، وقراءة الصور، وقراءة مواقع الوظائف، والاستماع لتيليجرام. المرحلة 4، تجربته بجانب بوت بايثون، جارية (`telenotify compare`) |
+| **الإصدار 4، Nim** (`src/`) | البوت الذي يعمل حاليًا | مكتمل: الفلتر، وقراءة الصور، وقراءة مواقع الوظائف، والاستماع لتيليجرام، وقائمة المراجعة، والإحصائيات |
+| **الإصدار 3، بايثون** ([`legacy/`](legacy/)) | البوت القديم | أُوقف بعد تجربة جنبًا إلى جنب؛ محفوظ للرجوع إليه |
 
 سبب إعادة الكتابة أن فلتر بايثون كان ينشر الكثير من المنشورات الخاطئة: في اختبار على 196 منشورًا حقيقيًا، كان 96 من أصل 115 منشورًا نشرها خاطئًا، مقابل 4 فقط في الفلتر الجديد. [تقرير المشاكل](docs/problems-report.md) يشرح ما كان خاطئًا، و[دليل إعادة الكتابة](docs/rewrite-guide.md) يشرح كيف يعمل الكود الجديد (كلاهما بالإنجليزية).
 
@@ -92,7 +92,7 @@ nimble build -d:release
 
 الأمر `nimble test` يشغّل الاختبارات.
 
-## تشغيل بوت Nim (نسخة تجريبية)
+## تشغيل البوت
 
 بوت Nim يتصل بتيليجرام عبر [TDLib](https://core.telegram.org/tdlib)، المكتبة الرسمية من تيليجرام. ابنِها مرة واحدة (حوالي ساعة على نواة واحدة؛ تحتاج cmake ومترجم C++ وملفات zlib وOpenSSL):
 
@@ -114,7 +114,6 @@ JOBS=2 deploy/build-tdlib.sh      # يضع lib/libtdjson.so بجانب البر�
 ./telenotify run --config:config.json            # التشغيل الفعلي
 ./telenotify review --config:config.json         # المنشورات غير الواضحة: وافق أو تجاهل (يعمل والبوت شغّال)
 ./telenotify stats --config:config.json --days:7 # ما جلبته كل قناة
-./telenotify compare --config:config.json        # التجربة مقارنةً ببوت بايثون (المرحلة 4)
 ```
 
 <div dir="rtl">
@@ -127,47 +126,13 @@ JOBS=2 deploy/build-tdlib.sh      # يضع lib/libtdjson.so بجانب البر�
 
 للتشغيل التلقائي، راجع [`deploy/tele-notify.service`](deploy/tele-notify.service).
 
-## تشغيل البوت (بايثون، إلى أن يكتمل الإصدار 4)
+## بوت بايثون القديم
 
-1. احصل على بيانات Telegram API: الـ API ID والـ API hash من [my.telegram.org](https://my.telegram.org) ([الطريقة](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).
-2. التثبيت:
-
-</div>
-
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-```
-
-<div dir="rtl">
-
-   وتحتاج tesseract أيضًا كما في الأعلى. لمستخدمي أندرويد: راجع [الويكي](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions).
-
-3. اعرف معرّفات (IDs) محادثاتك بتشغيل هذا الكود مرة واحدة، بعد إدخال الـ API ID والـ hash:
-
-</div>
-
-```python
-from telethon import TelegramClient
-client = TelegramClient("test", API_ID, "API_HASH")
-async def main():
-    async for d in client.iter_dialogs():
-        print(f"{d.id:>15}: {d.title}")
-with client:
-    client.loop.run_until_complete(main())
-```
-
-<div dir="rtl">
-
-4. املأ ملف `config.json` (انظر الجدول أدناه)، ثم شغّل `python main.py`. في المرة الأولى سيطلب رقم هاتفك وكود الدخول.
-
-يمرّ البوت أولًا على المنشورات غير المقروءة، ثم يراقب المنشورات الجديدة. المنشور المطابق يُحوَّل إلى `target_chat`، إلا إذا كان تكرارًا لأحد آخر 10 منشورات محوَّلة. المنشورات غير الواضحة تذهب إلى رسائلك المحفوظة (Saved Messages) لتراجعها.
-
-الملف `main_simple.py` هو النسخة الأصلية الأبسط: يطابق المنشور إذا احتوى على كلمة من كل قائمة من ثلاث قوائم. يصلح لأي موضوع، وليس للوظائف فقط.
+نسخة بايثون (الإصدار 3) موجودة في مجلد [`legacy/`](legacy/) مع ملف README خاص بها، وتقرأ ملف `config.json` نفسه.
 
 ## الإعدادات
 
-النسختان تقرآن ملف `config.json` نفسه:
+يقرأ البوت ملف `config.json` (وكان بوت بايثون القديم يقرأ الملف نفسه):
 
 | المفتاح | ما هو |
 |---|---|
@@ -179,7 +144,7 @@ with client:
 | `mid_level_general_role_en/_ar` | مسمياتك الوظيفية واختصاصاتك: electrical engineer، هندسة حاسبات… |
 | `location_keywords_en/_ar` | الأماكن المقبولة: البصرة وأقضيتها، الحقول النفطية، "عن بعد"… |
 | `certifications` | شهادات تستبعد المنشور إذا كانت *مطلوبة* |
-| `recent_messages` | يستخدمها بوت بايثون لكشف التكرار؛ لا تعدّلها |
+| `recent_messages` | يستخدمها بوت بايثون القديم فقط؛ بوت Nim يتجاهلها |
 
 النسخة الجديدة تضيف مفاتيح اختيارية مثل `publish_when_unsure` و`max_experience_years` و`data_dir` و`dry_run` و`alerts`، وهي مذكورة في [دليل إعادة الكتابة](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). كلماتي المفتاحية موجودة في [`example_keywords.txt`](example_keywords.txt).
 
