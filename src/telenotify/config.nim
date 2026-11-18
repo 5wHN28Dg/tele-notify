@@ -48,7 +48,8 @@ type
     streetBefore*, streetAfter*, locationMarkers*: KeywordList
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
-    studentsOnly*, graduateWords*, programmes*, headlineSeniority*: KeywordList
+    studentsOnly*, graduateWords*, programmes*, headlineProgrammes*, headlineSeniority*: KeywordList
+    cvHeadings*, freshGradWelcome*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -114,6 +115,9 @@ proc parseConfig*(j: JsonNode): Config =
   result.studentsOnly = toKeywords(studentsOnlyPhrases)
   result.graduateWords = toKeywords(graduateWords)
   result.programmes = toKeywords(programmeWords)
+  result.headlineProgrammes = toKeywords(headlineProgrammeWords)
+  result.cvHeadings = toKeywords(cvHeadings)
+  result.freshGradWelcome = toKeywords(freshGradWelcome)
   # "الوجبه الاولي" / "المرحله الاولي": on a headline, "first" is rarely "senior"
   var headline: seq[string]
   for w in @seniorityWords & j.strings("extra_seniority"):

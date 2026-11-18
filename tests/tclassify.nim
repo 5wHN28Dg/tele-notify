@@ -345,9 +345,51 @@ In this role you will support the project manager on site.""") == vPublish
   test "the programme exemption only counts at the top":
     check verdict("""RSK Iraq – HSE Lead (Basra)
 We are looking for an HSE Lead to serve as our on-site authority.
-Degree in Electrical Engineering, fresh graduate welcome.
+Degree in Electrical Engineering, graduate preferred.
 We offer a professional development program for all staff.""") == vReview
     check verdict("""Baker Hughes LEAD Program 2027 – Basra
 Graduate opportunity for fresh graduates
 Location: Basra, Iraq
 Bachelor's degree in Electrical Engineering.""") == vPublish
+
+  test "adversarial review: real entry-level posts are not held back":
+    check verdict("""IT support technician wanted at our Basra campus.
+You will help university students and staff with laptops, Wi-Fi and printers.
+Apply by email.""") == vPublish
+    check verdict("""Summer internship - Electrical Engineering
+Open to final year students or those who graduated in 2025.
+Location: Basra. Apply now.""") == vPublish
+    check verdict("""Junior IT support - Basra
+Current students will not be considered; you must hold your degree already.
+Apply now.""") == vPublish
+    check verdict("""Who am I looking for?
+A junior IT support technician in Basra, no experience required.
+Apply via email.""") == vPublish
+    check verdict("""Ali Hassan - Senior Talent Acquisition Partner at KBR
+We are hiring a graduate engineer with a degree in Engineering (electrical).
+Fresh graduates welcome. Location: Basra. Apply now.""") == vPublish
+    check verdict("""اعلان صادر عن مكتب المدير العام لشركة نفط البصرة
+تعلن الشركة عن حاجتها الى خريجي هندسة كهرباء من حديثي التخرج للعمل في البصرة""") == vPublish
+    check verdict("""فرصة تدريب في البصرة
+مطلوب متدرب هندسة حاسبات
+يستثنى الطلبة الحاليين""") == vPublish
+    check verdict("""فرصة تدريب صيفي في البصرة لطلبة الجامعات والمتخرجين حديثا
+التخصص: هندسة حاسبات""") == vPublish
+    check verdict("""Junior IT support - Basra
+Applicants must have finished their degree. Not open to current students.
+Apply now.""") == vPublish
+    check verdict("""Help desk technician (Basra), entry level.
+Please include a short career objective in your CV and apply by email.""") == vPublish
+    check verdict("""Expert Solutions Iraq
+We are hiring someone with a degree in Engineering. Fresh graduates welcome. Location: Basra. Apply now.""") == vPublish
+    check verdict("""Junior IT support in Basra, apply now. Open to final year students as well as graduated engineers.""") == vPublish
+
+  test "adversarial review: senior or students-only posts still held back":
+    check verdict("""Internship - Basra. Apply now.
+Requirements: degree in Engineering (in progress); open only to students in their final year.""") == vReview
+    check verdict("""فرصة تدريب في البصرة
+مطلوب متدرب هندسة حاسبات
+للطلبة فقط""") == vReview
+    check verdict("""Lead Engineer - Basra
+Part of the Majnoon expansion programme. Apply now.
+Requirements: degree in Engineering. Probation period applies.""") == vReview
