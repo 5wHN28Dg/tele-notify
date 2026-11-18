@@ -10,7 +10,7 @@
 ## | `processed` | every message judged: chat, id, verdict, role, reasons, when. Lets the bot skip messages it has already seen (restarts, the startup backlog overlapping live updates) and gives the numbers for `telenotify stats` (#12–#15) |
 ## | `published` | the text of what was published, for duplicate detection |
 ## | `reviews` | the review queue: unclear posts waiting for you to send or discard them (`telenotify review`). Your decisions double as labels for the test corpus |
-## | `meta` | small values, e.g. the last heartbeat (for downtime alerts) |
+## | `meta` | small values: the last heartbeat (downtime alerts), the watched chats you lost access to (`chat_access:<chat>`) |
 ##
 ## You can open the file with any SQLite tool (`sqlite3 state.sqlite3`).
 

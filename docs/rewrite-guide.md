@@ -467,7 +467,7 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 | `processed` | every judged message with verdict, role, reasons and action |
 | `published` | what was published, for duplicate checks |
 | `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`). Those decisions are labels for the corpus: stage 5 adds an export |
-| `meta` | the heartbeat |
+| `meta` | the heartbeat, and which watched chats you lost access to (`chat_access:<chat id>`) |
 
 `config.json` is now only *read*. The old bot rewrote it on every forward, which could throw away your edits.
 
@@ -476,6 +476,10 @@ Open it with `sqlite3 ~/.local/share/tele-notify/state.sqlite3`. For example, `S
 ### Downtime alerts (#3, #16)
 
 Every minute the bot saves a heartbeat. At start-up, a heartbeat older than `alert_after_minutes` (default 10) means it was down. When TDLib reports the connection back after a long gap, that counts too. Either way you get a message in Saved Messages, e.g. "⚠️ tele-notify: was not running for 2h 6m (since 2026-11-18 02:17). Back now." Set `"alerts": false` to only log them.
+
+### Chats you can't read any more (#16)
+
+A channel or group that bans you (or that you leave) simply stops sending you its posts; nothing fails, so the bot used to go quiet about it. Now, for every chat in `chats`, you get an alert when this account was banned, is no longer a member, the chat can't be opened or read at all (TDLib errors such as `CHANNEL_PRIVATE` or "Chat not found"; a timeout or a lost connection doesn't count), or a basic group became a supergroup with a new id (the alert gives the id to put in `config.json`). It's checked at start-up (`getChat`, then `getSupergroup` / `getBasicGroup` for this account's member status), on TDLib's live `updateSupergroup` / `updateBasicGroup`, and whenever a backlog read fails. TDLib repeats those updates on every start, so the last state alerted per chat is kept in the `meta` table (`chat_access:<chat id>`): one alert per change, also across restarts. When you can read the chat again (a member again, or its backlog was read), the state is cleared and the log says "can read X again".
 
 ### Building TDLib and running as a service
 

@@ -98,6 +98,7 @@ What's different from the Python bot:
 - Every message is remembered (in `~/.local/share/tele-notify/state.sqlite3`), so nothing is judged or forwarded twice, even across restarts.
 - Duplicates are checked against everything published in the last 14 days, by link and by text.
 - If the bot was down or offline for more than 10 minutes, it tells you in Saved Messages when it's back.
+- If a watched channel or group bans you, you leave it, or it can't be read any more, it tells you in Saved Messages (once), since that chat's posts would otherwise just stop.
 
 To start it automatically, see [`deploy/tele-notify.service`](deploy/tele-notify.service).
 

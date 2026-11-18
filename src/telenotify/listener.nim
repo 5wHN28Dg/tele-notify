@@ -30,11 +30,14 @@
 ## * **Edits.** A rejected post whose text is edited later ("job coming
 ##   soon" → the real ad) is judged again. Published or reviewed posts are
 ##   left alone.
+## * **Lost chats** (#16): if a watched chat bans you, you leave it, or it
+##   can't be read any more, you're told once (checked at start-up, on
+##   TDLib's live updates, and when its backlog can't be read).
 ## * **Downtime alerts** (#3, #16): a heartbeat is saved every minute; on
 ##   start-up, and when the connection comes back, a long gap is reported
 ##   to your Saved Messages.
 
-import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm]
+import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
 import config, classify, gather, fetch, telegram, state, dedup, boards
 
 type
@@ -57,6 +60,9 @@ type
     log*: proc (line: string) {.closure, gcsafe.}
     downSince: int64
     selfChat: int64
+    titles*: Table[int64, string]   # watched chats' titles, for alerts
+    checkingAccess: bool            # the start-up access check is running
+    accessChecked: HashSet[int64]   # chats it has looked at
 
 proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: Ocr,
                   dryRun: bool): Listener =
@@ -81,9 +87,112 @@ proc alert*(l: Listener, text: string) {.async.} =
   if not l.cfg.alerts: return
   try:
     if l.selfChat == 0: l.selfChat = await l.tg.selfChat()
-    await l.tg.sendText(l.selfChat, "⚠️ tele-notify: " & text)
+    # two bots (a dry run beside the real one) both alert: say which
+    await l.tg.sendText(l.selfChat, "⚠️ tele-notify" & (if l.dryRun: " [dry run]" else: "") & ": " & text)
   except CatchableError as e:
     l.say "   (could not send the alert: " & e.msg & ")"
+
+# ------------------------------------------------- lost access to a chat (#16)
+
+proc accessKey(chat: int64): string = "chat_access:" & $chat
+
+proc accessText*(chat: int64, title: string, a: ChatAccess, detail = ""): string =
+  ## The alert for a watched chat this account can't read any more.
+  case a.status
+  of "banned":
+    &"you were banned from {title}: tele-notify can't read it any more. " &
+      "Remove it from config.json, or rejoin it if you can."
+  of "left":
+    &"you're no longer a member of {title}: tele-notify may not get its posts any more. " &
+      "Rejoin it, or remove it from config.json."
+  of "upgraded":
+    &"{title} became a supergroup with a new id, {a.newChat}: tele-notify no longer gets " &
+      &"its posts. Replace {chat} with {a.newChat} in \"chats\" in config.json."
+  else:
+    &"{title} can't be read" & (if detail != "": &" ({detail})" else: "") &
+      ": tele-notify gets nothing from it any more. Remove it from config.json, or rejoin it."
+
+proc onChatAccess*(l: Listener, chat: int64, access: ChatAccess, detail = "",
+                   live = false) {.async.} =
+  ## This account's access to a chat, from a live TDLib update, the
+  ## start-up check or a failed backlog read. For a watched chat that can't
+  ## be read any more, alert once per state: TDLib repeats these updates on
+  ## every start, so the last state alerted is kept in the state database.
+  ## Never raises. `live`: from a TDLib update (not the start-up check or a read).
+  if chat notin l.cfg.chats or access.status == "": return
+  let title = if access.title != "": access.title else: l.titles.getOrDefault(chat, &"chat {chat}")
+  let key = accessKey(chat)
+  var a = access
+  var detail = detail
+  try:
+    let before = l.state.getMeta(key)
+    if a.status == "ok":
+      # Membership back. "unavailable" (the chat couldn't be read) is only
+      # cleared by actually reading it (chatReadable): a member can still
+      # get "can't access the chat".
+      if before notin ["", "unavailable"]:
+        l.state.setMeta(key, "")
+        l.say &"✅ can read {title} again"
+      return
+    # While the start-up check runs, a live update for a chat it hasn't
+    # reached yet is skipped: the check reads the same state (and knows a
+    # public channel you never joined isn't a lost chat).
+    if live and l.checkingAccess and chat notin l.accessChecked: return
+    # A public channel (it has a username) is readable without being a
+    # member: the bot opens every watched chat. Not an alert.
+    if a.status == "left" and a.public:
+      if before == "":
+        l.state.setMeta(key, "left-public")
+        l.say &"   not a member of {title} (fine: it's public)"
+      return
+    if a.status == "left" and before == "left-public":
+      # it lost its username: private now, and this account isn't a member
+      a = ChatAccess(title: a.title, status: "unavailable")
+      detail = "it's no longer public and this account isn't a member"
+    if before == a.status: return
+    l.state.setMeta(key, a.status)   # before the await: no double alert
+  except CatchableError as e:
+    l.say &"   could not record access to {title}: {e.msg}"
+    return
+  await l.alert(accessText(chat, title, a, detail))
+
+proc chatReadable(l: Listener, chat: int64, title: string) =
+  ## The chat's messages were just read: clear an "unavailable" state.
+  try:
+    if l.state.getMeta(accessKey(chat)) == "unavailable":
+      l.state.setMeta(accessKey(chat), "")
+      let t = if title != "": title else: l.titles.getOrDefault(chat, &"chat {chat}")
+      l.say &"✅ can read {t} again"
+  except CatchableError as e:
+    l.say &"   could not record access to chat {chat}: {e.msg}"
+
+proc unreadFailed(l: Listener, chat: int64, e: ref CatchableError) {.async.} =
+  ## Reading a chat failed. If it can't be read any more (not just
+  ## offline), say so.
+  if isAccessError(e.msg):
+    # A known ban or removal already explains it: "unavailable" would
+    # replace it and both would alert again after every restart.
+    var known = ""
+    try: known = l.state.getMeta(accessKey(chat))
+    except CatchableError: discard
+    if known in ["banned", "left", "upgraded"]: return
+    # only TDLib's message, without the async traceback debug builds add
+    await l.onChatAccess(chat, ChatAccess(status: "unavailable"), e.msg.splitLines()[0].strip)
+
+proc checkWatchedChats*(l: Listener) {.async.} =
+  ## At start-up: is this account still a member of every watched chat?
+  l.checkingAccess = true
+  defer: l.checkingAccess = false
+  for chat in l.cfg.chats:
+    if l.stop[]: break
+    try:
+      let a = await l.tg.chatAccess(chat)
+      if a.title != "": l.titles[chat] = a.title
+      await l.onChatAccess(chat, a)
+    except CatchableError as e:
+      if isAccessError(e.msg): await l.unreadFailed(chat, e)
+      else: l.say &"   could not check access to chat {chat}: " & e.msg.splitLines()[0]
+    l.accessChecked.incl chat
 
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
@@ -256,6 +365,7 @@ proc processQueue*(l: Listener) {.async.} =
       # Telegram wants the ids in increasing order (forwardMessages)
       group.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))
     await l.handleGroup(group)
+    l.chatReadable(m.chatId, m.chatTitle)   # a post arrived: the chat is readable
     # Marking a message read moves Telegram's read marker past everything
     # older: in a chat whose backlog couldn't be read yet, that backlog
     # would be lost to the retry. Its messages are marked once it works.
@@ -280,6 +390,8 @@ proc bootstrap*(l: Listener) {.async.} =
       if l.stop[]: break
       try:
         let u = await l.tg.unread(chat)
+        # only messages actually read prove access (no unread: history isn't fetched)
+        if u.messages.len > 0: l.chatReadable(chat, u.messages[0].chatTitle)
         if u.messages.len > 0:
           l.say &"{u.messages.len} unread in {u.messages[0].chatTitle}"
         if u.cut:
@@ -289,6 +401,7 @@ proc bootstrap*(l: Listener) {.async.} =
       except CatchableError as e:
         l.say &"   could not read chat {chat}: {e.msg} (will try again every minute)"
         l.retryChats.add chat
+        await l.unreadFailed(chat, e)
     l.backlogTotal = l.queue.len
     l.backlogDone = 0
     await l.processQueue()
@@ -309,6 +422,8 @@ proc retryFailedChats*(l: Listener) {.async.} =
       continue
     try:
       let u = await l.tg.unread(chat)
+      # only messages actually read prove access (no unread: history isn't fetched)
+      if u.messages.len > 0: l.chatReadable(chat, u.messages[0].chatTitle)
       if u.messages.len > 0:
         l.say &"{u.messages.len} unread in {u.messages[0].chatTitle} (read on retry)"
       if u.cut:
@@ -318,6 +433,7 @@ proc retryFailedChats*(l: Listener) {.async.} =
     except CatchableError as e:
       l.say &"   could not read chat {chat} again: {e.msg}"
       still.add chat
+      await l.unreadFailed(chat, e)
   # a chat that keeps failing (left, banned) is tried less and less often,
   # up to every 30 minutes
   if still.len > 0 and still.len == l.retryChats.len:
