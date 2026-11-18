@@ -537,6 +537,16 @@ Some channels post "job ad coming soon" and edit the real ad in later. When a me
 
 It reads the text with its punctuation, so "Contract No. 12. Strong experience required" isn't cancelled by the "No" of another sentence. It's a heuristic: wordings it doesn't know ("extensive oil and gas experience", "خبرة كافية") still publish, as before. The corpus numbers didn't change (it was a case the corpus didn't have); the post from the first run now goes to review.
 
+### Four false publishes from the corpus
+
+The corpus still had four posts the filter published wrongly. Each became a rule, with a test of an invented post like it:
+
+- **Training only for current students** ("ان يكون احد طلبة المرحلة الثانية او الثالثة"). You've graduated, so a post limited to students goes to review, unless it also mentions graduates ("للطلبة والخريجين" still publishes). Only wording for people who *have* graduated counts: "expected to graduate in 2027" and "مشروع التخرج" are about students. "Current students are not eligible", "not open to current students" and "يستثنى الطلبة الحاليين" are the opposite and don't count. Wordings that also describe the work ("help university students with their laptops") aren't in the list. The wordings are `studentsOnlyPhrases` and `graduateWords` in `defaults.nim`.
+- **A CV.** A 15-year-old's CV got through because "get the job done" counted as job wording and "volunteer" as entry level. A line that is only a CV heading ("WHO AM I?", "Career objective:", "نبذه عني") now marks a job seeker, like "my name is" already did. Only as a line of its own: "Who am I looking for?" and "include a career objective in your CV" are employers.
+- **"HSE Lead".** Your role only appeared as a field in the requirements ("Degree in Engineering"), so the old senior-title check, which looks for a seniority word *next to your role*, saw nothing. Now, when the match is only a field, a seniority word on the **headline** (the first line) holds the post back. Only the headline: lower lines say "support the project manager", and "الوجبة الاولى" ("first batch") isn't "senior". It doesn't apply when the post explicitly welcomes fresh graduates: then the senior word on the headline is someone else's (a "Senior Talent Acquisition Partner" posting it, "مكتب المدير العام" announcing it). Graduate schemes are exempt too, when the top three lines say "development/graduate programme" or the headline itself says "Program": Baker Hughes calls its scheme "LEAD". "Part of the expansion programme" doesn't count.
+
+Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
+
 ### The switch (needs you)
 
 1. Look at `telenotify compare` after the week, and at `telenotify review --dry-run`.

@@ -48,6 +48,8 @@ type
     streetBefore*, streetAfter*, locationMarkers*: KeywordList
     requiredMarkers*, optionalMarkers*, applyAnyway*, notAJob*: KeywordList
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
+    studentsOnly*, graduateWords*, programmes*, headlineProgrammes*, headlineSeniority*: KeywordList
+    cvHeadings*, freshGradWelcome*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -110,6 +112,17 @@ proc parseConfig*(j: JsonNode): Config =
   result.titleMarkers = toKeywords(titleMarkers)
   result.seekerPhrases = toKeywords(seekerPhrases)
   result.employerPhrases = toKeywords(employerPhrases)
+  result.studentsOnly = toKeywords(studentsOnlyPhrases)
+  result.graduateWords = toKeywords(graduateWords)
+  result.programmes = toKeywords(programmeWords)
+  result.headlineProgrammes = toKeywords(headlineProgrammeWords)
+  result.cvHeadings = toKeywords(cvHeadings)
+  result.freshGradWelcome = toKeywords(freshGradWelcome)
+  # "الوجبه الاولي" / "المرحله الاولي": on a headline, "first" is rarely "senior"
+  var headline: seq[string]
+  for w in @seniorityWords & j.strings("extra_seniority"):
+    if w notin ["اول", "اولي"]: headline.add w
+  result.headlineSeniority = toKeywords(headline, strict = true)
   result.notAPlaceAfter = toKeywords(notAPlaceAfter)
   result.jobNouns = toKeywords(jobNouns)
   result.roleExclusions = toKeywords(@roleExclusions & j.strings("extra_role_exclusions"))

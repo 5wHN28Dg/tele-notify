@@ -212,6 +212,42 @@ proc anySeniorityOnTitleLines(lines: seq[string], cfg: Config): bool =
     if isTitle[i] and line.flatten.contains(cfg.seniority): return true
   false
 
+proc seniorHeadline(lines: seq[string], cfg: Config): string =
+  ## The headline (first non-empty line) if it has a seniority word
+  ## ("RSK Iraq – HSE Lead (Basra)"), or "". Used when your role only shows
+  ## up as a field in the requirements ("Degree in Engineering"): then the
+  ## headline is the job. Only the headline: lower lines say "support the
+  ## project manager". Graduate schemes named like a title ("LEAD Field
+  ## Engineering ... Development Program") are exempt when the top three
+  ## lines call it a programme.
+  var top: seq[string]
+  for line in lines:
+    if line.strip.len > 0: top.add line.strip
+    if top.len == 3: break
+  if top.len == 0 or not top[0].flatten.contains(cfg.headlineSeniority): return ""
+  if top[0].flatten.contains(cfg.headlineProgrammes): return ""
+  for line in top:
+    if line.flatten.contains(cfg.programmes): return ""
+  top[0]
+
+let studentsNotEligible = re2(r"^\s*(?:are\s+|is\s+|will\s+|may\s+)?(?:not\s+(?:be\s+)?(?:eligible|accepted|considered)|excluded|cannot|can't|need\s+not|غير\s+(?:مشمول|مقبول)|مستثن|لا\s+يحق|لا\s+يشمل|لا\s+يقبل)")
+
+## "Not open to current students", "يستثنى الطلبة الحاليين": up to three
+## words between the exclusion and the phrase.
+let studentsExcludedBefore = re2(r"(?:^|\s)(?:not|no|except|excluding|يستثني|تستثني|عدا|باستثناء|لا\s+يشمل|لا\s+يقبل)(?:\s+\S+){0,3}\s*$")
+
+proc onlyForStudents(flat: string, cfg: Config): bool =
+  ## A students-only phrase that isn't "current students are not eligible",
+  ## and no wording for people who've graduated.
+  if flat.contains(cfg.graduateWords): return false
+  for h in flat.hits(cfg.studentsOnly):
+    let before = flat.runeSafe(h.start - 50, h.start)
+    let after = flat.runeSafe(h.stop, h.stop + 40)
+    if after.contains(studentsNotEligible) or before.contains(studentsExcludedBefore):
+      continue
+    return true
+  false
+
 # --------------------------------------------------------------- blocks
 
 type WholePostPlace = object
@@ -292,9 +328,17 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
                 # the normal text: `flatten` turns ". : ," into spaces, and the
                 # rule needs sentence boundaries
                 else: (b.lines & header.lines).join("\n").toLowerAscii.replace("-", " ").strongExperienceAsked)
+  # "ان يكون احد طلبة المرحلة الثالثة": you've graduated, so a post only for
+  # current students is held back, unless it also mentions graduates.
+  let studentsOnly = flatAll.onlyForStudents(cfg)
+  if senior == "" and best.kind == rkField and not flatAll.contains(cfg.freshGradWelcome):
+    senior = seniorHeadline(b.lines & header.lines, cfg).short(50)
   if positive:
     if strong != "":
       result.reasons.add "but asks for '" & strong & "'"
+      result.verdict = vReview
+    elif studentsOnly:
+      result.reasons.add "but only for current students"
       result.verdict = vReview
     elif senior != "":
       # "KBR is hiring an IT Support Lead" + "IT support" again lower down
@@ -303,7 +347,7 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
     else:
       result.verdict = vPublish
   elif cfg.publishWhenUnsure and best.kind != rkField and senior == "" and strong == "" and
-      not anySeniorityOnTitleLines(b.lines, cfg):
+      not studentsOnly and not anySeniorityOnTitleLines(b.lines, cfg):
     result.verdict = vPublish
     result.reasons.add "no sign of level either way (publish_when_unsure)"
   else:
@@ -314,6 +358,15 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
 
 let jobSeeker = re2(r"(?:محتاج|محتاجه|ابحث|باحث|باحثه|ادور|اريد|احتاج)(?:\s+حاليا)?(?:\s+عن|\s+علي)?\s+(?:فرصه\s+|فرص\s+)?(?:عمل|وظيفه|شغل|مهنه|تعيين)")
 
+proc hasCvHeading(norm: string, cfg: Config): bool =
+  ## A line that is only a CV heading ("WHO AM I?", "Career objective:").
+  for line in norm.splitLines:
+    let l = line.flatten.replace("؟", " ").strip(chars = Whitespace + {'?', '!', '*'})
+    if l.len > 0 and l.len < 40:
+      for h in l.hits(cfg.cvHeadings):
+        if h.start == 0 and h.stop >= l.len: return true
+  false
+
 proc classify*(text: string, cfg: Config): Decision =
   let norm = text.normalizeText
   let flat = norm.flatten
@@ -321,7 +374,7 @@ proc classify*(text: string, cfg: Config): Decision =
   let (nj, njHit) = flat.firstHit(cfg.notAJob)
   if nj:
     return Decision(verdict: vReject, reasons: @["not a job advert: '" & njHit.keyword & "'"])
-  if (norm.contains(jobSeeker) or flat.contains(cfg.seekerPhrases)) and
+  if (norm.contains(jobSeeker) or flat.contains(cfg.seekerPhrases) or norm.hasCvHeading(cfg)) and
       not flat.contains(cfg.employerPhrases):
     return Decision(verdict: vReject, reasons: @["someone looking for a job, not offering one"])
   if not flat.contains(cfg.jobSignals):
