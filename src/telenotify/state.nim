@@ -50,16 +50,33 @@ proc openState*(path: string): State =
     reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER,
     decided_at INTEGER, UNIQUE (chat_id, msg_id))""")
   db.exec(sql"CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+  # stage 4: what the Python bot sent to your channel during a dry run
+  db.exec(sql"""CREATE TABLE IF NOT EXISTS other_bot (
+    id INTEGER PRIMARY KEY, at INTEGER, msg_id INTEGER, origin_chat INTEGER,
+    origin_msg INTEGER, text TEXT, UNIQUE (msg_id))""")
+  # added in stage 4 (edits): a fingerprint of the text that was judged
+  var hasHash = false
+  for row in db.fastRows(sql"PRAGMA table_info(processed)"):
+    if row[1] == "text_hash": hasHash = true
+  if not hasHash: db.exec(sql"ALTER TABLE processed ADD COLUMN text_hash TEXT")
 
 proc close*(s: State) = s.db.close()
 
 proc seen*(s: State, chat, msg: int64): bool =
   s.db.getValue(sql"SELECT 1 FROM processed WHERE chat_id = ? AND msg_id = ?", chat, msg) != ""
 
-proc markProcessed*(s: State, chat, msg: int64, title, verdict, role, reasons, action: string) =
+proc markProcessed*(s: State, chat, msg: int64, title, verdict, role, reasons, action: string,
+                    textHash = "") =
   s.db.exec(sql"""INSERT OR REPLACE INTO processed
-    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at) VALUES (?,?,?,?,?,?,?,?)""",
-    chat, msg, title, verdict, role, reasons, action, now())
+    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at, text_hash)
+    VALUES (?,?,?,?,?,?,?,?,?)""",
+    chat, msg, title, verdict, role, reasons, action, now(), textHash)
+
+proc previous*(s: State, chat, msg: int64): tuple[found: bool, action, textHash: string] =
+  ## What happened to this message last time, if anything.
+  let row = s.db.getRow(sql"SELECT 1, action, COALESCE(text_hash, '') FROM processed WHERE chat_id = ? AND msg_id = ?",
+                        chat, msg)
+  (row[0] == "1", row[1], row[2])
 
 proc addPublished*(s: State, chat, msg: int64, text: string) =
   s.db.exec(sql"INSERT INTO published (chat_id, msg_id, text, at) VALUES (?,?,?,?)",
@@ -126,3 +143,43 @@ proc stats*(s: State, days: int): seq[StatRow] =
       FROM processed WHERE at > ? GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):
     result.add StatRow(chat: r[0], verdicts: [parseInt(r[1]), parseInt(r[2]), parseInt(r[3])],
                        forwarded: parseInt(r[4]))
+
+# ------------------------------------------------- stage 4: side by side
+
+type
+  OtherBotPost* = object
+    at*, originChat*, originMsg*: int64   ## origin 0 = unknown (not from a channel)
+    text*: string
+
+  ProcessedRow* = object
+    chatId*, msgId*, at*: int64
+    chatTitle*, verdict*, role*, reasons*, action*: string
+
+proc addOtherBot*(s: State, msgId, originChat, originMsg: int64, text: string) =
+  ## A post the other (Python) bot sent to your channel.
+  s.db.exec(sql"""INSERT OR IGNORE INTO other_bot (at, msg_id, origin_chat, origin_msg, text)
+                  VALUES (?,?,?,?,?)""", now(), msgId, originChat, originMsg, text)
+
+proc otherBotSince*(s: State, since: int64): seq[OtherBotPost] =
+  for r in s.db.fastRows(sql"""SELECT at, origin_chat, origin_msg, text FROM other_bot
+                               WHERE at > ? ORDER BY at""", since):
+    result.add OtherBotPost(at: parseBiggestInt(r[0]), originChat: parseBiggestInt(r[1]),
+                            originMsg: parseBiggestInt(r[2]), text: r[3])
+
+proc processedSince*(s: State, since: int64): seq[ProcessedRow] =
+  for r in s.db.fastRows(sql"""SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons, action
+                               FROM processed WHERE at > ? ORDER BY at""", since):
+    result.add ProcessedRow(chatId: parseBiggestInt(r[0]), msgId: parseBiggestInt(r[1]),
+                            at: parseBiggestInt(r[2]), chatTitle: r[3], verdict: r[4], role: r[5],
+                            reasons: r[6], action: r[7])
+
+proc processedRow*(s: State, chat, msg: int64): (bool, ProcessedRow) =
+  let r = s.db.getRow(sql"""SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons, action
+                            FROM processed WHERE chat_id = ? AND msg_id = ?""", chat, msg)
+  if r[0] == "": return (false, ProcessedRow())
+  (true, ProcessedRow(chatId: parseBiggestInt(r[0]), msgId: parseBiggestInt(r[1]),
+                      at: parseBiggestInt(r[2]), chatTitle: r[3], verdict: r[4], role: r[5],
+                      reasons: r[6], action: r[7]))
+
+proc publishedText*(s: State, chat, msg: int64): string =
+  s.db.getValue(sql"SELECT text FROM published WHERE chat_id = ? AND msg_id = ? LIMIT 1", chat, msg)

@@ -24,11 +24,17 @@
 ## * **Dry run** (`--dry-run` or `"dry_run": true`): judge and record
 ##   everything, but forward nothing and mark nothing read. That's stage 4:
 ##   running next to the Python bot to compare.
+## * **Albums are one post.** The pictures of an album arrive as separate
+##   messages; they're judged together (caption + text in every picture)
+##   and forwarded together.
+## * **Edits.** A rejected post whose text is edited later ("job coming
+##   soon" → the real ad) is judged again. Published or reviewed posts are
+##   left alone.
 ## * **Downtime alerts** (#3, #16): a heartbeat is saved every minute; on
 ##   start-up, and when the connection comes back, a long gap is reported
 ##   to your Saved Messages.
 
-import std/[asyncdispatch, deques, strutils, times, strformat]
+import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, hashes]
 import config, classify, gather, fetch, telegram, state, dedup, boards
 
 type
@@ -43,6 +49,7 @@ type
     bootstrapping: bool
     held: seq[TgMessage]          # live messages that arrived during bootstrap
     stop*: ref bool               # set to stop after the current message
+    albumWaitMs*: int             # how long to wait for the rest of an album
     log*: proc (line: string) {.closure, gcsafe.}
     downSince: int64
     selfChat: int64
@@ -53,7 +60,7 @@ proc newListener*(cfg: Config, tg: Telegram, st: State, fetcher: Fetcher, ocr: O
            queue: initDeque[TgMessage](), stop: new bool,
            # live messages wait from the very start until the backlog is done
            # (they can arrive while chats are still being opened)
-           bootstrapping: true,
+           bootstrapping: true, albumWaitMs: 1500,
            log: proc (line: string) {.closure, gcsafe.} =
              echo now().format("yyyy-MM-dd HH:mm:ss"), "  ", line)
 
@@ -74,16 +81,34 @@ proc alert*(l: Listener, text: string) {.async.} =
   except CatchableError as e:
     l.say "   (could not send the alert: " & e.msg & ")"
 
-proc handle*(l: Listener, m: TgMessage) {.async.} =
-  ## Judge one message and act on it. Never raises.
-  if l.state.seen(m.chatId, m.id): return
+const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
+
+proc fingerprint(group: seq[TgMessage]): string =
+  var t = ""
+  for m in group: t.add m.text & "\n" & m.buttons.join("\n") & "\n"
+  $hash(t)
+
+proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
+  ## Judge one post (a message, or all pictures of an album) and act on
+  ## it. Never raises.
+  let m = group[0]
+  let ids = group.mapIt(it.id)
+  let fp = fingerprint(group)
+  let prev = l.state.previous(m.chatId, m.id)
+  if prev.found:
+    # Seen before. Only an edit of a rejected post with new text is judged
+    # again ("job ad coming soon..." edited into the real ad).
+    if not m.edited or prev.action != "rejected" or prev.textHash == fp: return
+    l.say &"✏️  {m.chatTitle} #{m.id} was edited: judging it again"
   var verdict, role, reasons = ""
   var action = "error"
   try:
-    var post = Post(text: m.text, buttons: m.buttons)
+    var post = Post(text: group.mapIt(it.text).filterIt(it.strip != "").join("\n"))
+    for x in group: post.buttons.add x.buttons
     var photoProblem = ""
-    if m.photoFileId != 0:
-      try: post.images.add await l.tg.downloadPhoto(m.photoFileId)
+    for x in group:
+      if x.photoFileId == 0 or post.images.len >= maxAlbumPhotos: continue
+      try: post.images.add await l.tg.downloadPhoto(x.photoFileId)
       except CatchableError as e:
         photoProblem = "photo download failed: " & e.msg
         l.say "   " & photoProblem
@@ -98,6 +123,7 @@ proc handle*(l: Listener, m: TgMessage) {.async.} =
     verdict = $d.verdict
     role = d.role
     reasons = (g.notes & d.reasons).join("; ")
+    if group.len > 1: reasons = &"album of {group.len}; " & reasons
     case d.verdict
     of vPublish:
       let dup = duplicateOf(g.text, l.state.recentPublished())
@@ -107,7 +133,7 @@ proc handle*(l: Listener, m: TgMessage) {.async.} =
       elif l.dryRun:
         action = "would publish"
         l.state.addPublished(m.chatId, m.id, g.text)
-      elif await l.tg.forward(l.cfg.targetChat, m.chatId, m.id):
+      elif await l.tg.forward(l.cfg.targetChat, m.chatId, ids):
         action = "forwarded"
         l.state.addPublished(m.chatId, m.id, g.text)
       else:
@@ -133,21 +159,42 @@ proc handle*(l: Listener, m: TgMessage) {.async.} =
       var link = ""
       try: link = await l.tg.link(m.chatId, m.id)
       except CatchableError: discard
-      l.state.addReview(m.chatId, m.id, m.chatTitle, m.text, reasons.strip(chars = {';', ' '}),
-                        role, link)
+      l.state.addReview(m.chatId, m.id, m.chatTitle, group.mapIt(it.text).join("\n"),
+                        reasons.strip(chars = {';', ' '}), role, link)
     except CatchableError as e2:
       l.say &"   could not queue it for review either: {e2.msg}"
-  try:
-    l.state.markProcessed(m.chatId, m.id, m.chatTitle, verdict, role, reasons, action)
-  except CatchableError as e:
-    l.say &"   could not record {m.chatTitle} #{m.id}: {e.msg}"
+  for x in group:
+    try:
+      l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp)
+    except CatchableError as e:
+      l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 
   let mark = case action
     of "forwarded", "linked", "would publish": "✅"
     of "queued for review", "error, queued for review": "🤔"
     of "duplicate": "♻️"
     else: "·"
-  l.say &"{mark} {m.chatTitle} #{m.id}: {action}" & (if role != "": " (" & role & ")" else: "")
+  let what = (if group.len > 1: &"#{m.id} (album of {group.len})" else: &"#{m.id}")
+  l.say &"{mark} {m.chatTitle} {what}: {action}" & (if role != "": " (" & role & ")" else: "")
+
+proc handle*(l: Listener, m: TgMessage) {.async.} =
+  ## Judge one message on its own.
+  await l.handleGroup(@[m])
+
+proc noteOtherBot*(l: Listener, m: TgMessage) {.async.} =
+  ## Dry run next to the Python bot: remember what it sent to your channel,
+  ## for `telenotify compare`. Never raises.
+  try:
+    var (chat, msg) = (m.originChat, m.originMsg)
+    let i = m.text.find("post link: ")
+    if chat == 0 and i >= 0:
+      let words = m.text[i + "post link: ".len .. ^1].splitWhitespace
+      if words.len > 0:
+        try: (chat, msg) = await l.tg.linkTarget(words[0])
+        except CatchableError: discard
+    l.state.addOtherBot(m.id, chat, msg, m.text)
+  except CatchableError as e:
+    l.say "   could not note the other bot's post: " & e.msg
 
 proc enqueue*(l: Listener, m: TgMessage) =
   ## A live message. During bootstrap it waits until the backlog is done.
@@ -159,9 +206,16 @@ proc processQueue*(l: Listener) {.async.} =
   ## Stops early when `stop` is set; the rest stays unread for next time.
   while l.queue.len > 0 and not l.stop[]:
     let m = l.queue.popFirst
-    await l.handle(m)
+    var group = @[m]
+    if m.albumId != 0:
+      # The pictures of an album arrive as separate messages, back to back.
+      if l.queue.len == 0: await sleepAsync(l.albumWaitMs)
+      while l.queue.len > 0 and l.queue.peekFirst.chatId == m.chatId and
+          l.queue.peekFirst.albumId == m.albumId:
+        group.add l.queue.popFirst
+    await l.handleGroup(group)
     if not l.dryRun:
-      try: await l.tg.markRead(m.chatId, @[m.id])
+      try: await l.tg.markRead(m.chatId, group.mapIt(it.id))
       except CatchableError as e: l.say "   could not mark read: " & e.msg
 
 proc bootstrap*(l: Listener) {.async.} =
@@ -194,7 +248,7 @@ proc sendApproved*(l: Listener) {.async.} =
   for r in l.state.approvedReviews():
     if l.stop[]: return
     try:
-      if not await l.tg.forward(l.cfg.targetChat, r.chatId, r.msgId):
+      if not await l.tg.forward(l.cfg.targetChat, r.chatId, @[r.msgId]):
         var link = r.link
         if link == "": link = await l.tg.link(r.chatId, r.msgId)
         if link == "": raise newException(ValueError, "no link to the post")

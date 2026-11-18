@@ -35,8 +35,10 @@ proc fakeSend(id: cint, req: cstring) {.cdecl, gcsafe.} = {.cast(gcsafe).}:
                                                       r["limit"].getInt)}
   of "getMessageProperties": answer = %*{"@type": "messageProperties", "can_be_forwarded": true}
   of "forwardMessages":
-    answer = %*{"@type": "messages", "messages": [(if forwardWorks: %*{"@type": "message", "id": 1}
-                                                    else: newJNull())]}
+    var msgs = newJArray()
+    for _ in r["message_ids"]:
+      msgs.add(if forwardWorks: %*{"@type": "message", "id": 1} else: newJNull())
+    answer = %*{"@type": "messages", "messages": msgs}
   else: answer = %*{"@type": "ok"}
   answer["@extra"] = r["@extra"]
   outbox.addLast $answer
@@ -70,6 +72,7 @@ suite "tdTelegram":
 
   test "forward: a null result (could not forward) counts as not forwarded":
     forwardWorks = true
-    check waitFor tg.forward(-9, -1, 5)
+    check waitFor tg.forward(-9, -1, @[5'i64])
+    check waitFor tg.forward(-9, -1, @[5'i64, 6, 7])         # an album
     forwardWorks = false
-    check not waitFor tg.forward(-9, -1, 5)
+    check not waitFor tg.forward(-9, -1, @[5'i64])

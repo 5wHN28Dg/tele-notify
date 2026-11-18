@@ -33,3 +33,9 @@ suite "parseMessage":
     check parseMessage(%*{"content": {"@type": "messageDocument", "caption": {"text": "CV"}}}).text == "CV"
     check parseMessage(%*{"content": {"@type": "messageSticker"}}).text == ""
     check parseMessage(%*{}).id == 0
+
+  test "album id (TDLib sends 64-bit ids as strings)":
+    let m = parseMessage(%*{"chat_id": -1, "id": 5, "media_album_id": "13867035834384742",
+                            "content": {"@type": "messagePhoto", "caption": {"text": ""}}})
+    check m.albumId == 13867035834384742'i64
+    check parseMessage(%*{"id": 6, "content": {"@type": "messageText", "text": {"text": "x"}}}).albumId == 0

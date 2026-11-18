@@ -145,6 +145,12 @@ proc locate(lines: seq[string], cfg: Config, why: var string): Place =
 
 # ---------------------------------------------------- level & certificates
 
+# Experience asked for without a number: "extensive experience", "خبرة
+# واسعة". Not a hard no (no years to compare), but it outweighs a generic
+# "fresh graduates and experienced" that some channels put on every post
+# (found on the first real run).
+let strongExperience = re2(r"(?:خبره\s+(?:واسعه|طويله|قويه|كبيره|عاليه|عميقه|متميزه|ممتازه)|(?:extensive|proven|strong|solid|significant|substantial|considerable|deep|broad)\s+(?:\w+\s+)?experience)")
+
 proc levelEvidence(lines: seq[string], cfg: Config): string =
   ## First entry-level word that is not about managing juniors.
   for line in lines:
@@ -258,8 +264,15 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
   var senior = ""
   for r in roles:
     if r.senior and r.titleLine: senior = r.context.short(50)
+  var strong = ""
+  for m in flatAll.toLowerAscii.findAll(strongExperience):
+    strong = flatAll.toLowerAscii[m.boundaries]
+    break
   if positive:
-    if senior != "":
+    if strong != "":
+      result.reasons.add "but asks for '" & strong & "'"
+      result.verdict = vReview
+    elif senior != "":
       # "KBR is hiring an IT Support Lead" + "IT support" again lower down
       result.reasons.add "but the title line looks senior: '" & senior & "'"
       result.verdict = vReview

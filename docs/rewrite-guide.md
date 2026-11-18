@@ -3,7 +3,7 @@
 This document explains what was built, why it looks the way it does, and how to keep working on it, so you don't have to reverse-engineer anything. Read it top to bottom once; after that, use the headings as a reference.
 
 - **Problems report** (what was wrong with the Python version and why): [`problems-report.md`](problems-report.md)
-- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Next is stage 4, running next to the Python bot. See [Roadmap](#roadmap).
+- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4's code is done (albums, edits, `telenotify compare`; [section 9](#9-stage-4-side-by-side-with-the-python-bot)); what's left is a week of running next to the Python bot, then the switch. See [Roadmap](#roadmap).
 
 ---
 
@@ -394,7 +394,7 @@ LinkedIn is the most likely to change: it shows logged-out visitors a simplified
 | 1 | Filter core + tests + eval against the corpus | ✅ done |
 | 2 | Text gathering: async OCR (fixes #30), job-board readers with saved pages as tests (fixes #34, report 4.1–4.5) | ✅ done |
 | 3 | Listener on TDLib: unread bootstrap with the real read marker, one processing queue, state and stats in SQLite, downtime alerts (#3, #16), systemd unit (#6), review queue with `telenotify review` (send / discard) | ✅ done |
-| 4 | Run `telenotify run --dry-run` next to the Python bot for a week, compare (`telenotify stats`, the `processed` table), then switch: stop the Python service, start the Nim one, move the Python files to `legacy/` | next |
+| 4 | Albums and edits; `telenotify compare`; run `telenotify run --dry-run` next to the Python bot for about a week and compare; then switch: stop the Python bot, start the Nim service, move the Python files to `legacy/` | in progress: code done, the side-by-side week next |
 | 5 | The nice CLI dashboard (#10–#15): live counts, review queue with keys, highlighted events, on top of the SQLite state that now exists. Plus `telenotify export` so review decisions become corpus labels | after 4 |
 
 
@@ -487,6 +487,50 @@ One of the 2 publishes was wrong: an expatriate Electrical QA/QC job asking for 
 
 - **The nice dashboard (#10).** `review` and `stats` are plain text for now. The data the dashboard needs is all in SQLite already.
 - **`telenotify export`.** It will export review decisions and Saved Messages as corpus labels, replacing the Python scripts in the corpus folder.
-- **First run on your account.** That needs your login.
-- **Albums and edits.** An album (several pictures, one ad) is judged picture by picture, and only the first has the caption. A post edited into a job ad after it appeared is not looked at again. Both are on the list for stage 4.
+- **Albums and edits** were done in stage 4 ([section 9](#9-stage-4-side-by-side-with-the-python-bot)).
 - **Duplicates after a crash.** If the bot dies between forwarding a post and recording it, the post is forwarded again at the next start. That window is a few milliseconds.
+
+---
+
+## 9. Stage 4: side by side with the Python bot
+
+The plan: run `telenotify run --dry-run` next to the Python bot for about a week, look at where they disagree, fix what's wrong, then switch.
+
+### `telenotify compare` (`compare.nim`)
+
+The Python bot uses the same Telegram account, so what it sends to your channel shows up as *your own outgoing messages* there. During a dry run, the Nim bot notes each one (table `other_bot` in `state-dryrun.sqlite3`) with where it came from:
+- a forward from a channel carries its origin (channel and message id);
+- a "match: … post link: https://t.me/…" message is resolved with TDLib's `getMessageLinkInfo`;
+- anything else (a forward from a group) is matched by text later.
+
+`telenotify compare --days:7` then prints three lists:
+
+| List | Meaning |
+|---|---|
+| both | Both published it. Also counts when Nim skipped it as a copy of an ad it had already published from another channel |
+| Python only | With Nim's verdict and reasons. Either Nim missed a good post, or (much more often, on the corpus) Python published a wrong one |
+| Nim only | What Nim would have published and Python didn't |
+
+It only reads the database, so it works while the dry run is running.
+
+### Albums
+
+The pictures of an album arrive as separate messages (one has the caption, the others only pictures). They're now judged together: the caption, plus the text in up to 6 pictures, as one post, and forwarded together so your channel gets the whole album. In the backlog the parts are next to each other; live, the parts arrive a moment apart, so when the first part is the last thing in the queue, the bot waits 1.5 s for the rest.
+
+A review of an album shows the whole text, but approving it forwards only the first part (the one the review links to).
+
+### Edits
+
+Some channels post "job ad coming soon" and edit the real ad in later. When a message from a watched chat is edited (TDLib's `updateMessageContent`), the bot fetches it again. It's judged again only if it was **rejected** before and its text really changed (a fingerprint of the text is kept in `processed.text_hash`; link previews loading also count as edits, but don't change the text). Published or reviewed posts are left alone, so an edit never causes a second forward. Edits of messages older than 2 days are ignored.
+
+### A filter change from the first real run
+
+"Extensive experience" (خبرة واسعة/قوية/طويلة…, "proven/strong/solid … experience") without a number now turns a publish into a review: it says "not a beginner" even when a channel adds "#حديثي_التخرج واصحاب الخبرة" to every post. The corpus numbers didn't change (it was a case the corpus didn't have); the post from the first run now goes to review.
+
+### The switch (needs you)
+
+1. Look at `telenotify compare` after the week, and at `telenotify review --dry-run`.
+2. Stop the Python bot.
+3. Install and start the Nim service (`deploy/tele-notify.service`, without `--dry-run`).
+4. Move `main.py`, `main_simple.py`, `requirements.txt` to `legacy/`.
+

@@ -221,3 +221,14 @@ suite "review pass 2 (adversarial) findings":
 suite "found on recent channel posts":
   test "a female manager role and 'dealing with trainees' are not entry level":
     check verdict("تعلن شركة هندسية في محافظة البصرة عن حاجتها إلى موظفة للعمل بمنصب مديرة مركز تدريب\nشهادة جامعية ويفضل في التخصصات الهندسية\nمهارات عالية في التواصل والتعامل مع المتدربين\nموقع العمل: محافظة البصرة") != vPublish
+
+suite "found on the first real run (stage 4)":
+  test "'extensive experience' outweighs a channel's 'fresh graduates and experienced' tag":
+    let post = "#وظائف_نفطية #البصرة التقديم يضم #حديثي_التخرج واصحاب الخبرة\nفرصة عمل\nمهندس كهرباء - ضمان ومراقبة الجودة (QA/QC)\nموقع العمل: البصرة\nخبرة واسعة في مجال ضمان ومراقبة الجودة"
+    check verdict(post) == vReview
+    check verdict("Hiring electrical engineer in Basra, fresh graduates welcome. Proven field experience required") == vReview
+
+  test "a real fresh-graduate post still publishes":
+    check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة") == vPublish
+    check verdict("#البصرة مطلوب مهندس كهرباء #حديثي_التخرج\nموقع العمل: البصرة") == vPublish
+    check verdict("Hiring Electrical Engineer in Basra (fresh graduates or experienced), strong communication skills") == vPublish

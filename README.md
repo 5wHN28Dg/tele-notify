@@ -23,7 +23,7 @@ It is built around that one need, but the keywords, places and channels are your
 | | What it is | State |
 |---|---|---|
 | **v3, Python** (`main.py`) | The bot that runs today | Works, frozen: no new features |
-| **v4, Nim** (`src/`) | The rewrite, built in stages | Stages 1–3 done: the filter, OCR, job-board reading and the Telegram listener. Next: a trial run next to the Python bot |
+| **v4, Nim** (`src/`) | The rewrite, built in stages | Stages 1–3 done: the filter, OCR, job-board reading and the Telegram listener. Stage 4, a trial run next to the Python bot, is under way (`telenotify compare`) |
 
 The rewrite exists because the Python filter published far too many wrong posts: on a test with 196 real posts, 96 of its 115 publications were wrong, against 4 for the new filter. The [problems report](docs/problems-report.md) explains what was wrong; the [rewrite guide](docs/rewrite-guide.md) explains how the new code works.
 
@@ -90,6 +90,7 @@ Then:
 ./telenotify run --config:config.json            # the real thing
 ./telenotify review --config:config.json         # unclear posts: approve or discard (works while the bot runs)
 ./telenotify stats --config:config.json --days:7 # what each channel brought
+./telenotify compare --config:config.json        # dry run vs the Python bot (stage 4)
 ```
 
 What's different from the Python bot:
