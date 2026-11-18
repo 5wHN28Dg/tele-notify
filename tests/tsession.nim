@@ -63,3 +63,9 @@ suite "chat kinds":
     check chatKind(%*{"type": {"@type": "chatTypeBasicGroup"}}) == "group"
     check chatKind(%*{"type": {"@type": "chatTypePrivate"}}) == "private"
     check chatKind(%*{}) == ""
+
+suite "corpus ids":
+  test "numbers, text ids, and a missing id (review)":
+    check corpusId(%*{"id": 194637}) == "194637"
+    check corpusId(%*{"id": "-1:11"}) == "-1:11"
+    check corpusId(%*{"text": "x"}) == "?"

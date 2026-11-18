@@ -6,7 +6,7 @@
 ## without asking anything. If the login is missing, `run` stops with a
 ## message instead of waiting for input that a systemd service can't give.
 
-import std/[asyncdispatch, json, os, strutils, terminal]
+import std/[asyncdispatch, json, os, strutils, terminal, sets]
 import config, td, tdjson
 
 type
@@ -114,18 +114,17 @@ proc chatKind*(chat: JsonNode): string =
   of "chatTypePrivate", "chatTypeSecret": "private"
   else: ""
 
-proc chatRows*(s: Session): Future[seq[(int64, string, string)]] {.async.} =
+proc chatRows*(s: Session, timeoutMs = 300_000): Future[seq[(int64, string, string)]] {.async.} =
   ## Every chat in the main list and the Archive: (id, title, kind).
-  await s.loadAllChats()
-  var seen: seq[int64]
+  var seen: HashSet[int64]
   for list in ["chatListMain", "chatListArchive"]:
     let r = await s.client.call(%*{"@type": "getChats",
-      "chat_list": {"@type": list}, "limit": 1000})
+      "chat_list": {"@type": list}, "limit": 1000}, timeoutMs)
     for id in r{"chat_ids"}.getElems:
       let cid = id.getBiggestInt
       if cid in seen: continue
-      seen.add cid
-      let chat = await s.client.call(%*{"@type": "getChat", "chat_id": cid})
+      seen.incl cid
+      let chat = await s.client.call(%*{"@type": "getChat", "chat_id": cid}, timeoutMs)
       result.add (cid, chat{"title"}.getStr, chatKind(chat))
 
 proc listChats*(s: Session): Future[seq[(int64, string)]] {.async.} =

@@ -26,6 +26,9 @@
 ##   (your login) and `state.sqlite3`. Keep it private.
 ## * `tdlib_path`: path to `libtdjson.so` if it isn't found automatically.
 ## * `dry_run` (default false): judge and record, forward nothing.
+## * `keep_text_days` (default 90): how long the text of each judged post
+##   is kept in the state database (for searching it in the terminal
+##   screen); 0 keeps it forever. Verdicts and reasons are always kept.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
 ##
@@ -59,6 +62,7 @@ type
     dryRun*: bool              ## judge and record, but forward nothing
     alerts*: bool              ## send downtime alerts to Saved Messages
     alertAfterMinutes*: int    ## downtime shorter than this is only logged
+    keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
     apiId*: int
     apiHash*: string
     chats*: seq[int64]
@@ -153,6 +157,7 @@ proc parseConfig*(j: JsonNode): Config =
   result.dryRun = j{"dry_run"}.getBool(false)
   result.alerts = j{"alerts"}.getBool(true)
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
+  result.keepTextDays = j{"keep_text_days"}.getInt(90)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)

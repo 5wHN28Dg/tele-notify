@@ -1,4 +1,4 @@
-import std/[unittest, os]
+import std/[unittest, os, tables]
 import telenotify/state
 
 let dir = getTempDir() / "tn-state-test"
@@ -68,6 +68,32 @@ suite "state":
     check st.chatStatus(-200) == "ok"
     st.saveChats(@[ChatRow(id: -100, title: "Jobs", kind: "channel")], @[-100'i64])
     check st.chatStatus(-200) == ""                      # gone from the account: removed
+
+  test "a watched public channel you never joined is fine, with its name (review)":
+    st.setMeta("chat_access:-400", "left-public")      # not in your chat lists
+    st.saveChats(@[ChatRow(id: -100, title: "Jobs", kind: "channel")], @[-100'i64, -400, -500],
+                 {-400'i64: "Public Jobs"}.toTable)
+    check st.chatStatus(-400) == "ok"
+    check st.chatTitle(-400) == "Public Jobs"
+    check st.chatStatus(-500) == "unavailable"          # no title, never opened
+
+  test "only the newest 500 alerts are kept (review)":
+    for i in 1 .. 510: st.addAlert("alert " & $i)
+    check st.alertCount() == 500
+    check st.alertTexts(1) == @["alert 510"]
+
+  test "old post texts are forgotten, verdicts kept (review)":
+    st.markProcessed(-600, 1, "Old", "reject", "", "r", "rejected", rawText = "old text")
+    st.ageProcessed(-600, 100)
+    st.markProcessed(-600, 2, "Old", "reject", "", "r", "rejected", rawText = "new text")
+    st.forgetOldTexts(90)
+    check st.rawTextOf(-600, 1) == "" and st.rawTextOf(-600, 2) == "new text"
+    check st.seen(-600, 1)
+    st.forgetOldTexts(0)                                 # 0: keep everything
+    check st.rawTextOf(-600, 2) == "new text"
+
+  test "the state file is private to you (review)":
+    check getFilePermissions(dir / "state.sqlite3") == {fpUserRead, fpUserWrite}
 
   test "a new data folder is private to you":
     check getFilePermissions(dir) == {fpUserRead, fpUserWrite, fpUserExec}

@@ -93,10 +93,7 @@ proc cmdEval(cfg: Config, path, show, outPath: string) =
       of "wrong": wrong
       else: false
     if pick:
-      # ids are numbers in the Saved Messages corpus, "chat:msg" text in the
-      # labels the terminal screen writes
-      let id = if j{"id"}.kind == JString: j{"id"}.getStr else: $j{"id"}.getBiggestInt
-      echo "=== id ", id, "  label ", label, "  ", j{"note"}.getStr
+      echo "=== id ", corpusId(j), "  label ", label, "  ", j{"note"}.getStr
       echo j["text"].getStr.runeSafe(0, 600)
       printDecision(d)
       echo ""
