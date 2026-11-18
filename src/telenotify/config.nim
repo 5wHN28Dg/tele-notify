@@ -20,11 +20,20 @@
 ##   `extra_other_places`, `extra_location_markers`: words added to the
 ##   built-in lists in defaults.nim.
 ##
+## Keys for the Telegram listener (stage 3), all optional:
+##
+## * `data_dir` (default `~/.local/share/tele-notify`): TDLib's database
+##   (your login) and `state.sqlite3`. Keep it private.
+## * `tdlib_path`: path to `libtdjson.so` if it isn't found automatically.
+## * `dry_run` (default false): judge and record, forward nothing.
+## * `alerts` (default true), `alert_after_minutes` (default 10): send a
+##   message to your Saved Messages after downtime longer than that.
+##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the
 ## biggest source of false positives, see docs/problems-report.md).
 
-import std/[json, strutils, sets]
+import std/[json, strutils, sets, os]
 import keywords, normalize, defaults
 
 type
@@ -43,6 +52,11 @@ type
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
     # Telegram side, used by the listener (not by the filter itself)
+    dataDir*: string           ## TDLib's database and state.sqlite3
+    tdlibPath*: string         ## where libtdjson.so is, if not found automatically
+    dryRun*: bool              ## judge and record, but forward nothing
+    alerts*: bool              ## send downtime alerts to Saved Messages
+    alertAfterMinutes*: int    ## downtime shorter than this is only logged
     apiId*: int
     apiHash*: string
     chats*: seq[int64]
@@ -112,6 +126,11 @@ proc parseConfig*(j: JsonNode): Config =
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
   result.extraJobSites = j.strings("extra_job_sites")
 
+  result.dataDir = j{"data_dir"}.getStr(getHomeDir() / ".local" / "share" / "tele-notify")
+  result.tdlibPath = j{"tdlib_path"}.getStr("")
+  result.dryRun = j{"dry_run"}.getBool(false)
+  result.alerts = j{"alerts"}.getBool(true)
+  result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)

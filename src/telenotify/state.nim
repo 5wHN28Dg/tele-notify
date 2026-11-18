@@ -1,0 +1,128 @@
+## Everything the bot remembers, in one SQLite file.
+##
+## The old bot kept its memory (the last 10 forwarded posts) *inside*
+## config.json and rewrote that file on every forward, which threw away any
+## keyword edits made while it ran (problems report 5.2). Now config.json is
+## only read, and state lives in `<data_dir>/state.sqlite3`:
+##
+## | table | what |
+## |---|---|
+## | `processed` | every message judged: chat, id, verdict, role, reasons, when. Lets the bot skip messages it has already seen (restarts, the startup backlog overlapping live updates) and gives the numbers for `telenotify stats` (#12–#15) |
+## | `published` | the text of what was published, for duplicate detection |
+## | `reviews` | the review queue: unclear posts waiting for you to send or discard them (`telenotify review`). Your decisions double as labels for the test corpus |
+## | `meta` | small values, e.g. the last heartbeat (for downtime alerts) |
+##
+## You can open the file with any SQLite tool (`sqlite3 state.sqlite3`).
+
+import std/[times, strutils, os]
+import db_connector/db_sqlite
+
+type
+  State* = ref object
+    db: DbConn
+
+  Review* = object
+    id*: int64
+    chatId*, msgId*: int64
+    chatTitle*, text*, reasons*, role*, link*, status*: string
+    at*: int64
+
+proc now(): int64 = getTime().toUnix
+
+proc openState*(path: string): State =
+  if not dirExists(path.parentDir):
+    createDir(path.parentDir)
+    # the same folder holds your Telegram login (session.nim)
+    setFilePermissions(path.parentDir, {fpUserRead, fpUserWrite, fpUserExec})
+  result = State(db: open(path, "", "", ""))
+  let db = result.db
+  db.exec(sql"PRAGMA journal_mode=WAL")
+  # `telenotify review` writes while the bot runs: wait for the other
+  # writer instead of failing with "database is locked"
+  db.exec(sql"PRAGMA busy_timeout=10000")
+  db.exec(sql"""CREATE TABLE IF NOT EXISTS processed (
+    chat_id INTEGER, msg_id INTEGER, chat_title TEXT, verdict TEXT, role TEXT,
+    reasons TEXT, action TEXT, at INTEGER, PRIMARY KEY (chat_id, msg_id))""")
+  db.exec(sql"""CREATE TABLE IF NOT EXISTS published (
+    id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, text TEXT, at INTEGER)""")
+  db.exec(sql"""CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, chat_title TEXT, text TEXT,
+    reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER,
+    decided_at INTEGER, UNIQUE (chat_id, msg_id))""")
+  db.exec(sql"CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+
+proc close*(s: State) = s.db.close()
+
+proc seen*(s: State, chat, msg: int64): bool =
+  s.db.getValue(sql"SELECT 1 FROM processed WHERE chat_id = ? AND msg_id = ?", chat, msg) != ""
+
+proc markProcessed*(s: State, chat, msg: int64, title, verdict, role, reasons, action: string) =
+  s.db.exec(sql"""INSERT OR REPLACE INTO processed
+    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at) VALUES (?,?,?,?,?,?,?,?)""",
+    chat, msg, title, verdict, role, reasons, action, now())
+
+proc addPublished*(s: State, chat, msg: int64, text: string) =
+  s.db.exec(sql"INSERT INTO published (chat_id, msg_id, text, at) VALUES (?,?,?,?)",
+            chat, msg, text, now())
+
+proc recentPublished*(s: State, days = 14, limit = 2000): seq[string] =
+  ## Texts published in the last `days` days, newest first.
+  for row in s.db.fastRows(sql"SELECT text FROM published WHERE at > ? ORDER BY at DESC LIMIT ?",
+                           now() - days * 86400, limit):
+    result.add row[0]
+
+proc addReview*(s: State, chat, msg: int64, title, text, reasons, role, link: string) =
+  s.db.exec(sql"""INSERT OR IGNORE INTO reviews
+    (chat_id, msg_id, chat_title, text, reasons, role, link, at) VALUES (?,?,?,?,?,?,?,?)""",
+    chat, msg, title, text, reasons, role, link, now())
+
+proc reviewsWithStatus(s: State, status: string): seq[Review] =
+  for r in s.db.fastRows(sql"""SELECT id, chat_id, msg_id, chat_title, text, reasons, role, link,
+                               status, at FROM reviews WHERE status = ? ORDER BY at""", status):
+    result.add Review(id: parseBiggestInt(r[0]), chatId: parseBiggestInt(r[1]),
+                      msgId: parseBiggestInt(r[2]), chatTitle: r[3], text: r[4], reasons: r[5],
+                      role: r[6], link: r[7], status: r[8], at: parseBiggestInt(r[9]))
+
+proc pendingReviews*(s: State): seq[Review] =
+  ## Posts waiting for your decision.
+  s.reviewsWithStatus("pending")
+
+proc approvedReviews*(s: State): seq[Review] =
+  ## Posts you chose to send; the running bot sends them (`sendApproved`).
+  s.reviewsWithStatus("to_send")
+
+proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"): bool =
+  ## Move a review from `fromStatus` to `status`: "to_send" (you approved
+  ## it; the bot will send it), "sent" (published) or "discarded". Does
+  ## nothing and returns false if it's no longer in `fromStatus` (e.g.
+  ## another `review` window already decided it), so a post is never
+  ## approved, and sent, twice.
+  s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
+            status, now(), id, fromStatus)
+  s.db.getValue(sql"SELECT changes()") == "1"
+
+proc reopenReview*(s: State, id: int64, problem: string) =
+  ## Sending failed: put it back in the queue, with the reason.
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = reasons || '; could not send: ' || ?
+                   WHERE id = ? AND status = 'to_send'""", problem, id)
+
+proc getMeta*(s: State, key: string): string =
+  s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)
+
+proc setMeta*(s: State, key, value: string) =
+  s.db.exec(sql"INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value)
+
+type StatRow* = object
+  chat*: string
+  verdicts*: array[3, int]   ## publish, review, reject
+  forwarded*: int
+
+proc stats*(s: State, days: int): seq[StatRow] =
+  ## Per chat over the last `days` days: how many messages got each verdict
+  ## and how many were actually forwarded (#12, #13, #15).
+  for r in s.db.fastRows(sql"""SELECT chat_title,
+      SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
+      SUM(action = 'forwarded' OR action = 'linked')
+      FROM processed WHERE at > ? GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):
+    result.add StatRow(chat: r[0], verdicts: [parseInt(r[1]), parseInt(r[2]), parseInt(r[3])],
+                       forwarded: parseInt(r[4]))

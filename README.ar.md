@@ -29,7 +29,7 @@
 | | ما هو | الحالة |
 |---|---|---|
 | **الإصدار 3، بايثون** (`main.py`) | البوت الذي يعمل حاليًا | يعمل، ومجمّد: لا ميزات جديدة |
-| **الإصدار 4، Nim** (`src/`) | النسخة الجديدة، تُبنى على مراحل | اكتملت المرحلتان 1 و2: الفلتر، وقراءة الصور، وقراءة مواقع الوظائف. الجزء الخاص بتيليجرام هو التالي |
+| **الإصدار 4، Nim** (`src/`) | النسخة الجديدة، تُبنى على مراحل | اكتملت المراحل 1 إلى 3: الفلتر، وقراءة الصور، وقراءة مواقع الوظائف، والاستماع لتيليجرام. التالي: تجربته بجانب بوت بايثون |
 
 سبب إعادة الكتابة أن فلتر بايثون كان ينشر الكثير من المنشورات الخاطئة: في اختبار على 196 منشورًا حقيقيًا، كان 96 من أصل 115 منشورًا نشرها خاطئًا، مقابل 4 فقط في الفلتر الجديد. [تقرير المشاكل](docs/problems-report.md) يشرح ما كان خاطئًا، و[دليل إعادة الكتابة](docs/rewrite-guide.md) يشرح كيف يعمل الكود الجديد (كلاهما بالإنجليزية).
 
@@ -92,6 +92,40 @@ nimble build -d:release
 
 الأمر `nimble test` يشغّل الاختبارات.
 
+## تشغيل بوت Nim (نسخة تجريبية)
+
+بوت Nim يتصل بتيليجرام عبر [TDLib](https://core.telegram.org/tdlib)، المكتبة الرسمية من تيليجرام. ابنِها مرة واحدة (حوالي ساعة على نواة واحدة؛ تحتاج cmake ومترجم C++ وملفات zlib وOpenSSL):
+
+</div>
+
+```bash
+JOBS=2 deploy/build-tdlib.sh      # يضع lib/libtdjson.so بجانب البرنامج
+```
+
+<div dir="rtl">
+
+ثم:
+
+</div>
+
+```bash
+./telenotify login --config:config.json          # مرة واحدة: رقم الهاتف، الرمز، كلمة مرور التحقق بخطوتين
+./telenotify run --config:config.json --dry-run  # يحكم على كل شيء ولا يحوّل شيئًا
+./telenotify run --config:config.json            # التشغيل الفعلي
+./telenotify review --config:config.json         # المنشورات غير الواضحة: وافق أو تجاهل (يعمل والبوت شغّال)
+./telenotify stats --config:config.json --days:7 # ما جلبته كل قناة
+```
+
+<div dir="rtl">
+
+ما الذي تغيّر عن بوت بايثون:
+- المنشورات غير الواضحة تنتظر في قائمة المراجعة الخاصة بـ tele-notify (`telenotify review`) بدل الرسائل المحفوظة.
+- كل رسالة تُحفظ (في `~/.local/share/tele-notify/state.sqlite3`)، فلا يُحكم على شيء أو يُحوَّل مرتين، حتى بعد إعادة التشغيل.
+- التكرار يُفحص مقابل كل ما نُشر في آخر 14 يومًا، بالرابط وبالنص.
+- إذا توقف البوت أو انقطع اتصاله أكثر من 10 دقائق، يخبرك في الرسائل المحفوظة عند عودته.
+
+للتشغيل التلقائي، راجع [`deploy/tele-notify.service`](deploy/tele-notify.service).
+
 ## تشغيل البوت (بايثون، إلى أن يكتمل الإصدار 4)
 
 1. احصل على بيانات Telegram API: الـ API ID والـ API hash من [my.telegram.org](https://my.telegram.org) ([الطريقة](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).
@@ -146,7 +180,7 @@ with client:
 | `certifications` | شهادات تستبعد المنشور إذا كانت *مطلوبة* |
 | `recent_messages` | يستخدمها بوت بايثون لكشف التكرار؛ لا تعدّلها |
 
-النسخة الجديدة تضيف مفاتيح اختيارية مثل `publish_when_unsure` و`max_experience_years`، وهي مذكورة في [دليل إعادة الكتابة](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). كلماتي المفتاحية موجودة في [`example_keywords.txt`](example_keywords.txt).
+النسخة الجديدة تضيف مفاتيح اختيارية مثل `publish_when_unsure` و`max_experience_years` و`data_dir` و`dry_run` و`alerts`، وهي مذكورة في [دليل إعادة الكتابة](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). كلماتي المفتاحية موجودة في [`example_keywords.txt`](example_keywords.txt).
 
 ## المزيد
 

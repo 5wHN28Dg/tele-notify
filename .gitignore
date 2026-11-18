@@ -34,3 +34,5 @@ nimcache/
 corpus/
 !tests/fixtures/*.jpg
 !tests/fixtures/*.jpeg
+# TDLib build output (deploy/build-tdlib.sh)
+/lib/
