@@ -56,6 +56,15 @@ proc corpusId*(j: JsonNode): string =
 proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   let dry = dryRunFlag or cfg.dryRun
   let st = openState(statePath(cfg, dry))
+  # for the terminal screen, at once: the last run's "stopped" / "ready" mustn't
+  # show while this one logs in (connection updates before the listener exists
+  # are dropped)
+  try:
+    st.setMeta("mode", if dry: "dry-run" else: "real")
+    st.setMeta("started_at", $getTime().toUnix)
+    st.setMeta("connection", "starting")
+  except CatchableError as e:
+    echo "   could not update the state database: ", e.msg
   var l: Listener
   var sessionLost = ""
   var titles = initTable[int64, string]()
@@ -130,13 +139,6 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
-  # for the terminal screen: how the bot runs and since when
-  try:
-    st.setMeta("mode", if l.dryRun: "dry-run" else: "real")
-    st.setMeta("started_at", $getTime().toUnix)
-    st.forgetOldTexts(cfg.keepTextDays)
-  except CatchableError as e:
-    l.log "   could not update the state database: " & e.msg
   l.titles = titles
   accessReady = true
   await l.checkWatchedChats()

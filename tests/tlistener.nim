@@ -678,3 +678,11 @@ suite "what the terminal screen reads":
     check st.getMeta("connection") == "connecting"
     l.onConnectionState("connectionStateReady")
     check st.getMeta("connection") == "ready"
+
+  test "old post texts are cleared in real runs, kept in dry runs (review)":
+    for dry in [false, true]:
+      let (l, st) = setup(FakeTg(), dryRun = dry)
+      st.markProcessed(-1, 1, "Jobs", "reject", "", "r", "rejected", rawText = "old")
+      st.ageProcessed(-1, 200)
+      l.forgetOldTexts()
+      check st.rawTextOf(-1, 1) == (if dry: "old" else: "")

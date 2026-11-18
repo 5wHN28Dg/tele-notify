@@ -75,3 +75,14 @@ suite "config":
     var j2 = parseFile(currentSourcePath.parentDir / "keywords.json")
     j2["data_dir"] = %""
     check parseConfig(j2).dataDir == getHomeDir() / ".local" / "share" / "tele-notify"
+
+  test "data_dir: ~ is your home, a relative path is next to config.json (review)":
+    let d = getTempDir() / "tn-cfg-paths"
+    createDir(d)
+    var j3 = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j3["data_dir"] = %"bot-state"
+    writeFile(d / "config.json", $j3)
+    check loadConfig(d / "config.json").dataDir == d / "bot-state"
+    j3["data_dir"] = %"  ~/tn-data  "
+    writeFile(d / "config.json", $j3)
+    check loadConfig(d / "config.json").dataDir == getHomeDir() / "tn-data"

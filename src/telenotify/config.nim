@@ -153,8 +153,8 @@ proc parseConfig*(j: JsonNode): Config =
   result.extraJobSites = j.strings("extra_job_sites")
 
   # "" means the default too (a blank field in the terminal screen's settings)
-  result.dataDir = j{"data_dir"}.getStr("")
-  if result.dataDir.strip == "":
+  result.dataDir = j{"data_dir"}.getStr("").strip.expandTilde
+  if result.dataDir == "":
     result.dataDir = getHomeDir() / ".local" / "share" / "tele-notify"
   result.tdlibPath = j{"tdlib_path"}.getStr("")
   result.dryRun = j{"dry_run"}.getBool(false)
@@ -177,4 +177,8 @@ proc loadConfig*(path: string): Config =
              except IOError as e: raise newException(ConfigError, "cannot read " & path & ": " & e.msg)
   let j = try: parseJson(text)
           except JsonParsingError as e: raise newException(ConfigError, path & " is not valid JSON: " & e.msg)
-  parseConfig(j)
+  result = parseConfig(j)
+  # a relative data_dir is next to config.json, whatever folder the bot
+  # (or the terminal screen) was started from
+  if not result.dataDir.isAbsolute:
+    result.dataDir = absolutePath(path).parentDir / result.dataDir

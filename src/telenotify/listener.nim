@@ -486,10 +486,21 @@ proc checkDowntimeAtStart*(l: Listener) {.async.} =
     let since = fromUnix(parseBiggestInt(last)).local.format("yyyy-MM-dd HH:mm")
     await l.alert(&"was not running for {duration(gap)} (since {since}). Back now.")
 
+proc forgetOldTexts*(l: Listener) =
+  ## `keep_text_days`: clear old post texts. Not in a dry run: `compare`
+  ## matches the other bot's posts by text, over any number of days.
+  if l.dryRun: return
+  try: l.state.forgetOldTexts(l.cfg.keepTextDays)
+  except CatchableError as e: l.say "   could not clear old post texts: " & e.msg
+
 proc heartbeat*(l: Listener) {.async.} =
+  var lastCleanup = 0'i64
   while not l.stop[]:
     try: l.state.setMeta("last_alive", $getTime().toUnix)
     except CatchableError as e: l.say "   heartbeat: " & e.msg
+    if getTime().toUnix - lastCleanup >= 86_400:   # at start, then daily
+      lastCleanup = getTime().toUnix
+      l.forgetOldTexts()
     for _ in 0 ..< 60:
       if l.stop[]: break
       await sleepAsync(1000)
