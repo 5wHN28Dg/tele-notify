@@ -260,7 +260,8 @@ proc saveChats*(s: State, chats: seq[ChatRow], watched: seq[int64]) =
     for c in chats:
       let st = s.getMeta("chat_access:" & $c.id)
       s.db.exec(sql"INSERT OR REPLACE INTO chats VALUES (?, ?, ?, ?, ?, ?)", c.id, c.title, c.kind,
-                (if c.id in watched: 1 else: 0), (if st == "": "ok" else: st), now())
+                # a public channel you never joined is readable: fine
+                (if c.id in watched: 1 else: 0), (if st in ["", "left-public"]: "ok" else: st), now())
       seenIds.add c.id
     for w in watched:
       if w notin seenIds:

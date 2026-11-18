@@ -59,6 +59,7 @@ suite "state":
 
   test "the chat list keeps names, watched flags and access status":
     st.setMeta("chat_access:-200", "banned")
+    st.setMeta("chat_access:-100", "left-public")
     st.saveChats(@[ChatRow(id: -100, title: "Jobs", kind: "channel"),
                    ChatRow(id: -200, title: "Other", kind: "group")], @[-100'i64, -200, -300])
     check st.chatStatus(-100) == "ok" and st.chatStatus(-200) == "banned"

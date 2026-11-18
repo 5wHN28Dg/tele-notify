@@ -75,7 +75,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
         # has run (and the titles are known) they're left to it.
         if not accessReady: return
         let (chat, access) = parseAccessUpdate(u)
-        if chat in watched: asyncCheck l.onChatAccess(chat, access)
+        if chat in watched: asyncCheck l.onChatAccess(chat, access, live = true)
       of "updateConnectionState":
         l.onConnectionState(u{"state", "@type"}.getStr)
       of "updateAuthorizationState":

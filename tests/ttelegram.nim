@@ -82,3 +82,17 @@ suite "chat access (#16)":
     check not isAccessError("no answer from TDLib after 300 s")
     check not isAccessError("TDLib closed")
     check not isAccessError("Too Many Requests: retry after 5 (429)")
+
+suite "public channels (#16 review)":
+  test "a supergroup with an active username is public":
+    let (chat, a) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
+      "status": {"@type": "chatMemberStatusLeft"}, "usernames": {"active_usernames": ["basrajobs"]}}})
+    check chat == -1000000000005 and a.status == "left" and a.public
+    let (_, b) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
+      "status": {"@type": "chatMemberStatusLeft"}, "usernames": {"active_usernames": []}}})
+    check not b.public
+
+  test "no username list at all is not public, and not a crash":
+    let (_, a) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
+      "status": {"@type": "chatMemberStatusLeft"}}})
+    check not a.public
