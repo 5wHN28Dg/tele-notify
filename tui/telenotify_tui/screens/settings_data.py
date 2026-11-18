@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -149,6 +150,31 @@ def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
+
+
+def _is_int64(v: Any) -> bool:
+    """A whole number the bot can hold (Nim's int / int64): chat IDs and counts."""
+    return _is_int(v) and INT64_MIN <= v <= INT64_MAX
+
+
+def _non_finite(v: Any) -> bool:
+    """NaN or Infinity anywhere in `v` (json.loads reads NaN, Infinity and 1e999)."""
+    if isinstance(v, float):
+        return not math.isfinite(v)
+    if isinstance(v, dict):
+        return any(_non_finite(x) for x in v.values())
+    if isinstance(v, list):
+        return any(_non_finite(x) for x in v)
+    return False
+
+
+def non_finite_keys(cfg: dict) -> list[str]:
+    """Top-level keys holding NaN / Infinity: standard JSON can't store them, so
+    the file can't be saved while they are there."""
+    return [k for k, v in cfg.items() if _non_finite(v)]
+
+
 def validate(cfg: dict) -> list[Problem]:
     """Everything wrong with `cfg`. Errors block saving; warnings don't."""
     p: list[Problem] = []
@@ -176,7 +202,7 @@ def validate(cfg: dict) -> list[Problem]:
 
     for key in INT_KEYS:
         v = cfg.get(key, MISSING)
-        if v is not MISSING and (not _is_int(v) or v < 0):
+        if v is not MISSING and (not _is_int64(v) or v < 0):
             p.append(Problem(key, "must be a whole number, 0 or more", True))
     for key in BOOL_KEYS:
         v = cfg.get(key, MISSING)
@@ -194,7 +220,7 @@ def validate(cfg: dict) -> list[Problem]:
     if not isinstance(chats, list):
         p.append(Problem("chats", "must be a list of chat IDs", True))
     else:
-        bad = [str(c) for c in chats if not _is_int(c)]
+        bad = [str(c) for c in chats if not _is_int64(c)]
         if bad:
             p.append(Problem("chats", "not chat IDs (whole numbers): " + ", ".join(bad), True))
         elif len(set(chats)) != len(chats):
@@ -202,12 +228,15 @@ def validate(cfg: dict) -> list[Problem]:
         if not chats:
             p.append(Problem("chats", "no chats are watched: the bot will read nothing", False))
     t = cfg.get("target_chat", MISSING)
-    if t is not MISSING and not _is_int(t):
+    if t is not MISSING and not _is_int64(t):
         p.append(Problem("target_chat", "must be a chat ID (a whole number)", True))
     elif t in (MISSING, 0):
         p.append(Problem("target_chat", "no target chat: matches have nowhere to go", False))
     elif isinstance(chats, list) and t in chats:
         p.append(Problem("target_chat", "the target chat is also watched", False))
+    for key in non_finite_keys(cfg):
+        p.append(Problem(key, "holds NaN or Infinity (a number too big, like 1e999?), which can't be "
+                              "saved as JSON: fix it in config.json by hand", True))
     return p
 
 
@@ -272,7 +301,9 @@ def take_disk(base: dict, original: dict, edited: dict, keys: list[str]) -> dict
 # ------------------------------------------------------------------ saving
 
 def dumps(cfg: dict) -> str:
-    return json.dumps(cfg, ensure_ascii=False, indent=2) + "\n"
+    """config.json's text. Raises ValueError for NaN / Infinity (non_finite_keys):
+    Python would write them, but they aren't JSON and the bot couldn't read the file."""
+    return json.dumps(cfg, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
 
 
 def backup(path: Path, now: float | None = None) -> Path:
@@ -305,10 +336,12 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def save(path: Path, cfg: dict, now: float | None = None) -> Path | None:
-    """Back up the current file, then write `cfg` atomically. Returns the backup's path."""
+    """Back up the current file, then write `cfg` atomically. Returns the backup's path.
+    Raises ValueError (before touching anything) when `cfg` holds NaN / Infinity."""
     path = Path(path)
+    text = dumps(cfg)
     bak = backup(path, now) if path.exists() else None
-    write_atomic(path, dumps(cfg))
+    write_atomic(path, text)
     return bak
 
 

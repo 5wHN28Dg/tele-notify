@@ -84,3 +84,70 @@ def test_old_state_without_new_tables(tmp_path: Path):
     with Store(p) as s:
         assert s.recent()[0].text == "" and s.alerts() == [] and s.chats() == []
         assert s.stats(1)[0].reject == 1
+
+
+def _insert_review(state, msg_id, text_sql, album="NULL"):
+    import sqlite3
+    db = sqlite3.connect(state)
+    db.execute(f"""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at, album_ids)
+                   VALUES (-2, {msg_id}, 'x', {text_sql}, 'r', 'it', '', 'pending', 1, {album})""")
+    db.commit()
+    db.close()
+
+
+def test_invalid_utf8_reads_as_replacement_characters(state):
+    _insert_review(state, 200, "CAST(X'61FF62' AS TEXT)")
+    with Store(state) as s:
+        [r] = [r for r in s.reviews() if r.msg_id == 200]
+    assert r.text == "a�b"
+
+
+def test_album_ids_take_ascii_digits_only(state):
+    _insert_review(state, 300, "'post'", album="'²'")
+    _insert_review(state, 301, "'post'", album="'301, -5,٣,1²,x'")
+    with Store(state) as s:
+        rows = {r.msg_id: r for r in s.reviews()}
+    assert rows[300].album_ids == [300]
+    assert rows[301].album_ids == [301, -5]
+
+
+def test_text_from_the_state_has_no_control_characters(state):
+    import sqlite3
+    db = sqlite3.connect(state)
+    db.execute("UPDATE reviews SET chat_title = ?, text = ?", ("T\x1b[41mRED", "a\x1b]0;X\x07b\x9bc\nd"))
+    db.execute("UPDATE processed SET chat_title = ?", ("T\x1b[41mRED",))
+    db.execute("UPDATE meta SET value = ? WHERE key = 'connection'", ("re\x1bady",))
+    db.commit()
+    db.close()
+    with Store(state) as s:
+        [r] = s.reviews()
+        assert (r.chat_title, r.text) == ("T[41mRED", "a]0;Xbc\nd")
+        assert s.meta("connection") == "ready"
+        assert {j.chat_title for j in s.recent()} == {"T[41mRED"}
+
+
+def test_last_alive_with_non_ascii_digits_is_unknown(state):
+    import sqlite3
+    db = sqlite3.connect(state)
+    db.execute("UPDATE meta SET value = '²' WHERE key = 'last_alive'")
+    db.commit()
+    db.close()
+    with Store(state) as s:
+        assert s.last_alive() is None
+
+
+def test_undo_only_while_the_decision_stands(state):
+    with Store(state) as s:
+        [r] = s.reviews()
+        assert s.decide(r.id, "to_send")
+        assert s.undo(r.id, "to_send") == (True, "pending")
+        assert [x.id for x in s.reviews()] == [r.id]
+        assert s.decide(r.id, "discarded")
+        assert s.undo(r.id, "to_send") == (False, "discarded")     # not the decision being undone
+        assert s.undo(r.id, "discarded") == (True, "pending")
+        assert s.decide(r.id, "to_send")
+        s.db.execute("UPDATE reviews SET status = 'sent' WHERE id = ?", (r.id,))   # the bot sent it
+        s.db.commit()
+        assert s.undo(r.id, "to_send") == (False, "sent")
+        assert s.reviews() == []
+        assert s.undo(9999, "discarded") == (False, None)

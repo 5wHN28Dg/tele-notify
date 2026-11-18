@@ -17,15 +17,23 @@ Tables (see state.nim for the authoritative schema):
 * alerts (id, at, text): warnings the bot sent to Saved Messages.
 * chats (id, title, kind, watched, status, updated_at): the account's chats,
   refreshed by the bot at startup; status is ok / banned / left / unreadable.
+
+Every text value is read leniently and made printable (clean.clean): bytes
+that aren't valid UTF-8 become U+FFFD instead of failing the whole query,
+and control characters a stranger put in a post or chat title never reach
+the terminal.
 """
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
+
+from .clean import clean
 
 VERDICTS = ("publish", "review", "reject")
 
@@ -89,6 +97,14 @@ class Chat:
     updated_at: int
 
 
+def _text(b: bytes) -> str:
+    return clean(b.decode("utf-8", "replace"))
+
+
+_ALBUM_ID = re.compile(r"-?[0-9]+")
+_DIGITS = re.compile(r"[0-9]+")
+
+
 class Store:
     """One connection to the bot's state file. Open it, use it, close it."""
 
@@ -100,6 +116,7 @@ class Store:
         if self.path.exists():
             self.db = sqlite3.connect(self.path, timeout=timeout)
             self.db.row_factory = sqlite3.Row
+            self.db.text_factory = _text
             self.db.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
 
     @property
@@ -142,7 +159,7 @@ class Store:
 
     def last_alive(self) -> int | None:
         v = self.meta("last_alive")
-        return int(v) if v.isdigit() else None
+        return int(v) if _DIGITS.fullmatch(v) else None   # ASCII only: int("²") raises
 
     # ---------------------------------------------------------- processed
 
@@ -222,7 +239,8 @@ class Store:
     def _review(self, r: sqlite3.Row, cols: set[str]) -> Review:
         ids: list[int] = []
         if "album_ids" in cols and r["album_ids"]:
-            ids = [int(x) for x in str(r["album_ids"]).split(",") if x.strip().lstrip("-").isdigit()]
+            ids = [int(x) for x in (p.strip() for p in str(r["album_ids"]).split(","))
+                   if _ALBUM_ID.fullmatch(x)]
         return Review(id=r["id"], chat_id=r["chat_id"], msg_id=r["msg_id"], chat_title=r["chat_title"] or "",
                       text=r["text"] or "", reasons=r["reasons"] or "", role=r["role"] or "",
                       link=r["link"] or "", status=r["status"] or "", at=r["at"] or 0,
@@ -251,6 +269,23 @@ class Store:
                               (status, int(time.time()), review_id, from_status))
         self.db.commit()
         return cur.rowcount == 1
+
+    def undo(self, review_id: int, status: str) -> tuple[bool, str | None]:
+        """Put a review decided as `status` ("to_send" / "discarded") back to
+        pending, but only if it still has that status: once the bot has sent an
+        approved post ("sent") it can't be taken back. Returns (undone, the
+        status it has now; None when the row is gone)."""
+        if status not in ("to_send", "discarded"):
+            raise ValueError(f"not a decision: {status}")
+        if self.db is None:
+            return False, None
+        cur = self.db.execute("UPDATE reviews SET status = 'pending', decided_at = NULL "
+                              "WHERE id = ? AND status = ?", (review_id, status))
+        self.db.commit()
+        if cur.rowcount == 1:
+            return True, "pending"
+        rows = self._rows("SELECT status FROM reviews WHERE id = ?", (review_id,))
+        return False, (rows[0][0] if rows else None)
 
     # ------------------------------------------------------- alerts, chats
 

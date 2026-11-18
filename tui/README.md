@@ -5,7 +5,7 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 | Tab | Key | What it does |
 |---|---|---|
 | Dashboard | `1` | Is the bot running and connected, dry run or real; start / stop / restart it; posts judged today and this week; a 14-day chart; numbers per channel; a live feed of what it just judged; alerts; channels that blocked you or went silent |
-| Review | `2` | The review queue: read each unsure post and send (`s`) or discard (`d`) it; `o` opens the link, `r` shows what the filter read from links. Every choice is also saved as a test label (`~/.local/share/tele-notify-corpus/review-labels.jsonl`) |
+| Review | `2` | The review queue: read each unsure post and send (`s`) or discard (`d`) it (for a moment after a post appears these keys wait, so a double tap can't decide the next post unread); `u` undoes the last choice unless the bot already sent the post; `o` opens the link, `r` shows what the filter read from links. Every choice is also saved as a test label (`~/.local/share/tele-notify-corpus/review-labels.jsonl`) |
 | Search | `3` | Search everything the bot judged and see why; re-judge a post with the current settings (`j`, or `J` to follow links); paste any post to try it (`p`) |
 | Settings | `4` | Edit keywords, places, watched chats (by name), the target chat and the bot options; test a change on the corpus before saving (`t`); save (`ctrl+s`) with a backup, then restart the bot to apply it (offered only while it runs) |
 
@@ -20,6 +20,8 @@ python3 -m venv .venv
 .venv/bin/telenotify-tui --config:/path/to/config.json            # the real bot
 .venv/bin/telenotify-tui --config:/path/to/config.json --dry-run  # the dry run
 ```
+
+`"dry_run": true` in config.json also means the dry run, as it does for the bot. The state file is worked out once at start from `data_dir` (blank means `~/.local/share/tele-notify`; a relative path is relative to the config file's folder), so after changing `data_dir` or `dry_run` in Settings, reopen the screen.
 
 It finds the `telenotify` program next to the config, in `~/tele-notify`, on `$PATH`, or at `$TELENOTIFY_BIN`. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
 

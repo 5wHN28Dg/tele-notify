@@ -403,3 +403,125 @@ def test_two_writers_lose_no_labels(labels):
         p.join(60)
         assert p.exitcode == 0
     assert len({l["id"] for l in read_labels(labels)}) == 60
+
+
+# ------------------------------------------------- double taps and undo
+
+async def test_double_tap_doesnt_decide_the_next_post_unread(paths, state, now, monkeypatch):
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    add_pending(state, 100, "second post never shown", now - 10)
+    add_pending(state, 101, "third post never shown", now - 5)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10                     # the first post has been read
+        await pilot.press("s", "s")              # key auto-repeat / double tap
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+        assert status_of(state, 100) == "pending"
+        assert "approved" in note(app) and "only just appeared" in note(app)
+        await pilot.click("#btn-send")           # a double click on Send: the same
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+        pane._shown_at -= 10                     # read now: the key works again
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 100) == "to_send"
+        assert status_of(state, 101) == "pending"
+
+
+async def test_undo_send_puts_it_back_and_drops_the_label(paths, state, labels, now):
+    add_pending(state, 7, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        assert pane.check_action("undo", ()) is None          # nothing to undo yet
+        await pilot.press("d")                                # discard post 11 (the older one)
+        await pilot.pause()
+        await pilot.press("s")                                # approve post 7
+        await pilot.pause()
+        assert [l["id"] for l in read_labels(labels)] == ["-1:11", "-2:7"]
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 7) == "pending" and status_of(state, 11) == "discarded"
+        assert "back in the queue" in note(app)
+        assert [l["id"] for l in read_labels(labels)] == ["-1:11"]
+        assert str(app.query_one("#detail-text", Static).content) == "second post"   # open again
+        assert pane.check_action("undo", ()) is None          # one step only
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "discarded"
+
+
+async def test_undo_discard(paths, state, labels):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("d")
+        await pilot.pause()
+        assert app.query_one("#btn-undo", Button).display
+        await pilot.click("#btn-undo")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending"
+        assert app.query_one("#review-list", OptionList).option_count == 1
+        assert not app.query_one("#btn-undo", Button).display
+    assert read_labels(labels) == []
+
+
+async def test_undo_after_the_bot_sent_it_is_too_late(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        db = sqlite3.connect(state)                  # the bot sends it and marks it
+        db.execute("UPDATE reviews SET status = 'sent' WHERE msg_id = 11")
+        db.commit()
+        db.close()
+        await pilot.press("u")
+        await pilot.pause()
+        assert "too late" in note(app) and "already sent" in note(app)
+        assert status_of(state, 11) == "sent"
+    assert [l["label"] for l in read_labels(labels)] == ["TRUE"]   # it did go out: the label stays
+
+
+# ------------------------------------------------- odd data in the state file
+
+async def test_invalid_utf8_doesnt_block_the_queue(paths, state, now):
+    db = sqlite3.connect(state)
+    db.execute("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at)
+                  VALUES (-2, 200, 'x', CAST(X'61FF62' AS TEXT), 'r', 'it', '', 'pending', ?)""", (now - 5,))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        assert len(app.query_one(ReviewPane)._items) == 2
+        assert "can't read" not in note(app)
+
+
+async def test_superscript_album_id_doesnt_crash(paths, state, now):
+    db = sqlite3.connect(state)
+    db.execute("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at, album_ids)
+                  VALUES (-2, 300, 'x', 'post', 'r', 'it', '', 'pending', ?, '²')""", (now - 5,))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        assert app.is_running
+        assert len(app.query_one(ReviewPane)._items) == 2
+
+
+async def test_a_value_error_from_the_data_is_a_note_not_a_crash(paths, monkeypatch):
+    def broken(self, status="pending"):
+        raise ValueError("invalid literal for int() with base 10: '²'")
+
+    monkeypatch.setattr(Store, "reviews", broken)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        assert app.is_running
+        assert "can't read the state file" in note(app)

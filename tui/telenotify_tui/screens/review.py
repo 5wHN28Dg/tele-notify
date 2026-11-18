@@ -6,6 +6,10 @@ Left, the posts waiting for a decision; right, the one under the cursor.
 filter read (it runs `telenotify check` with link scraping), `h` shows what
 was decided recently.
 
+`u` undoes the last decision made here, unless the bot has already sent
+the post. For a moment after a new post appears, `s` / `d` are ignored, so
+a double tap or a held key can't decide a post nobody has read.
+
 Decisions are written exactly as `telenotify review` writes them
 (Store.decide), and each one is also a label for the test corpus
 (review_data.write_label).
@@ -30,8 +34,9 @@ from textual.widgets import Button, DataTable, OptionList, Static
 from textual.widgets.option_list import Option
 
 from .. import bot
+from ..clean import clean
 from ..store import Review
-from .review_data import history, write_label
+from .review_data import history, remove_label, write_label
 
 DECISION_KEYS = ("send", "discard", "next", "open_link", "check")
 UI_TIMEOUT = 1.0   # seconds to wait for the bot's lock: these reads and writes run on the UI thread
@@ -96,7 +101,7 @@ class CheckModal(ModalScreen[None]):
                          classes="title")
             with VerticalScroll(id="check-body"):
                 if v.error and not v.verdict:
-                    yield Static(Content(f"The filter couldn't judge it: {v.error}"), id="check-verdict",
+                    yield Static(Content(clean(f"The filter couldn't judge it: {v.error}")), id="check-verdict",
                                  classes="bad")
                 else:
                     yield Static(Content(f"verdict: {v.verdict}"), id="check-verdict")
@@ -121,6 +126,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         Binding("o", "open_link", "Open link"),
         Binding("r", "check", "Filter read"),
         Binding("h", "toggle_history", "History"),
+        Binding("u", "undo", "Undo"),
         Binding("space", "scroll_post(1)", "Scroll post"),
         Binding("b", "scroll_post(-1)", "Scroll back", show=False),
     ]
@@ -148,6 +154,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._await_pick = False                   # the open post vanished: nothing selected until the reader moves
         self._just_decided: int | None = None      # decided here: moving on to the next post is expected
         self._read_error = False
+        self._shown_at = 0.0                       # time.monotonic() when the open post was drawn
+        self._last: tuple[Review, str] | None = None   # the last decision made here, while undoable
+        self._decided_note = ""                    # what that decision's note said
+
+    # seconds during which s / d (keys and buttons) are ignored after a new post
+    # is shown: a double tap or a held key mustn't decide a post nobody has read
+    DECIDE_DELAY: ClassVar[float] = 0.8
 
     # ------------------------------------------------------------ layout
 
@@ -170,6 +183,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             yield KeyButton("Open link", id="btn-open", compact=True)
             yield KeyButton("Filter read", id="btn-check", compact=True)
             yield KeyButton("History", id="btn-history", compact=True)
+            yield KeyButton("Undo", id="btn-undo", compact=True)
 
     def on_mount(self) -> None:
         table = self.query_one("#review-history", DataTable)
@@ -209,7 +223,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     def note(self, text: str, style: str = "muted") -> None:
         n = self.query_one("#review-note", Static)
         n.set_classes(style)
-        n.update(Content(text))
+        n.update(Content(clean(text)))
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action in DECISION_KEYS and self.is_mounted:
@@ -219,6 +233,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 return None  # shown, but disabled
             if action == "check" and self.app.paths.binary is None:
                 return None
+        if action == "undo" and self.is_mounted:
+            return True if self._last is not None else None
         return True
 
     def _sync_controls(self) -> None:
@@ -229,6 +245,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             button.display = not off  # with nothing open, only History (and Next, to pick one) is offered
             button.disabled = off or (bid == "#btn-check" and self.app.paths.binary is None)
         self.query_one("#btn-history", Button).label = "Queue" if self._history_mode else "History"
+        self.query_one("#btn-undo", Button).display = self._last is not None
         self.refresh_bindings()
 
     # ------------------------------------------------------------ reload
@@ -240,11 +257,11 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 exists, has_table = st.exists, st.has_table("reviews")
                 items = st.reviews("pending")
                 past = history(st) if self._history_mode else []
-        except (sqlite3.Error, OSError) as e:   # the bot holds a lock, or the file is broken
+        except (sqlite3.Error, OSError, ValueError) as e:   # a lock, a broken file, a value that isn't a number
             self._read_error = True
             self.note(f"can't read the state file: {e}", "warn")
             if self._history_mode or not self._items:
-                self.query_one("#review-empty", Static).update(Content(f"Can't read the state file: {e}"))
+                self.query_one("#review-empty", Static).update(Content(clean(f"Can't read the state file: {e}")))
                 self._show_only("#review-empty")
             self._sync_controls()
             return
@@ -277,7 +294,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self.query_one("#review-list", OptionList).clear_options()
             empty = self.query_one("#review-empty", Static)
             if not exists:
-                empty.update(Content(f"No state file yet ({self.app.paths.state}).\n"
+                empty.update(Content(f"No state file yet ({clean(self.app.paths.state)}).\n"
                                      "Start the bot and unclear posts will show up here."))
             elif not has_table:
                 empty.update(Content("This bot's state has no review queue yet."))
@@ -346,6 +363,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self.query_one("#detail-text", Static).update("")
         elif key != self._shown_key:   # same post, unchanged: leave the reader alone
             self._shown_key = key
+            self._shown_at = time.monotonic()
             when_full = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.at)) if r.at else "-"
             album = f"  ({len(r.album_ids)} messages)" if len(r.album_ids) > 1 else ""
             head = (f"chat:  {r.chat_title}  #{r.msg_id}{album}\n"
@@ -364,6 +382,11 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         r = self.current
         if r is None:
             return
+        if time.monotonic() - self._shown_at < self.DECIDE_DELAY:
+            # a double tap / held key, or a click that landed as the next post appeared
+            before = f"{self._decided_note}  ·  " if self._decided_note else ""
+            self.note(f"{before}#{r.msg_id} has only just appeared: read it, then decide", "warn")
+            return
         try:
             with self.app.store(UI_TIMEOUT) as st:
                 ok = st.decide(r.id, status)
@@ -372,8 +395,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             return
         self._just_decided = r.id
         if not ok:
+            self._decided_note = ""
             self.note(f"#{r.msg_id} was already decided elsewhere", "warn")
         else:
+            self._last = (r, status)
             label_note = ""
             try:
                 write_label(r, status)
@@ -384,8 +409,43 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                        else "approved, the bot will send it in a few seconds")
             else:
                 msg = "discarded"
-            self.note(f"#{r.msg_id} {msg}{label_note}", "warn" if label_note else "good")
+            self._decided_note = f"#{r.msg_id} {msg}{label_note} (u undoes)"
+            self.note(self._decided_note, "warn" if label_note else "good")
         self.reload()
+
+    def action_undo(self) -> None:
+        """Put the last post decided here back in the queue, if the bot hasn't sent it yet."""
+        if self._last is None:
+            return
+        r, status = self._last
+        try:
+            with self.app.store(UI_TIMEOUT) as st:
+                ok, now = st.undo(r.id, status)
+        except (sqlite3.Error, OSError) as e:
+            self.note(f"#{r.msg_id} NOT undone (the state file can't be written: {e}); try again", "bad")
+            return
+        self._last = None
+        self._decided_note = ""
+        if not ok:
+            if now == "sent":
+                self.note(f"too late to undo: the bot has already sent #{r.msg_id} to the channel", "bad")
+            else:
+                self.note(f"#{r.msg_id} can't be undone: it is now {now or 'gone from the queue'}", "warn")
+            self._sync_controls()
+            return
+        label_note = ""
+        try:
+            remove_label(r)
+        except (OSError, ValueError) as e:
+            label_note = f" (its corpus label couldn't be removed: {e})"
+        self.note(f"#{r.msg_id} is back in the queue{label_note}", "warn" if label_note else "good")
+        self.reload()
+        ids = [x.id for x in self._items]
+        if not self._history_mode and r.id in ids:   # open it again
+            ol = self.query_one("#review-list", OptionList)
+            self._await_pick = False
+            ol.highlighted = ids.index(r.id)
+            self._sync_detail()
 
     def action_send(self) -> None:
         self._decide("to_send")
@@ -456,7 +516,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     def _button(self, event: Button.Pressed) -> None:
         actions = {"btn-send": self.action_send, "btn-discard": self.action_discard,
                    "btn-next": self.action_next, "btn-open": self.action_open_link,
-                   "btn-check": self.action_check, "btn-history": self.action_toggle_history}
+                   "btn-check": self.action_check, "btn-history": self.action_toggle_history,
+                   "btn-undo": self.action_undo}
         if event.button.id in actions:
             event.stop()
             actions[event.button.id]()

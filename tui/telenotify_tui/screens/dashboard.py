@@ -41,6 +41,7 @@ from textual.widgets import (
 from textual.widgets.data_table import CellDoesNotExist
 
 from .. import bot
+from ..clean import clean
 from ..store import Alert, ChatStats, Judged, Store
 from . import dashboard_data as dd
 from . import search_data
@@ -140,7 +141,8 @@ class Snapshot:
 
 
 def _int(v: str) -> int | None:
-    return int(v) if v.strip().isdigit() else None
+    v = v.strip()
+    return int(v) if v.isascii() and v.isdigit() else None
 
 
 def load_snapshot(path: Path, stat_days: int) -> Snapshot:
@@ -164,7 +166,7 @@ def load_snapshot(path: Path, stat_days: int) -> Snapshot:
             snap.alerts = s.alerts(100)
             snap.problems = dd.chat_problems(s, now)
     except (sqlite3.Error, OSError, ValueError) as e:  # a locked or half-written file: say so, try again next tick
-        snap.error = f"{type(e).__name__}: {e}"
+        snap.error = clean(f"{type(e).__name__}: {e}")
     return snap
 
 
@@ -423,7 +425,7 @@ class DashboardPane(Vertical):
         elif snap.error:
             out.append(f"can't read the state file: {snap.error}", style="red")
         elif not snap.exists:
-            out.append(f"No state file yet ({self.paths.state.name}).\n", style="dim")
+            out.append(f"No state file yet ({clean(self.paths.state.name)}).\n", style="dim")
             out.append("Start the bot in this mode to see it here.", style="dim")
         else:
             now = snap.now
@@ -435,10 +437,15 @@ class DashboardPane(Vertical):
             else:
                 alive = (f"not seen for {fmt_age(now - snap.last_alive)}", "red")
             row("Mode", (mode, "bold"), ("  ·  ", "dim"), alive)
-            conn = snap.connection or "unknown"
-            conn_style = "green" if conn == "ready" else "dim" if conn == "unknown" else "yellow"
+            stale = snap.last_alive is None or now - snap.last_alive >= ALIVE_SECONDS
+            if stale:
+                # the stored connection is whatever the bot last wrote: after a crash it still says "ready"
+                conn, conn_style = "not running", "dim"
+            else:
+                conn = snap.connection or "unknown"
+                conn_style = "green" if conn == "ready" else "dim" if conn == "unknown" else "yellow"
             up = []
-            if snap.started_at:
+            if snap.started_at and not stale:
                 up = [("  ·  ", "dim"), (f"up {fmt_age(now - snap.started_at)}", "")]
             row("Telegram", (conn, conn_style), *up)
             if snap.pending:

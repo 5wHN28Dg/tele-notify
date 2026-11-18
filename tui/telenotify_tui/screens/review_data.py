@@ -54,8 +54,23 @@ def write_label(review: Review, decision: str, path: Path | None = None,
     other's labels.
     """
     path = path or labels_path()
-    entry = {"id": label_id(review), "text": review.text, "label": LABELS[decision],
+    entry: dict ={"id": label_id(review), "text": review.text, "label": LABELS[decision],
              "source": "review", "at": int(time.time()) if now is None else now}
+    _rewrite(path, entry["id"], json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+    return path
+
+
+def remove_label(review: Review, path: Path | None = None) -> Path:
+    """Take `review`'s label out of the file again (its decision was undone).
+    Every other line is kept byte for byte; no file means nothing to do."""
+    path = path or labels_path()
+    if path.exists():
+        _rewrite(path, label_id(review), None)
+    return path
+
+
+def _rewrite(path: Path, lid: str, line: bytes | None) -> None:
+    """Drop the line for `lid` and append `line` (if any), under the lock, atomically."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_fd = os.open(path.with_name(path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -63,12 +78,13 @@ def write_label(review: Review, decision: str, path: Path | None = None,
         lines: list[bytes] = []
         if path.exists():
             lines = [l for l in path.read_bytes().splitlines()
-                     if l.strip() and _line_id(l) != entry["id"]]
-        lines.append(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+                     if l.strip() and _line_id(l) != lid]
+        if line is not None:
+            lines.append(line)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".review-labels.", suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as f:
-                f.write(b"\n".join(lines) + b"\n")
+                f.write(b"".join(l + b"\n" for l in lines))
             os.chmod(tmp, 0o600)
             os.replace(tmp, path)
         except BaseException:
@@ -76,7 +92,6 @@ def write_label(review: Review, decision: str, path: Path | None = None,
             raise
     finally:
         os.close(lock_fd)   # releases the lock
-    return path
 
 
 def history(store: Store, limit: int = 50) -> list[Review]:

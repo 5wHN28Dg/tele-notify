@@ -13,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
 
+from .clean import clean
 from .paths import Paths
 from .screens.dashboard import DashboardPane
 from .screens.review import ReviewPane
@@ -40,7 +41,13 @@ class TeleNotifyApp(App):
         super().__init__()
         self.paths = paths
         self.refresh_seconds = refresh_seconds
-        self.sub_title = ("DRY RUN · " if paths.dry_run else "") + str(paths.config)
+        self.sub_title = ("DRY RUN · " if paths.dry_run else "") + clean(paths.config)
+
+    def notify(self, message: str, *, title: str = "", severity="information",
+               timeout: float | None = None, markup: bool = True) -> None:
+        """Every notification (widgets' notify comes here too) without control
+        characters: messages carry paths, errors and config values."""
+        super().notify(clean(message), title=clean(title), severity=severity, timeout=timeout, markup=markup)
 
     def store(self, timeout: float = 10) -> Store:
         """A fresh connection to the bot's state (use it in a `with` block).

@@ -70,6 +70,21 @@ async def test_not_seen_when_last_alive_is_old(paths, now):
         assert "not seen for 3h" in text(app, "#status")
 
 
+@pytest.mark.parametrize("age", [121, 3 * 3600])
+async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
+    """The bot wrote connection=ready, then died: the dashboard mustn't keep saying ready."""
+    db = sqlite3.connect(paths.state)
+    db.execute("UPDATE meta SET value = ? WHERE key = 'last_alive'", (str(now - age),))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        status = text(app, "#status")
+        telegram = next(line for line in status.splitlines() if line.startswith("Telegram"))
+        assert "not running" in telegram and "ready" not in telegram and "up " not in telegram
+
+
 async def test_totals(paths):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:
