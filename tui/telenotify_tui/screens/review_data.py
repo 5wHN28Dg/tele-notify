@@ -9,6 +9,7 @@ the file directly.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
@@ -33,9 +34,9 @@ def label_id(review: Review) -> str:
     return f"{review.chat_id}:{review.msg_id}"
 
 
-def _line_id(line: str) -> str | None:
+def _line_id(line: bytes) -> str | None:
     try:
-        obj = json.loads(line)
+        obj = json.loads(line)   # a line that isn't UTF-8 / JSON has no id and is kept as is
     except ValueError:
         return None
     return str(obj.get("id")) if isinstance(obj, dict) and "id" in obj else None
@@ -46,28 +47,35 @@ def write_label(review: Review, decision: str, path: Path | None = None,
     """Record `decision` ("to_send" / "discarded") for `review` as a corpus label.
 
     A post already in the file gets its line replaced (the later decision
-    wins); every other line is kept as it was. The folder is created private
-    (0700) if missing; the file is written whole and swapped in, so a crash
-    never leaves half a file.
+    wins); every other line is kept byte for byte, even one that isn't valid
+    UTF-8. The folder is created private (0700) if missing; the file is
+    written whole and swapped in, so a crash never leaves half a file. A lock
+    on a sidecar file (<name>.lock) keeps two open screens from losing each
+    other's labels.
     """
     path = path or labels_path()
     entry = {"id": label_id(review), "text": review.text, "label": LABELS[decision],
              "source": "review", "at": int(time.time()) if now is None else now}
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    lines: list[str] = []
-    if path.exists():
-        lines = [l for l in path.read_text(encoding="utf-8").splitlines()
-                 if l.strip() and _line_id(l) != entry["id"]]
-    lines.append(json.dumps(entry, ensure_ascii=False))
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".review-labels.", suffix=".tmp")
+    lock_fd = os.open(path.with_name(path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        lines: list[bytes] = []
+        if path.exists():
+            lines = [l for l in path.read_bytes().splitlines()
+                     if l.strip() and _line_id(l) != entry["id"]]
+        lines.append(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".review-labels.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(b"\n".join(lines) + b"\n")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+    finally:
+        os.close(lock_fd)   # releases the lock
     return path
 
 

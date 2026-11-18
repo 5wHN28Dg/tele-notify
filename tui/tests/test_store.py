@@ -19,6 +19,35 @@ def test_recent_and_search(state):
         assert [j.msg_id for j in s.search("", verdict="publish")] == [10]
 
 
+def test_search_takes_wildcards_literally(state):
+    import sqlite3
+    db = sqlite3.connect(state)
+    db.execute("UPDATE processed SET reasons = 'salary 100% paid' WHERE msg_id = 10")
+    db.execute("UPDATE processed SET reasons = 'see c:\\docs' WHERE msg_id = 5")
+    db.commit()
+    db.close()
+    with Store(state) as s:
+        assert [j.msg_id for j in s.search("%")] == [10]
+        assert s.search("_") == []
+        assert [j.msg_id for j in s.search("100%")] == [10]
+        assert s.search("1_0") == []
+        assert [j.msg_id for j in s.search("c:\\docs")] == [5]
+        assert s.search("\\") and len(s.search("")) == 4
+
+
+def test_chats_table_with_missing_columns(tmp_path: Path):
+    import sqlite3
+    p = tmp_path / "s.sqlite3"
+    db = sqlite3.connect(p)
+    db.execute("CREATE TABLE chats (id INTEGER PRIMARY KEY, title TEXT)")
+    db.execute("INSERT INTO chats VALUES (1, 'x')")
+    db.commit()
+    db.close()
+    with Store(p) as s:
+        [c] = s.chats()
+        assert (c.id, c.title, c.kind, c.status, c.watched) == (1, "x", "", "ok", False)
+
+
 def test_stats_counts_like_the_bot(state):
     with Store(state) as s:
         rows = {r.chat: r for r in s.stats(1)}

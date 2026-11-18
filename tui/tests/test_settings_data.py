@@ -181,9 +181,41 @@ def test_write_temp_is_private(tmp_path):
     p = sd.write_temp(base_cfg())
     try:
         assert stat.S_IMODE(p.stat().st_mode) == 0o600
-        assert json.loads(p.read_text(encoding="utf-8")) == base_cfg()
+        cfg = base_cfg()
+        del cfg["api_id"], cfg["api_hash"]
+        assert json.loads(p.read_text(encoding="utf-8")) == cfg
     finally:
         p.unlink()
+
+
+def test_write_temp_leaves_the_secrets_out(tmp_path):
+    p = sd.write_temp(base_cfg())
+    try:
+        text = p.read_text(encoding="utf-8")
+        assert "api_id" not in text and "api_hash" not in text and "secret-hash" not in text
+    finally:
+        p.unlink()
+
+
+def test_same_change_on_disk_and_on_screen_is_no_conflict():
+    orig = base_cfg()
+    disk = dict(orig, chats=[-1, -2, -7], target_chat=-5)
+    ed = dict(orig, chats=[-1, -2, -7], target_chat=-6)
+    out, conflicts = sd.apply_edits(disk, orig, ed)
+    assert conflicts == ["target_chat"]
+    assert out["chats"] == [-1, -2, -7]
+
+
+def test_take_disk_keeps_the_other_edits():
+    orig = base_cfg()
+    disk = dict(orig, chats=[-5], recent_messages=["c"], api_hash="rotated")
+    ed = dict(orig, chats=[-1], target_chat=-1, max_experience_years=2)
+    new = sd.take_disk(disk, orig, ed, ["chats"])
+    assert new["chats"] == [-5] and new["target_chat"] == -1 and new["max_experience_years"] == 2
+    assert new["recent_messages"] == ["c"] and new["api_hash"] == "rotated"
+    assert set(sd.changed_keys(disk, new)) == {"target_chat", "max_experience_years"}
+    _, conflicts = sd.apply_edits(disk, disk, new)
+    assert conflicts == []
 
 
 def test_corpus_path(monkeypatch, tmp_path):

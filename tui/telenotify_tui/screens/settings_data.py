@@ -219,18 +219,16 @@ def errors(problems: list[Problem]) -> list[Problem]:
 
 def changed_keys(original: dict, edited: dict) -> list[str]:
     """Known keys whose value differs. Setting an absent key to its default is no change."""
-    out = []
-    for k in KNOWN_KEYS:
-        a, b = original.get(k, MISSING), edited.get(k, MISSING)
-        if a is MISSING and b is not MISSING and b == DEFAULTS[k]:
-            continue
-        if a is not MISSING and b is MISSING and a == DEFAULTS[k]:
-            continue
-        if a is MISSING and b is MISSING:
-            continue
-        if a != b or type(a) is not type(b):
-            out.append(k)
-    return out
+    return [k for k in KNOWN_KEYS if _key_changed(k, original, edited)]
+
+
+def _key_changed(k: str, original: dict, edited: dict) -> bool:
+    a, b = original.get(k, MISSING), edited.get(k, MISSING)
+    if a is MISSING and b is MISSING:
+        return False
+    if a is MISSING and b == DEFAULTS[k] or b is MISSING and a == DEFAULTS[k]:
+        return False
+    return a != b or type(a) is not type(b)
 
 
 def is_dirty(original: dict, edited: dict) -> bool:
@@ -240,14 +238,15 @@ def is_dirty(original: dict, edited: dict) -> bool:
 def apply_edits(base: dict, original: dict, edited: dict) -> tuple[dict, list[str]]:
     """Replay the user's edits (`original` -> `edited`) on top of `base`, the
     file as it is now. Returns (new config, conflicts): keys that changed
-    both on disk and in the screen (the screen's value wins in the result).
+    both on disk and in the screen to different values (the screen's value
+    wins in the result). The same change made in both places is no conflict.
 
     Unknown keys, secrets and the order of existing keys come from `base`;
     new keys go at the end."""
     out = dict(base)          # keeps base's key order
     conflicts = []
     for k in changed_keys(original, edited):
-        if base.get(k, MISSING) != original.get(k, MISSING):
+        if _key_changed(k, original, base) and _key_changed(k, base, edited):
             conflicts.append(k)
         new = edited.get(k, MISSING)
         if new is MISSING:
@@ -255,6 +254,19 @@ def apply_edits(base: dict, original: dict, edited: dict) -> tuple[dict, list[st
         else:
             out[k] = copy.deepcopy(new)
     return out, conflicts
+
+
+def take_disk(base: dict, original: dict, edited: dict, keys: list[str]) -> dict:
+    """The way out of a save conflict: the edits replayed on `base` (the file
+    as it is now), except that `keys` take the file's value. The result is
+    the new edited copy; use `base` as the new original."""
+    out, _ = apply_edits(base, original, edited)
+    for k in keys:
+        if k in base:
+            out[k] = copy.deepcopy(base[k])
+        else:
+            out.pop(k, None)
+    return out
 
 
 # ------------------------------------------------------------------ saving
@@ -301,10 +313,12 @@ def save(path: Path, cfg: dict, now: float | None = None) -> Path | None:
 
 
 def write_temp(cfg: dict) -> Path:
-    """`cfg` in a private temp file (it holds the secrets); the caller deletes it."""
+    """`cfg` in a private temp file for the corpus test; the caller deletes it.
+    The secrets (api_id / api_hash) are left out: judging posts doesn't need them."""
+    clean = {k: v for k, v in cfg.items() if k not in SECRET_KEYS}
     fd, tmp = tempfile.mkstemp(prefix="telenotify-config-", suffix=".json")   # mode 0600
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(dumps(cfg))
+        f.write(dumps(clean))
     return Path(tmp)
 
 

@@ -73,7 +73,7 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(self.message, id="confirm-text")
+            yield Static(Text(self.message), id="confirm-text")
             with Horizontal():
                 yield Button(f"{self.yes} (y)", variant="warning", id="yes")
                 yield Button("Cancel (n)", id="no")
@@ -103,8 +103,10 @@ class EvalModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(f"[b]Corpus test[/b]  [dim]{self.corpus}[/dim]\n"
-                         "Each cell: with the saved config.json -> with your edits")
+            head = Text("Corpus test", style="bold")
+            head.append(f"  {self.corpus}", style="dim")
+            head.append("\nEach cell: with the saved config.json -> with your edits")
+            yield Static(head)
             yield DataTable(id="eval-table", show_cursor=False, zebra_stripes=True)
             yield Static(id="eval-summary")
             yield Button("Close (esc)", id="close")
@@ -448,7 +450,7 @@ class SettingsPane(Vertical):
                 self.store_chats = s.chats()
         except (sqlite3.Error, OSError, ValueError) as e:  # a locked or broken state file mustn't break settings
             self.has_chat_table, self.store_chats = False, []
-            self.notify(f"Couldn't read the chat list: {e}", severity="warning")
+            self.notify(f"Couldn't read the chat list: {e}", severity="warning", markup=False)
 
     def reload(self) -> None:
         """Called by the app when the tab is shown and on ctrl+r."""
@@ -587,7 +589,7 @@ class SettingsPane(Vertical):
             status = Text(r.status, style="red" if r.status not in ("ok", "") else "")
             title = Text(r.title, style="italic dim" if not r.known else "")
             table.add_row(Text("[x]" if r.watched else "[ ]", style="bold green" if r.watched else "dim"), Text("->", style="bold green") if r.target else "",
-                          title, r.kind, status, Text(str(r.id), style="dim"), key=str(r.id))
+                          title, Text(r.kind), status, Text(str(r.id), style="dim"), key=str(r.id))
         if table.row_count:
             ids = [str(r.id) for r in rows]
             table.move_cursor(row=ids.index(keep) if keep in ids else min(cursor, table.row_count - 1))
@@ -603,7 +605,7 @@ class SettingsPane(Vertical):
         event.stop()
         v = sd.parse_int(event.value)
         if not isinstance(v, int):
-            self.notify(f"Not a chat ID: {event.value!r}", severity="error")
+            self.notify(f"Not a chat ID: {event.value!r}", severity="error", markup=False)
             return
         if v not in (self._get("chats") or []):
             chats = list(self._get("chats")) + [v]
@@ -689,7 +691,7 @@ class SettingsPane(Vertical):
 
     def action_save(self) -> None:
         if self.original is None:
-            self.notify(f"Nothing to save: {self.load_error}", severity="error")
+            self.notify(f"Nothing to save: {self.load_error}", severity="error", markup=False)
             return
         errs = sd.errors(sd.validate(self.edited))
         if errs:
@@ -704,39 +706,81 @@ class SettingsPane(Vertical):
         try:
             disk = sd.load(path)
         except sd.ConfigError as e:
-            self.notify(f"Not saved: {e}", severity="error")
+            self.notify(f"Not saved: {e}", severity="error", markup=False)
             return
         new, conflicts = sd.apply_edits(disk, self.original, self.edited)
         if conflicts:
-            self.notify("Not saved: config.json was changed elsewhere for " + ", ".join(conflicts)
-                        + ". Revert to load it (your edits are lost), or change it back by hand.",
-                        severity="error", timeout=10)
+            self._offer_take_disk(disk, conflicts)
             return
         try:
             bak = sd.save(path, new)
         except OSError as e:
-            self.notify(f"Not saved: {e}", severity="error")
+            self.notify(f"Not saved: {e}", severity="error", markup=False)
             return
         self.load()
-        self.notify(f"Saved. Backup: {bak.name if bak else '(no old file)'}")
-        mode = "dry-run" if self.paths.dry_run else "real"
+        self.notify(f"Saved. Backup: {bak.name if bak else '(no old file)'}", markup=False)
+        self.run_worker(self._offer_restart("dry-run" if self.paths.dry_run else "real"), group="restart")
+
+    def _offer_take_disk(self, disk: dict, conflicts: list[str]) -> None:
+        """config.json changed elsewhere for keys the screen changed too: offer
+        to take the file's values for just those keys and keep the other edits."""
+        keys = ", ".join(conflicts)
+        original, edited = self.original or {}, self.edited
+
+        def done(yes: bool | None) -> None:
+            if not yes:
+                self.notify(f"Not saved: config.json was changed elsewhere for {keys}.",
+                            severity="error", timeout=10, markup=False)
+                return
+            try:
+                text = self.paths.config.read_text(encoding="utf-8")
+                now = sd.load(self.paths.config)
+            except (OSError, sd.ConfigError) as e:
+                self.notify(f"Couldn't re-read config.json: {e}", severity="error", markup=False)
+                return
+            self.edited = sd.take_disk(now, original, edited, conflicts)
+            self.original, self.loaded_text = now, text
+            self.fill_widgets()
+            self.changed()
+            self.notify(f"Took the file's value for {keys}; your other edits are kept, not saved yet. "
+                        "Check them and save again.", timeout=10, markup=False)
+
+        self.app.push_screen(ConfirmModal(
+            f"Not saved: config.json was changed elsewhere for {keys}, which you changed too.\n"
+            "Use the file's value for these and keep your other edits?", "Use the file's"), done)
+
+    async def _offer_restart(self, mode: str) -> None:
+        """After a save: offer to restart the bot, but only when it is running
+        (a restart would start a stopped service)."""
+        name = bot.SERVICES[mode]
+        try:
+            state = await bot.service_state(mode)
+        except OSError:
+            state = "unknown"
+        if state != "active":
+            self.notify(f"The {name} service isn't running ({state}), so it wasn't restarted; "
+                        "it reads the new settings when it starts.", timeout=8, markup=False)
+            return
 
         def done(yes: bool | None) -> None:
             if yes:
                 self.run_worker(self._restart(mode), group="restart")
 
         self.app.push_screen(ConfirmModal(
-            f"Saved. Restart the bot ({bot.SERVICES[mode]} service) so it uses the new settings?",
-            "Restart"), done)
+            f"Saved. Restart the bot ({name} service) so it uses the new settings?", "Restart"), done)
 
     async def _restart(self, mode: str) -> None:
-        ok, msg = await bot.service_action(mode, "restart")
+        # try-restart: if the service stopped meanwhile, it stays stopped
+        try:
+            ok, msg = await bot.service_action(mode, "try-restart")
+        except (OSError, ValueError) as e:
+            ok, msg = False, str(e)
         self.notify(f"{bot.SERVICES[mode]} restarted." if ok else f"Restart failed: {msg}",
-                    severity="information" if ok else "error")
+                    severity="information" if ok else "error", markup=False)
 
     def action_test_corpus(self) -> None:
         if self.original is None:
-            self.notify(f"Can't test: {self.load_error}", severity="error")
+            self.notify(f"Can't test: {self.load_error}", severity="error", markup=False)
             return
         errs = sd.errors(sd.validate(self.edited))
         if errs:
@@ -749,7 +793,7 @@ class SettingsPane(Vertical):
         corpus = sd.corpus_path()
         if not corpus.is_file():
             self.notify(f"No corpus at {corpus} (set TELENOTIFY_CORPUS to use another file).",
-                        severity="warning", timeout=8)
+                        severity="warning", timeout=8, markup=False)
             return
         self.notify("Testing on the corpus...")
         self.run_worker(self._run_eval(binary, corpus, self._merged()), exclusive=True, group="eval")

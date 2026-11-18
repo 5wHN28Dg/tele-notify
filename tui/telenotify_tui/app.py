@@ -42,9 +42,10 @@ class TeleNotifyApp(App):
         self.refresh_seconds = refresh_seconds
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + str(paths.config)
 
-    def store(self) -> Store:
-        """A fresh connection to the bot's state (use it in a `with` block)."""
-        return Store(self.paths.state)
+    def store(self, timeout: float = 10) -> Store:
+        """A fresh connection to the bot's state (use it in a `with` block).
+        On the UI thread pass a short `timeout`: the screen freezes while it waits."""
+        return Store(self.paths.state, timeout)
 
     def compose(self) -> ComposeResult:
         yield Header()

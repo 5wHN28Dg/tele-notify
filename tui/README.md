@@ -7,7 +7,7 @@ A live screen for the bot, built with [Textual](https://github.com/Textualize/te
 | Dashboard | `1` | Is the bot running and connected, dry run or real; start / stop / restart it; posts judged today and this week; a 14-day chart; numbers per channel; a live feed of what it just judged; alerts; channels that blocked you or went silent |
 | Review | `2` | The review queue: read each unsure post and send (`s`) or discard (`d`) it; `o` opens the link, `r` shows what the filter read from links. Every choice is also saved as a test label (`~/.local/share/tele-notify-corpus/review-labels.jsonl`) |
 | Search | `3` | Search everything the bot judged and see why; re-judge a post with the current settings (`j`, or `J` to follow links); paste any post to try it (`p`) |
-| Settings | `4` | Edit keywords, places, watched chats (by name), the target chat and the bot options; test a change on the corpus before saving (`t`); save (`ctrl+s`) with a backup, then restart the bot to apply it |
+| Settings | `4` | Edit keywords, places, watched chats (by name), the target chat and the bot options; test a change on the corpus before saving (`t`); save (`ctrl+s`) with a backup, then restart the bot to apply it (offered only while it runs) |
 
 `ctrl+r` refreshes the tab, `ctrl+q` quits (it asks first if Settings has unsaved changes).
 

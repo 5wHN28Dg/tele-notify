@@ -49,10 +49,23 @@ async def run(*args: str, timeout: float = 120) -> tuple[int, str, str]:
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
-        proc.kill()
+        _kill(proc)
         await proc.wait()
         return 124, "", f"timed out after {timeout:.0f} s"
+    except BaseException:
+        # cancelled (the screen closed, a newer run replaced this one): don't leave the child running
+        _kill(proc)
+        await asyncio.shield(proc.wait())
+        raise
     return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+
+
+def _kill(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:   # it ended on its own just now
+            pass
 
 
 # ------------------------------------------------------------- service
@@ -64,8 +77,8 @@ async def service_state(mode: str) -> str:
 
 
 async def service_action(mode: str, action: str) -> tuple[bool, str]:
-    """start / stop / restart a service. (ok, message)."""
-    if action not in ("start", "stop", "restart"):
+    """start / stop / restart / try-restart (restart only if running) a service. (ok, message)."""
+    if action not in ("start", "stop", "restart", "try-restart"):
         raise ValueError(action)
     code, out, err = await run("systemctl", "--user", action, SERVICES[mode], timeout=60)
     return code == 0, (err or out).strip()
