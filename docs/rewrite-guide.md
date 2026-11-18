@@ -547,6 +547,13 @@ The corpus still had four posts the filter published wrongly. Each became a rule
 
 Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
 
+### Multi-job posts, backlog progress, retries, stats (#29, #11, #5, #13)
+
+- **Multi-job posts (#29).** The second sample in the issue (nine numbered jobs from "Iraq Jobs Foundation") wasn't split at all: your field ("هندسة كهرباء") only appeared as job 3's degree requirement, and only *title* keywords started a job block. Now a numbered item whose first line names some job ("3. Commissioning Engineer") and that mentions one of your fields is a job block too. Two smaller fixes came out of it: "• 5+ years" is a quantity, not a list number (only "🔹 1-" with a list mark counts), and the requirements of a job that isn't yours are dropped with it instead of becoming shared by every job. Job nouns also match in the plural ("Project Managers"). The sample is now rejected for the right reason: job 3 itself asks for 5+ years.
+- **Backlog progress (#11).** A progress bar doesn't suit a service whose output goes to the journal, so the bot logs `backlog: 25/187 checked` every 25 messages and once at the end.
+- **Retry chats that failed at startup (#5).** If a chat's unread messages couldn't be read at startup (no connection yet, a timeout), they used to wait for the next restart. Now such chats are tried again about every minute until it works; anything handled live meanwhile is skipped as already seen.
+- **Approved reviews count as forwarded (#13).** `telenotify stats` counted only posts the bot forwarded itself. A post you approve in `telenotify review` now counts too, once it has been sent.
+
 ### The switch (needs you)
 
 1. Look at `telenotify compare` after the week, and at `telenotify review --dry-run`.

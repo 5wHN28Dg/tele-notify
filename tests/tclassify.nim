@@ -108,6 +108,92 @@ suite "multi-job posts (3.8, #29)":
 1- بكالوريوس هندسة كهرباء
 2- خبرة لا تقل عن 5 سنوات""") == vReject
 
+  test "a listed job that matches only by its degree is judged alone (#29 sample 2)":
+    check verdict("""وظائف جديدة – البصرة
+1. Coordinators & Project Managers – جنوب العراق
+📍 Basra
+• 5+ سنوات خبرة في ادارة المشاريع.
+
+2. Bureau Veritas – Commissioning Engineer
+📍 Basra – On-site
+Requirements:
+• بكالوريوس هندسة كهرباء.
+• حديث التخرج.
+
+3. Technical Sales Engineer
+📍 Basrah
+• 5+ سنوات في Technical Sales.""") == vPublish
+
+  test "another job named in the plural doesn't share its requirements":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+1. Project Managers
+• 5+ سنوات خبرة.
+2. مهندس كهرباء حديث التخرج""") == vPublish
+
+  test "a job word inside a numbered requirement doesn't make it another job":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+1. Commissioning Engineer
+• بكالوريوس هندسة كهرباء.
+• 5+ سنوات خبرة، وخبرة مع EPC/Developer.""") == vReject
+
+  test "a bullet with a number before a list mark is still a list item":
+    check verdict("""شركة في البصرة تعلن عن فرص عمل
+🔹 1- محاسب خبرة 5 سنوات
+🔹 2- مهندس كهرباء حديث التخرج""") == vPublish
+
+  test "requirements after a look-alike job line still count (review of #29 fix)":
+    check verdict("""مطلوب للعمل في شركة نفطية في البصرة
+1- مهندس كهرباء
+2- تحمل المسؤولية والعمل تحت الضغط
+3- خبرة لا تقل عن 10 سنوات""") == vReject
+    check verdict("""شركة نفطية في البصرة بحاجة الى مهندس حديث التخرج
+الشروط:
+1- خريج معهد فني او بكالوريوس هندسة كهرباء
+2- القدرة على تحمل المسؤولية
+3- خبرة لا تقل عن 8 سنوات في المشاريع النفطية""") == vReject
+    check verdict("""شركة في البصرة تعلن عن فرص عمل للخريجين الجدد
+1- مهندس كهرباء
+الشروط: بكالوريوس هندسة كهرباء
+2- محاسب
+خبرة سنتين
+━━━━━━
+شروط عامة لجميع الوظائف: خبرة لا تقل عن 6 سنوات""") == vReject
+    check verdict("""We are hiring in Basra - fresh graduates welcome
+1. Electrical Engineer
+2. Must work closely with site managers and technicians
+3. Minimum 10 years of experience""") == vReject
+
+  test "adversarial review of the #29 fix":
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- محاسبة خبرة 5 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- مندوبة مبيعات خبرة 5 سنوات
+3- مشرفين مواقع خبرة 10 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+1- مهندس كهرباء حديث التخرج
+2- مبرمجة خبرة 5 سنوات
+3- مساعدة مدير خبرة 4 سنوات""") == vPublish
+    check verdict("""تعلن شركة النور في البصرة عن حاجتها الى:
+🔸 1 محاسب خبرة 5 سنوات
+🔸 2 مهندس كهرباء حديث التخرج""") == vPublish
+    check verdict("""We are hiring - Location: Basra
+Requirements:
+1. Engineer with B.Sc. in Electrical Engineering
+2. Minimum 5 years experience as a site engineer in oil and gas
+3. Fresh graduates with internship experience are welcome to apply for the trainee track""") == vReject
+    check verdict("""مطلوب مهندس للعمل في شركة نفطية
+موقع العمل: البصرة
+الشروط:
+1- مهندس حاصل على بكالوريوس هندسة كهرباء
+2- خبرة لا تقل عن 7 سنوات كمهندس موقع""") == vReject
+
+  test "a numbered degree requirement is not a job of its own":
+    check verdict("""مطلوب مهندس كهرباء للعمل في البصرة
+1- بكالوريوس هندسة كهرباء
+2- حديث التخرج""") == vPublish
+
 suite "not a job (3.9)":
   test "job seeker":
     check verdict("""أبحث حاليًا عن فرصة عمل في البصرة، خريج هندسة كهرباء حديث التخرج""") == vReject
