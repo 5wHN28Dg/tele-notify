@@ -23,6 +23,21 @@ python3 -m venv .venv
 
 `"dry_run": true` in config.json also means the dry run, as it does for the bot. The state file is worked out once at start from `data_dir` (blank means `~/.local/share/tele-notify`; a relative path is relative to the config file's folder), so after changing `data_dir` or `dry_run` in Settings, reopen the screen.
 
+### Arabic and other right-to-left text
+
+Terminals draw each line left to right in the order the characters are stored, so on its own an Arabic sentence would come out with its words in the wrong order. The screen puts right-to-left text in order itself: letters joined, each line reordered after it is wrapped, Arabic paragraphs right-aligned, mixed Arabic / English / numbers in the right places, brackets mirrored. That works the same in terminals that do no bidi of their own (Alacritty, kitty, xterm).
+
+Terminals that do reorder text themselves (VTE: GNOME Terminal, Ptyxis) would undo that, so while the screen is open it switches the terminal to *explicit* bidi mode (`ESC [ 8 l`, from the [Terminal-WG BiDi recommendation](https://terminal-wg.pages.freedesktop.org/bidi/)) and back to the usual *implicit* mode (`ESC [ 8 h`) when it closes, also after a crash. Terminals that don't know the mode ignore both. If the screen is killed hard (`kill -9`) and Arabic in that terminal looks wrong afterwards, `printf '\e[8h'` restores it.
+
+If your terminal does its own bidi well and you'd rather it did the work, turn the screen's off:
+
+```bash
+TELENOTIFY_BIDI=off .venv/bin/telenotify-tui --config:/path/to/config.json
+.venv/bin/telenotify-tui --config:/path/to/config.json --no-bidi    # the same
+```
+
+Fields you type into (keyword entry, the paste box) are not reordered: they show text in stored order so the cursor stays where you type.
+
 It finds the `telenotify` program next to the config, in `~/tele-notify`, on `$PATH`, or at `$TELENOTIFY_BIN`. Start and stop use the systemd user services `tele-notify` and `tele-notify-dryrun` (see `deploy/`).
 
 ## How it fits with the bot

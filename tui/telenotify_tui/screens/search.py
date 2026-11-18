@@ -27,6 +27,7 @@ from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
 from .. import bot
 from ..clean import clean
+from ..rtl import Block, visual
 from ..store import Judged
 from . import search_data
 
@@ -67,7 +68,7 @@ def row_key(j: Judged) -> str:
     return f"{j.chat_id}:{j.msg_id}"
 
 
-def verdict_report(v: bot.Verdict, then: str | None = None, show_text: bool = False) -> Text:
+def verdict_report(v: bot.Verdict, then: str | None = None, show_text: bool = False) -> Text | Block:
     """The re-judge / paste result: then vs now (when there is a then), reasons, and the text read."""
     out = Text()
     if v.error or not v.verdict:
@@ -88,11 +89,10 @@ def verdict_report(v: bot.Verdict, then: str | None = None, show_text: bool = Fa
         out.append_text(verdict_text(v.verdict))
     out.append("\nreasons now:\n" if then is not None else "\nreasons:\n", style="bold")
     for r in v.reasons or ["(none given)"]:
-        out.append(f"  • {r}\n")
+        out.append(f"  • {visual(r)}\n")
     if show_text:
-        out.append("text the filter read (links followed):\n", style="bold")
-        out.append(v.text or "(nothing)")
-        out.append("\n")
+        out.append("text the filter read (links followed):", style="bold")
+        return Block(v.text or "(nothing)", head=out)
     return out
 
 
@@ -213,7 +213,7 @@ class SearchPane(Vertical):
                 chats = search_data.judged_chats(s) if s.exists else []
         except Exception:  # noqa: BLE001 - a locked or odd state file shouldn't crash the screen
             chats = []
-        options = [("all chats", "all")] + [(Text(short(title, 24)), cid) for cid, title in chats]
+        options = [("all chats", "all")] + [(Text(visual(short(title, 24))), cid) for cid, title in chats]
         if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])]:
             self._chat_options = options
             with sel.prevent(Select.Changed):
@@ -255,8 +255,9 @@ class SearchPane(Vertical):
             if k in self._rows:
                 continue
             self._rows[k] = j
-            table.add_row(when(j.at, "%m-%d %H:%M"), Text(short(j.chat_title, 14)), verdict_text(j.verdict),
-                          Text(short(j.role, 14)), Text(short(search_data.main_reason(j.reasons), 32)), key=k)
+            table.add_row(when(j.at, "%m-%d %H:%M"), Text(visual(short(j.chat_title, 14))), verdict_text(j.verdict),
+                          Text(visual(short(j.role, 14))), Text(visual(short(search_data.main_reason(j.reasons), 32))),
+                          key=k)
         if keep in self._rows:
             table.move_cursor(row=table.get_row_index(keep))
             self._show_detail(self._rows[keep], keep_result=True)
@@ -309,22 +310,20 @@ class SearchPane(Vertical):
                 b.disabled = True
             return
         h = Text()
-        h.append(j.chat_title or str(j.chat_id), style="bold")
+        h.append(visual(j.chat_title or str(j.chat_id)), style="bold")
         h.append(f"  ·  {when(j.at, '%Y-%m-%d %H:%M')}  ·  msg {j.msg_id}\n", style="dim")
         h.append("verdict: ")
         h.append_text(verdict_text(j.verdict))
         h.append(f"   action: {action_label(j.action)}")
         if j.role:
-            h.append(f"   role: {j.role}")
+            h.append(f"   role: {visual(j.role)}")
         head.update(h)
         r = Text("why:\n", style="bold")
         for reason in search_data.split_reasons(j.reasons) or ["(no reasons stored)"]:
-            r.append(f"  • {reason}\n", style="")
+            r.append(f"  • {visual(reason)}\n", style="")
         reasons.update(r)
         if j.text.strip():
-            t = Text("text:\n", style="bold")
-            t.append(j.text, style="")
-            text.update(t)
+            text.update(Block(j.text, head=Text("text:", style="bold")))
         else:
             text.update(Text("The text of this post wasn't stored (older bot versions didn't keep it), "
                              "so it can't be shown or re-judged.", style="yellow"))

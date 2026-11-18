@@ -35,6 +35,7 @@ from textual.widgets.option_list import Option
 
 from .. import bot
 from ..clean import clean
+from ..rtl import Block, visual
 from ..store import Review
 from .review_data import history, remove_label, write_label
 
@@ -59,8 +60,8 @@ def cut(s: str, n: int) -> str:
 
 def entry(r: Review) -> Content:
     """A queue entry: time and chat, with the role below it."""
-    first = f"{when(r.at):>11}  {cut(r.chat_title, 21)}\n"
-    second = f"{'':>11}  {cut(r.role or '(no role)', 21)}"
+    first = f"{when(r.at):>11}  {visual(cut(r.chat_title, 21))}\n"
+    second = f"{'':>11}  {visual(cut(r.role or '(no role)', 21))}"
     return Content(first) + Content.styled(second, "$text-muted")
 
 
@@ -97,7 +98,7 @@ class CheckModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         v = self.verdict
         with Vertical():
-            yield Static(Content(f"What the filter read: {self.review.chat_title} #{self.review.msg_id}"),
+            yield Static(Content(f"What the filter read: {visual(self.review.chat_title)} #{self.review.msg_id}"),
                          classes="title")
             with VerticalScroll(id="check-body"):
                 if v.error and not v.verdict:
@@ -105,10 +106,10 @@ class CheckModal(ModalScreen[None]):
                                  classes="bad")
                 else:
                     yield Static(Content(f"verdict: {v.verdict}"), id="check-verdict")
-                    reasons = "\n".join(f"  - {r}" for r in v.reasons) or "  (no reasons given)"
+                    reasons = "\n".join(f"  - {visual(r)}" for r in v.reasons) or "  (no reasons given)"
                     yield Static(Content(reasons), id="check-reasons")
                     yield Static("─ text the filter read (post + links) ─", classes="muted")
-                    yield Static(Content(v.text or "(no text shown)"), id="check-text")
+                    yield Static(Block(v.text or "(no text shown)"), id="check-text")
             yield Button("Close (Esc)", id="check-close", compact=True)
 
     @on(Button.Pressed, "#check-close")
@@ -223,7 +224,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     def note(self, text: str, style: str = "muted") -> None:
         n = self.query_one("#review-note", Static)
         n.set_classes(style)
-        n.update(Content(clean(text)))
+        n.update(Content(visual(text)))
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action in DECISION_KEYS and self.is_mounted:
@@ -343,7 +344,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         labels = {"to_send": "approved", "sent": "sent", "discarded": "discarded"}
         for r in past:
             table.add_row(when(r.decided_at or r.at), Text(labels.get(r.status, r.status)),
-                          Text(cut(r.chat_title, 20)), Text(cut(r.role, 22)), Text(cut(r.text, 40)), key=str(r.id))
+                          Text(visual(cut(r.chat_title, 20))), Text(visual(cut(r.role, 22))),
+                          Text(visual(cut(r.text, 40))), key=str(r.id))
         table.move_cursor(row=min(row, len(past) - 1))
 
     # ------------------------------------------------------------ detail
@@ -366,13 +368,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._shown_at = time.monotonic()
             when_full = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.at)) if r.at else "-"
             album = f"  ({len(r.album_ids)} messages)" if len(r.album_ids) > 1 else ""
-            head = (f"chat:  {r.chat_title}  #{r.msg_id}{album}\n"
+            head = (f"chat:  {visual(r.chat_title)}  #{r.msg_id}{album}\n"
                     f"date:  {when_full}\n"
-                    f"link:  {r.link or '(none)'}\n"
-                    f"role:  {r.role or '(none)'}\n"
-                    f"why review:  {r.reasons or '(no reason given)'}")
+                    f"link:  {visual(r.link or '(none)')}\n"
+                    f"role:  {visual(r.role or '(none)')}\n"
+                    f"why review:  {visual(r.reasons or '(no reason given)')}")
             self.query_one("#detail-head", Static).update(Content(head))
-            self.query_one("#detail-text", Static).update(Content(r.text or "(no text)"))
+            self.query_one("#detail-text", Static).update(Block(r.text or "(no text)"))
             self.query_one("#review-detail", VerticalScroll).scroll_home(animate=False)
         self._sync_controls()
 

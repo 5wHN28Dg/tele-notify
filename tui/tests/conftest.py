@@ -123,3 +123,15 @@ def no_systemctl(monkeypatch):
 
     monkeypatch.setattr(bot, "service_state", state)
     monkeypatch.setattr(bot, "service_action", action)
+
+
+@pytest.fixture(autouse=True)
+def bidi_default():
+    """The screen's own bidi on, as users get it, whatever $TELENOTIFY_BIDI
+    says where the tests run (test_rtl.py turns it off where it needs to)."""
+    from telenotify_tui import rtl
+
+    was = rtl.enabled()
+    rtl.set_enabled(True)
+    yield
+    rtl.set_enabled(was)
