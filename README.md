@@ -1,7 +1,5 @@
 <div align="center">
 
-[🇮🇶 العربية](README.ar.md)
-
 # tele-notify
 
 **Watches Telegram job channels and forwards only the posts that fit you.**
@@ -18,12 +16,12 @@ It is built around that one need, but the keywords, places and channels are your
 
 [![asciicast](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5.svg)](https://asciinema.org/a/h8qYjhK6LsRqMchP6L93N1qu5)
 
-## Status: being rewritten in Nim
+## Status: rewritten in Nim
 
 | | What it is | State |
 |---|---|---|
-| **v3, Python** (`main.py`) | The bot that runs today | Works, frozen: no new features |
-| **v4, Nim** (`src/`) | The rewrite, built in stages | Stages 1–3 done: the filter, OCR, job-board reading and the Telegram listener. Stage 4, a trial run next to the Python bot, is under way (`telenotify compare`) |
+| **v4, Nim** (`src/`) | The bot that runs today | Done: the filter, OCR, job-board reading, the Telegram listener, review queue and stats |
+| **v3, Python** ([`legacy/`](legacy/)) | The old bot | Retired after a side-by-side trial; kept for reference |
 
 The rewrite exists because the Python filter published far too many wrong posts: on a test with 196 real posts, 96 of its 115 publications were wrong, against 4 for the new filter. The [problems report](docs/problems-report.md) explains what was wrong; the [rewrite guide](docs/rewrite-guide.md) explains how the new code works.
 
@@ -74,7 +72,7 @@ Then:
 
 `nimble test` runs the tests.
 
-## Run the Nim bot (preview)
+## Run the bot
 
 The Nim bot talks to Telegram through [TDLib](https://core.telegram.org/tdlib), Telegram's official library. Build it once (about an hour on one core; needs cmake, a C++ compiler, zlib and OpenSSL headers):
 
@@ -90,7 +88,6 @@ Then:
 ./telenotify run --config:config.json            # the real thing
 ./telenotify review --config:config.json         # unclear posts: approve or discard (works while the bot runs)
 ./telenotify stats --config:config.json --days:7 # what each channel brought
-./telenotify compare --config:config.json        # dry run vs the Python bot (stage 4)
 ```
 
 What's different from the Python bot:
@@ -104,34 +101,21 @@ To start it automatically, see [`deploy/tele-notify.service`](deploy/tele-notify
 
 To watch it and manage it (dashboard, review queue, search, settings), open the terminal screen: [`tui/`](tui/README.md).
 
-## Run the bot (Python, until v4 is finished)
+![The dashboard: bot status, numbers for a chosen period and a live feed of what was judged](docs/screenshots/dashboard.png)
 
-1. Get Telegram API credentials: an API ID and API hash from [my.telegram.org](https://my.telegram.org) ([how](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in)).
-2. Install:
-   ```bash
-   python3 -m venv venv && source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-   You also need tesseract, as above. On Android, see the [wiki](https://github.com/5wHN28Dg/tele-notify/wiki/Android-Instructions).
-3. Find your chat IDs by running this once, with your API ID and hash filled in:
-   ```python
-   from telethon import TelegramClient
-   client = TelegramClient("test", API_ID, "API_HASH")
-   async def main():
-       async for d in client.iter_dialogs():
-           print(f"{d.id:>15}: {d.title}")
-   with client:
-       client.loop.run_until_complete(main())
-   ```
-4. Fill in `config.json` (see below), then run `python main.py`. The first time, it asks for your phone number and the login code.
+![The review queue: unsure posts to send, discard or keep](docs/screenshots/review.png)
 
-The bot first goes through the unread posts, then watches for new ones. A match is forwarded to `target_chat`, unless it repeats one of the last 10 forwarded posts. Unclear posts go to your Saved Messages for review.
+![Search: every judged post and why it got its verdict](docs/screenshots/search.png)
 
-`main_simple.py` is the original, simpler version: a post matches when it has one keyword from each of three lists. It suits any topic, not just jobs.
+*Screenshots use made-up posts and chats.*
+
+## The old Python bot
+
+The Python version (v3) is in [`legacy/`](legacy/), with its own README. It reads the same `config.json`.
 
 ## Configuration
 
-Both versions read the same `config.json`:
+The bot reads `config.json` (the old Python bot read the same file):
 
 | Key | What |
 |---|---|
@@ -143,7 +127,7 @@ Both versions read the same `config.json`:
 | `mid_level_general_role_en/_ar` | Your job titles and fields: electrical engineer, هندسة حاسبات… |
 | `location_keywords_en/_ar` | Places that count: Basra and its districts, oil fields, "remote"… |
 | `certifications` | Certificates that disqualify a post when they are *required* |
-| `recent_messages` | Used by the Python bot to spot duplicates; leave it alone |
+| `recent_messages` | Used only by the old Python bot; the Nim bot ignores it |
 
 The Nim version adds optional keys, such as `publish_when_unsure`, `max_experience_years`, `data_dir`, `dry_run` and `alerts`. They are listed in the [rewrite guide](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). My own keywords are in [`example_keywords.txt`](example_keywords.txt).
 

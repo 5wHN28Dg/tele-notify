@@ -3,7 +3,7 @@
 This document explains what was built, why it looks the way it does, and how to keep working on it, so you don't have to reverse-engineer anything. Read it top to bottom once; after that, use the headings as a reference.
 
 - **Problems report** (what was wrong with the Python version and why): [`problems-report.md`](problems-report.md)
-- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4's code is done (albums, edits, `telenotify compare`; [section 9](#9-stage-4-side-by-side-with-the-python-bot)); what's left is a week of running next to the Python bot, then the switch. See [Roadmap](#roadmap).
+- **Where we are**: stages 1–3 are done: the filter, text gathering (OCR, job boards; [section 7](#7-stage-2-gathering-the-text-ocr-and-job-boards)) and the Telegram listener ([section 8](#8-stage-3-the-telegram-listener)). Stage 4 is done: after a week next to the Python bot ([section 9](#9-stage-4-side-by-side-with-the-python-bot)), the Nim bot took over on 2026-11-18 and the Python bot is retired in `legacy/`. Stage 5, the terminal screen, is done too ([section 10](#10-the-terminal-screen-tui-issue-10)). See [Roadmap](#roadmap).
 
 ---
 
@@ -91,7 +91,7 @@ deploy/tele-notify.service systemd user unit
 .github/workflows/nim.yml  CI: style check, build, tests, CLI smoke test
 ```
 
-The Python files (`main.py`, `main_simple.py`, `tools/`) are untouched. They keep running in production until stage 4.
+The Python files (`main.py`, `main_simple.py`, `tools/`) were left untouched and kept running in production until the switch in stage 4; they're now in `legacy/`.
 
 ---
 
@@ -399,8 +399,8 @@ LinkedIn is the most likely to change: it shows logged-out visitors a simplified
 | 1 | Filter core + tests + eval against the corpus | ✅ done |
 | 2 | Text gathering: async OCR (fixes #30), job-board readers with saved pages as tests (fixes #34, report 4.1–4.5) | ✅ done |
 | 3 | Listener on TDLib: unread bootstrap with the real read marker, one processing queue, state and stats in SQLite, downtime alerts (#3, #16), systemd unit (#6), review queue with `telenotify review` (send / discard) | ✅ done |
-| 4 | Albums and edits; `telenotify compare`; run `telenotify run --dry-run` next to the Python bot for about a week and compare; then switch: stop the Python bot, start the Nim service, move the Python files to `legacy/` | in progress: code done, the side-by-side week next |
-| 5 | The nice CLI dashboard (#10–#15): live counts, review queue with keys, highlighted events, on top of the SQLite state that now exists. Plus `telenotify export` so review decisions become corpus labels | after 4 |
+| 4 | Albums and edits; `telenotify compare`; run `telenotify run --dry-run` next to the Python bot for about a week and compare; then switch: stop the Python bot, start the Nim service, move the Python files to `legacy/` | ✅ done (switched 2026-11-18) |
+| 5 | The nice CLI dashboard (#10–#15): live counts, review queue with keys, highlighted events, on top of the SQLite state that now exists. Review decisions become corpus labels | ✅ done (the terminal screen, `tui/`) |
 
 
 ---
@@ -563,12 +563,18 @@ Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
 - **Retry chats that failed at startup (#5).** If a chat's unread messages couldn't be read at startup (no connection yet, a timeout), they used to wait for the next restart. Now such chats are tried again about every minute until it works; anything handled live meanwhile is skipped as already seen.
 - **Approved reviews count as forwarded (#13).** `telenotify stats` counted only posts the bot forwarded itself. A post you approve in `telenotify review` now counts too, once it has been sent.
 
-### The switch (needs you)
+### The switch (done 2026-11-18)
 
-1. Look at `telenotify compare` after the week, and at `telenotify review --dry-run`.
-2. Stop the Python bot.
-3. Install and start the Nim service (`deploy/tele-notify.service`, without `--dry-run`).
-4. Move `main.py`, `main_simple.py`, `requirements.txt` to `legacy/`.
+The owner approved the switch after checking the terminal screen. The last 7 days of `telenotify compare` before it: no post only the Python bot published that Nim lost (its one Python-only post was in Nim's review queue), and 3 Basra oil-sector posts for fresh graduates that only Nim found. These were the steps:
+
+1. Look at `telenotify compare` after the trial, and at `telenotify review --dry-run`.
+2. Stop the Python bot (Ctrl-C in its terminal). Don't run both for real: each would forward the same posts.
+3. Stop the dry run: `systemctl --user disable --now tele-notify-dryrun`. Both use the same TDLib login, and only one program can hold it at a time.
+4. Install the real service: copy `deploy/tele-notify.service` to `~/.config/systemd/user/`, point its `--config:` at your config, then `systemctl --user daemon-reload && systemctl --user enable --now tele-notify`. Keep `loginctl enable-linger` on so it runs while you're logged out.
+5. Watch the first minutes: `journalctl --user -u tele-notify -f`. The real bot starts with its own empty `state.sqlite3`, so it judges whatever is unread. The Python bot marked what it handled as read, so that's only what it missed (a crashed chat, for example).
+6. Merge the `legacy/` move (the Python files go to `legacy/`; the READMEs say the Nim bot is the one that runs).
+
+To go back: `systemctl --user disable --now tele-notify`, then start the Python bot from `legacy/` as before.
 
 ## 10. The terminal screen (`tui/`, issue #10)
 
