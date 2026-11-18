@@ -105,6 +105,28 @@ proc isOtherDuration(line: string, a, b: int): bool =
   let ctx = line.runeSafe(a - 40, b + 15)
   ctx.contains(notExperience)
 
+const leadingOptional = ["preferably", "يفضل", "ويفضل"]
+  ## Optional markers that point *forward*: after the years ("5 years,
+  ## preferably in banking", "3 سنوات ويفضل في النفط") they make what follows
+  ## optional, not the years.
+
+let minimumBefore = re2(r"(?i)(?:minimum|min\.?|at least|not less than|no less than|لا تقل عن|لا يقل عن|علي الاقل|كحد ادني)(?:\s+(?:of|a|an))*\s*$")
+
+proc optionalFor(line: string, a, b: int, optional: KeywordList): bool =
+  ## Is the quantity at line[a..<b] optional? Yes if an optional marker
+  ## comes before it ("preferably 3 years", "يفضل خبرة 3 سنوات"), or after
+  ## it ("3 years is preferred", "... is a plus"), except a forward-pointing
+  ## one followed by more words, and except after an explicit minimum
+  ## ("Minimum 7 years, preferably in oil and gas, a plus if ...").
+  if line[0 ..< a].flatten.contains(optional): return true
+  if line.runeSafe(a - 25, a).contains(minimumBefore): return false
+  let after = line[b .. ^1].flatten
+  for h in after.hits(optional):
+    if h.keyword notin leadingOptional: return true
+    if after[h.stop .. ^1].strip(chars = {' ', '.', ',', ';', '!', ')'}).len == 0:
+      return true # "3 years of experience, preferably."
+  false
+
 proc parseExperience*(normText: string): Experience =
   ## `normText` must already be normalised (see normalize.nim).
   result = Experience(requiredYears: -1, preferredYears: -1)
@@ -143,13 +165,14 @@ proc parseExperience*(normText: string): Experience =
       qtys.add (1, m.group(0).a, m.group(0).b + 1)
     # "preferably" often lands on the next line when a sentence wraps.
     # "required" on the same line wins over "preferably".
-    var isOptional = line.flatten.contains(optional)
-    if not isOptional and li + 1 < lines.len and lines[li + 1].len < 60 and
+    var nextOptional = false
+    if not line.flatten.contains(optional) and li + 1 < lines.len and lines[li + 1].len < 60 and
         not (line.strip.len > 0 and line.strip[^1] in {'.', ':', ';', '!'}):
-      isOptional = lines[li + 1].flatten.contains(optional)
-    if isOptional and line.flatten.contains(required):
-      isOptional = false
+      nextOptional = lines[li + 1].flatten.contains(optional)
+    let lineRequired = line.flatten.contains(required)
     for (q, a, b) in qtys:
+      let isOptional = not lineRequired and
+        (nextOptional or line.optionalFor(a, b, optional))
       var years = q
       if years < 0 or years > 30: continue
       if not spans.nearExperienceWord(a, b): continue

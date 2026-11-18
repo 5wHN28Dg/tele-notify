@@ -44,6 +44,21 @@ suite "experience: entry friendly and optional":
   test "required wins over preferably on the same line":
     check years("3-5 years of experience in IT required, preferably with ITIL") == 3
 
+  test "'preferably' after the years qualifies what follows, not the years":
+    # the Eni "Clinic Administration Analyst" post that reached review
+    check years("- Minimum 7 years’ relevant experience, preferably in the oil and gas industry and a multinational environment.") == 7
+    check years("5 years of experience, preferably in banking") == 5
+    check years("خبرة لا تقل عن 3 سنوات ويفضل في الشركات النفطية") == 3
+    check years("خبرة 4 سنوات ويفضل في مجال النفط") == 4
+
+  test "optional markers that still make the years optional":
+    check years("Preferably 3 years of experience") == -1
+    check preferred("Preferably 3 years of experience") == 3
+    check years("3 years of experience, preferably.") == -1
+    check years("3 years of experience in sales, ideally in retail, is a plus") == -1
+    check years("خبرة 3 سنوات مفضلة") == -1
+    check years("Preferably a minimum of 3 years of experience") == -1
+
   test "durations that are not experience":
     check years("Program Duration: 3.5 Years\nGraduated within the last 12 months") == -1
     check years("Age: 25 years old, experience in sales") == -1
