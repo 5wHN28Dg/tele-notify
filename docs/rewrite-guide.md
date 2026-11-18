@@ -511,21 +511,25 @@ The Python bot uses the same Telegram account, so what it sends to your channel 
 | Python only | With Nim's verdict and reasons. Either Nim missed a good post, or (much more often, on the corpus) Python published a wrong one |
 | Nim only | What Nim would have published and Python didn't |
 
+Posts are matched by where they came from, or else by the message text: the dry run keeps each message's own text (`processed.raw_text`). That also catches a forward of a forward (its origin is the first channel, not the one Nim watched) and links to channels without a username, which the Python bot writes as `t.me/None/…`. An album the Python bot forwarded counts once.
+
+Limits: your own posts in the channel during the dry run are counted as the Python bot's. And the Python bot marks what it reads as read, so after a restart of the dry run its start-up backlog is nearly empty: posts from while it was down show as "Nim never saw it".
+
 It only reads the database, so it works while the dry run is running.
 
 ### Albums
 
 The pictures of an album arrive as separate messages (one has the caption, the others only pictures). They're now judged together: the caption, plus the text in up to 6 pictures, as one post, and forwarded together so your channel gets the whole album. In the backlog the parts are next to each other; live, the parts arrive a moment apart, so when the first part is the last thing in the queue, the bot waits 1.5 s for the rest.
 
-A review of an album shows the whole text, but approving it forwards only the first part (the one the review links to).
+Approving a reviewed album forwards the whole album. If Telegram refuses some pictures of an album, the rest still counts as forwarded, so no extra link is sent. If part of an album was already handled (say the backlog had only its first picture), the late parts are recorded with it, not judged on their own.
 
 ### Edits
 
-Some channels post "job ad coming soon" and edit the real ad in later. When a message from a watched chat is edited (TDLib's `updateMessageContent`), the bot fetches it again. It's judged again only if it was **rejected** before and its text really changed (a fingerprint of the text is kept in `processed.text_hash`; link previews loading also count as edits, but don't change the text). Published or reviewed posts are left alone, so an edit never causes a second forward. Edits of messages older than 2 days are ignored.
+Some channels post "job ad coming soon" and edit the real ad in later. When a message from a watched chat is edited (TDLib's `updateMessageContent`), the bot fetches it again. It's judged again only if it was **rejected** before and its text really changed (a fingerprint of the text is kept in `processed.text_hash`; link previews loading also count as edits, but don't change the text). Published or reviewed posts are left alone, so an edit never causes a second forward. Ignored: edits of messages older than 2 days, edits of album pictures (one picture isn't the post), and messages judged before stage 4 (they have no fingerprint, so a change can't be told apart).
 
 ### A filter change from the first real run
 
-"Extensive experience" (خبرة واسعة/قوية/طويلة…, "proven/strong/solid … experience") without a number now turns a publish into a review: it says "not a beginner" even when a channel adds "#حديثي_التخرج واصحاب الخبرة" to every post. The corpus numbers didn't change (it was a case the corpus didn't have); the post from the first run now goes to review.
+"Extensive experience" (خبرة واسعة/قوية/طويلة…, also "الخبرة الواسعة", "خبرات واسعة", "خبرة عملية واسعة"; "extensive/proven/strong/solid … experience", optionally with "hands-on", "field", "practical"…) now turns a publish into a review: it says "not a beginner" even when a channel adds "#حديثي_التخرج واصحاب الخبرة" to every post. It doesn't apply when the post gives a number of years or says no experience is needed, when the phrase is denied ("no extensive experience required", "لا يشترط خبرة واسعة") or offered ("you will gain solid experience"), or when it's about a tool ("strong Excel experience"). The corpus numbers didn't change (it was a case the corpus didn't have); the post from the first run now goes to review.
 
 ### The switch (needs you)
 

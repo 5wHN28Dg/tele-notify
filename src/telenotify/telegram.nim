@@ -161,12 +161,12 @@ proc tdTelegram*(c: TdClient): Telegram =
     if not props{"can_be_forwarded"}.getBool(false): return false
     let sent = await c.call(%*{"@type": "forwardMessages", "chat_id": target, "from_chat_id": chat,
                                "message_ids": ids, "send_copy": false, "remove_caption": false})
-    # TDLib puts null in place of a message it could not forward
-    let msgs = sent{"messages"}.getElems
-    if msgs.len != ids.len: return false
-    for m in msgs:
-      if m.kind != JObject: return false
-    return true
+    # TDLib puts null in place of a message it could not forward. If any
+    # part of an album went out, the post is in your channel: count it as
+    # forwarded (sending a link as well would post it twice).
+    for m in sent{"messages"}.getElems:
+      if m.kind == JObject: return true
+    return false
 
   result.linkTarget = proc (url: string): Future[(int64, int64)] {.async, closure, gcsafe.} =
     let info = await c.call(%*{"@type": "getMessageLinkInfo", "url": url})

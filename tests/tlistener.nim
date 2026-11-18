@@ -317,3 +317,58 @@ suite "listener":
     check (notes[0].originChat, notes[0].originMsg) == (-1'i64, 10'i64)
     check (notes[1].originChat, notes[1].originMsg) == (-5'i64, 77'i64)
     check notes[2].originChat == 0          # couldn't resolve: kept, matched by text later
+
+  test "album parts arriving after their first picture was handled are not judged again":
+    let f = FakeTg()
+    var parts = @[msg(-1, 60, good), msg(-1, 61, "", photo = 1), msg(-1, 62, "", photo = 1)]
+    for p in parts.mitems: p.albumId = 5
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    waitFor l.handle(parts[0])               # the backlog had only the first picture
+    l.enqueue parts[0]
+    l.enqueue parts[1]
+    l.enqueue parts[2]
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 60'i64)]
+    check st.seen(-1, 61) and st.seen(-1, 62)
+
+  test "an edit doesn't join an album, and the same picture twice counts once":
+    let f = FakeTg()
+    var parts = @[msg(-1, 71, "", photo = 1), msg(-1, 70, good)]   # out of order
+    for p in parts.mitems: p.albumId = 6
+    var edited = msg(-1, 70, good & " (edited)")
+    edited.albumId = 6
+    edited.edited = true
+    let (l, _) = setup(f)
+    waitFor l.bootstrap()
+    l.enqueue parts[0]
+    l.enqueue parts[1]
+    l.enqueue parts[1]
+    l.enqueue edited
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 70'i64), (-1'i64, 71'i64)]    # once, in order
+
+  test "approving a reviewed album forwards the whole album":
+    let f = FakeTg()
+    var parts = @[msg(-1, 80, unclear), msg(-1, 81, "", photo = 7)]
+    f.brokenPhotos.incl 7
+    for p in parts.mitems: p.albumId = 8
+    f.chats[-1] = parts
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    let r = st.pendingReviews()
+    check r.len == 1 and r[0].albumIds == @[80'i64, 81]
+    check st.decideReview(r[0].id, "to_send")
+    waitFor l.sendApproved()
+    check f.forwarded == @[(-1'i64, 80'i64), (-1'i64, 81'i64)]
+
+  test "a message rejected before fingerprints existed is not judged again on an edit":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    st.markProcessed(-1, 90, "chat1", "reject", "", "", "rejected")   # a stage 3 row
+    var m = msg(-1, 90, good)
+    m.edited = true
+    l.enqueue m
+    waitFor l.processQueue()
+    check f.forwarded.len == 0

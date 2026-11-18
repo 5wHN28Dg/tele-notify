@@ -26,6 +26,7 @@ type
     chatId*, msgId*: int64
     chatTitle*, text*, reasons*, role*, link*, status*: string
     at*: int64
+    albumIds*: seq[int64]   ## the messages to forward: the album, or just msgId
 
 proc now(): int64 = getTime().toUnix
 
@@ -54,11 +55,17 @@ proc openState*(path: string): State =
   db.exec(sql"""CREATE TABLE IF NOT EXISTS other_bot (
     id INTEGER PRIMARY KEY, at INTEGER, msg_id INTEGER, origin_chat INTEGER,
     origin_msg INTEGER, text TEXT, UNIQUE (msg_id))""")
-  # added in stage 4 (edits): a fingerprint of the text that was judged
-  var hasHash = false
-  for row in db.fastRows(sql"PRAGMA table_info(processed)"):
-    if row[1] == "text_hash": hasHash = true
-  if not hasHash: db.exec(sql"ALTER TABLE processed ADD COLUMN text_hash TEXT")
+  # columns added in stage 4 (older state files get them here):
+  #   processed.text_hash  a fingerprint of the text judged (edits)
+  #   processed.raw_text   the message text, dry run only (compare)
+  #   reviews.album_ids    every message of an album, so approving sends it all
+  #   other_bot.album_id   pictures of one album count as one post
+  for (table, column) in [("processed", "text_hash"), ("processed", "raw_text"),
+                          ("reviews", "album_ids"), ("other_bot", "album_id")]:
+    var has = false
+    for row in db.fastRows(sql("PRAGMA table_info(" & table & ")")):
+      if row[1] == column: has = true
+    if not has: db.exec(sql("ALTER TABLE " & table & " ADD COLUMN " & column))
 
 proc close*(s: State) = s.db.close()
 
@@ -66,11 +73,11 @@ proc seen*(s: State, chat, msg: int64): bool =
   s.db.getValue(sql"SELECT 1 FROM processed WHERE chat_id = ? AND msg_id = ?", chat, msg) != ""
 
 proc markProcessed*(s: State, chat, msg: int64, title, verdict, role, reasons, action: string,
-                    textHash = "") =
+                    textHash = "", rawText = "") =
   s.db.exec(sql"""INSERT OR REPLACE INTO processed
-    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at, text_hash)
-    VALUES (?,?,?,?,?,?,?,?,?)""",
-    chat, msg, title, verdict, role, reasons, action, now(), textHash)
+    (chat_id, msg_id, chat_title, verdict, role, reasons, action, at, text_hash, raw_text)
+    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+    chat, msg, title, verdict, role, reasons, action, now(), textHash, rawText)
 
 proc previous*(s: State, chat, msg: int64): tuple[found: bool, action, textHash: string] =
   ## What happened to this message last time, if anything.
@@ -88,17 +95,25 @@ proc recentPublished*(s: State, days = 14, limit = 2000): seq[string] =
                            now() - days * 86400, limit):
     result.add row[0]
 
-proc addReview*(s: State, chat, msg: int64, title, text, reasons, role, link: string) =
+proc addReview*(s: State, chat, msg: int64, title, text, reasons, role, link: string,
+                albumIds: seq[int64] = @[]) =
+  var ids: seq[string]
+  for i in albumIds: ids.add $i
   s.db.exec(sql"""INSERT OR IGNORE INTO reviews
-    (chat_id, msg_id, chat_title, text, reasons, role, link, at) VALUES (?,?,?,?,?,?,?,?)""",
-    chat, msg, title, text, reasons, role, link, now())
+    (chat_id, msg_id, chat_title, text, reasons, role, link, at, album_ids) VALUES (?,?,?,?,?,?,?,?,?)""",
+    chat, msg, title, text, reasons, role, link, now(), ids.join(","))
 
 proc reviewsWithStatus(s: State, status: string): seq[Review] =
   for r in s.db.fastRows(sql"""SELECT id, chat_id, msg_id, chat_title, text, reasons, role, link,
-                               status, at FROM reviews WHERE status = ? ORDER BY at""", status):
-    result.add Review(id: parseBiggestInt(r[0]), chatId: parseBiggestInt(r[1]),
-                      msgId: parseBiggestInt(r[2]), chatTitle: r[3], text: r[4], reasons: r[5],
-                      role: r[6], link: r[7], status: r[8], at: parseBiggestInt(r[9]))
+                               status, at, COALESCE(album_ids, '') FROM reviews
+                               WHERE status = ? ORDER BY at""", status):
+    var rv = Review(id: parseBiggestInt(r[0]), chatId: parseBiggestInt(r[1]),
+                    msgId: parseBiggestInt(r[2]), chatTitle: r[3], text: r[4], reasons: r[5],
+                    role: r[6], link: r[7], status: r[8], at: parseBiggestInt(r[9]))
+    for i in r[10].split(','):
+      if i != "": rv.albumIds.add parseBiggestInt(i)
+    if rv.albumIds.len == 0: rv.albumIds = @[rv.msgId]
+    result.add rv
 
 proc pendingReviews*(s: State): seq[Review] =
   ## Posts waiting for your decision.
@@ -150,28 +165,31 @@ type
   OtherBotPost* = object
     at*, originChat*, originMsg*: int64   ## origin 0 = unknown (not from a channel)
     text*: string
+    albumId*: int64
 
   ProcessedRow* = object
     chatId*, msgId*, at*: int64
     chatTitle*, verdict*, role*, reasons*, action*: string
+    rawText*: string   ## dry run only
 
-proc addOtherBot*(s: State, msgId, originChat, originMsg: int64, text: string) =
+proc addOtherBot*(s: State, msgId, originChat, originMsg: int64, text: string, albumId = 0'i64) =
   ## A post the other (Python) bot sent to your channel.
-  s.db.exec(sql"""INSERT OR IGNORE INTO other_bot (at, msg_id, origin_chat, origin_msg, text)
-                  VALUES (?,?,?,?,?)""", now(), msgId, originChat, originMsg, text)
+  s.db.exec(sql"""INSERT OR IGNORE INTO other_bot (at, msg_id, origin_chat, origin_msg, text, album_id)
+                  VALUES (?,?,?,?,?,?)""", now(), msgId, originChat, originMsg, text, albumId)
 
 proc otherBotSince*(s: State, since: int64): seq[OtherBotPost] =
-  for r in s.db.fastRows(sql"""SELECT at, origin_chat, origin_msg, text FROM other_bot
-                               WHERE at > ? ORDER BY at""", since):
+  for r in s.db.fastRows(sql"""SELECT at, origin_chat, origin_msg, text, COALESCE(album_id, 0)
+                               FROM other_bot WHERE at > ? ORDER BY msg_id""", since):
     result.add OtherBotPost(at: parseBiggestInt(r[0]), originChat: parseBiggestInt(r[1]),
-                            originMsg: parseBiggestInt(r[2]), text: r[3])
+                            originMsg: parseBiggestInt(r[2]), text: r[3],
+                            albumId: parseBiggestInt(r[4]))
 
 proc processedSince*(s: State, since: int64): seq[ProcessedRow] =
-  for r in s.db.fastRows(sql"""SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons, action
-                               FROM processed WHERE at > ? ORDER BY at""", since):
+  for r in s.db.fastRows(sql"""SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons, action,
+                               COALESCE(raw_text, '') FROM processed WHERE at > ? ORDER BY at""", since):
     result.add ProcessedRow(chatId: parseBiggestInt(r[0]), msgId: parseBiggestInt(r[1]),
                             at: parseBiggestInt(r[2]), chatTitle: r[3], verdict: r[4], role: r[5],
-                            reasons: r[6], action: r[7])
+                            reasons: r[6], action: r[7], rawText: r[8])
 
 proc processedRow*(s: State, chat, msg: int64): (bool, ProcessedRow) =
   let r = s.db.getRow(sql"""SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons, action

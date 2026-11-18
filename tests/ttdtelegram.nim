@@ -9,6 +9,7 @@ var current: string
 var history: seq[int64]          # message ids in the chat, oldest first
 var lastRead = 0'i64
 var forwardWorks = true
+var partly = false             # only the first message of an album goes out
 
 proc page(fromId: int64, limit: int): JsonNode =
   ## TDLib's getChatHistory with offset 0: newest first, starting *at*
@@ -36,8 +37,8 @@ proc fakeSend(id: cint, req: cstring) {.cdecl, gcsafe.} = {.cast(gcsafe).}:
   of "getMessageProperties": answer = %*{"@type": "messageProperties", "can_be_forwarded": true}
   of "forwardMessages":
     var msgs = newJArray()
-    for _ in r["message_ids"]:
-      msgs.add(if forwardWorks: %*{"@type": "message", "id": 1} else: newJNull())
+    for i, _ in r["message_ids"].getElems:
+      msgs.add(if forwardWorks or (partly and i == 0): %*{"@type": "message", "id": 1} else: newJNull())
     answer = %*{"@type": "messages", "messages": msgs}
   else: answer = %*{"@type": "ok"}
   answer["@extra"] = r["@extra"]
@@ -76,3 +77,5 @@ suite "tdTelegram":
     check waitFor tg.forward(-9, -1, @[5'i64, 6, 7])         # an album
     forwardWorks = false
     check not waitFor tg.forward(-9, -1, @[5'i64])
+    partly = true                                            # one picture failed:
+    check waitFor tg.forward(-9, -1, @[5'i64, 6, 7])         # it's in the channel, no link too

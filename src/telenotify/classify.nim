@@ -149,7 +149,18 @@ proc locate(lines: seq[string], cfg: Config, why: var string): Place =
 # واسعة". Not a hard no (no years to compare), but it outweighs a generic
 # "fresh graduates and experienced" that some channels put on every post
 # (found on the first real run).
-let strongExperience = re2(r"(?:خبره\s+(?:واسعه|طويله|قويه|كبيره|عاليه|عميقه|متميزه|ممتازه)|(?:extensive|proven|strong|solid|significant|substantial|considerable|deep|broad)\s+(?:\w+\s+)?experience)")
+let strongExperience = re2(r"(?:(?:ال)?خبر(?:ه|ات)\s+(?:(?:ال)?(?:عمليه|ميدانيه|مهنيه|فنيه|عملي|عمل)\s+)?(?:ال)?(?:واسعه|طويله|قويه|كبيره|عاليه|عميقه|متميزه|ممتازه)|(?:^|[^a-z])(?:extensive|proven|strong|solid|significant|substantial|considerable|broad)\s+(?:(?:hands\s+on|practical|professional|relevant|industry|industrial|field|work|working|technical|engineering|commercial|international|previous|prior)\s+)?experience(?:[^a-z]|$))")
+# ...unless it's denied ("no extensive experience required", "لا يشترط خبرة
+# واسعة") or offered ("you will gain solid practical experience").
+let notAsked = re2(r"(?:^|[^a-z])(?:no|not|without|gain|gaining|acquire|build|develop|get|offers?|provides?)(?:[^a-z]|$)|(?:لا|بدون|غير|اكتساب|لاكتساب|تكتسب|يكتسب|نوفر|توفر)(?:\s|$)")
+
+proc strongExperienceAsked(flatLower: string): string =
+  ## The first "extensive experience"-like requirement, or "".
+  for m in flatLower.findAll(strongExperience):
+    let before = flatLower.runeSafe(m.boundaries.a - 30, m.boundaries.a)
+    if before.contains(notAsked): continue
+    return flatLower[m.boundaries].strip(chars = {' ', '\n', '.', ',', '(', ')'})
+  ""
 
 proc levelEvidence(lines: seq[string], cfg: Config): string =
   ## First entry-level word that is not about managing juniors.
@@ -264,10 +275,10 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
   var senior = ""
   for r in roles:
     if r.senior and r.titleLine: senior = r.context.short(50)
-  var strong = ""
-  for m in flatAll.toLowerAscii.findAll(strongExperience):
-    strong = flatAll.toLowerAscii[m.boundaries]
-    break
+  # A number of years (or "no experience needed") is a clearer answer than
+  # a vague "strong experience", so the rule only applies without one.
+  let strong = (if exp.requiredYears > 0 or exp.entryFriendly: ""
+                else: flatAll.toLowerAscii.strongExperienceAsked)
   if positive:
     if strong != "":
       result.reasons.add "but asks for '" & strong & "'"
@@ -278,7 +289,7 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
       result.verdict = vReview
     else:
       result.verdict = vPublish
-  elif cfg.publishWhenUnsure and best.kind != rkField and senior == "" and
+  elif cfg.publishWhenUnsure and best.kind != rkField and senior == "" and strong == "" and
       not anySeniorityOnTitleLines(b.lines, cfg):
     result.verdict = vPublish
     result.reasons.add "no sign of level either way (publish_when_unsure)"

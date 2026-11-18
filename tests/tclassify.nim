@@ -232,3 +232,16 @@ suite "found on the first real run (stage 4)":
     check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة") == vPublish
     check verdict("#البصرة مطلوب مهندس كهرباء #حديثي_التخرج\nموقع العمل: البصرة") == vPublish
     check verdict("Hiring Electrical Engineer in Basra (fresh graduates or experienced), strong communication skills") == vPublish
+
+  test "'strong experience' only counts when it is asked for, as a level":
+    const fg = "Hiring electrical engineer in Basra, fresh graduates welcome. "
+    for t in ["No extensive experience required", "Deep learning experience is a plus",
+              "This internship lets you gain solid practical experience",
+              "Studied abroad experience is a plus", "We want strong, experienced communicators",
+              "Strong Excel experience", "Up to 2 years of experience. Strong experience with AutoCAD is a plus"]:
+      check verdict(fg & t) == vPublish
+    check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة لا يشترط خبرة واسعة") == vPublish
+    for t in ["Extensive hands-on experience required", "Strong field experience in oil and gas"]:
+      check verdict(fg & t) == vReview
+    for t in ["الخبرة الواسعة في المجال", "خبرات واسعة", "خبرة عملية واسعة"]:
+      check verdict("مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة\n" & t) == vReview

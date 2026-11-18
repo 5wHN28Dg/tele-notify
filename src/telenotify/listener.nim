@@ -34,7 +34,7 @@
 ##   start-up, and when the connection comes back, a long gap is reported
 ##   to your Saved Messages.
 
-import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, hashes]
+import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm]
 import config, classify, gather, fetch, telegram, state, dedup, boards
 
 type
@@ -84,9 +84,13 @@ proc alert*(l: Listener, text: string) {.async.} =
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
 proc fingerprint(group: seq[TgMessage]): string =
-  var t = ""
-  for m in group: t.add m.text & "\n" & m.buttons.join("\n") & "\n"
-  $hash(t)
+  ## FNV-1a of the text: stable across Nim versions (std/hashes isn't
+  ## promised to be), since it's kept in the database.
+  var h = 0xcbf29ce484222325'u64
+  for m in group:
+    for c in m.text & "\n" & m.buttons.join("\n") & "\n":
+      h = (h xor c.uint64) * 0x100000001b3'u64
+  h.toHex
 
 proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   ## Judge one post (a message, or all pictures of an album) and act on
@@ -94,11 +98,24 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   let m = group[0]
   let ids = group.mapIt(it.id)
   let fp = fingerprint(group)
-  let prev = l.state.previous(m.chatId, m.id)
+  # Seen before? Any part of an album counts (e.g. the backlog had only its
+  # first picture, and the rest arrived live).
+  var prev = l.state.previous(m.chatId, m.id)
+  for x in group[1 .. ^1]:
+    if not prev.found: prev = l.state.previous(x.chatId, x.id)
   if prev.found:
-    # Seen before. Only an edit of a rejected post with new text is judged
-    # again ("job ad coming soon..." edited into the real ad).
-    if not m.edited or prev.action != "rejected" or prev.textHash == fp: return
+    # Only an edit of a rejected post with new text is judged again ("job
+    # ad coming soon..." edited into the real ad). Not for album pictures
+    # (one picture isn't the post), and not for rows from before
+    # fingerprints were kept (empty: we can't tell what changed).
+    let again = m.edited and group.len == 1 and m.albumId == 0 and
+                prev.action == "rejected" and prev.textHash notin ["", fp]
+    if not again:
+      for y in group:      # parts not recorded yet belong to the handled post
+        if not l.state.seen(y.chatId, y.id):
+          l.state.markProcessed(y.chatId, y.id, y.chatTitle, "", "", "part of a post already handled",
+                                prev.action, prev.textHash)
+      return
     l.say &"✏️  {m.chatTitle} #{m.id} was edited: judging it again"
   var verdict, role, reasons = ""
   var action = "error"
@@ -146,7 +163,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       var link = ""
       try: link = await l.tg.link(m.chatId, m.id)
       except CatchableError: discard
-      l.state.addReview(m.chatId, m.id, m.chatTitle, g.text, reasons, role, link)
+      l.state.addReview(m.chatId, m.id, m.chatTitle, g.text, reasons, role, link, ids)
       action = "queued for review"
     of vReject:
       action = "rejected"
@@ -160,12 +177,13 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       try: link = await l.tg.link(m.chatId, m.id)
       except CatchableError: discard
       l.state.addReview(m.chatId, m.id, m.chatTitle, group.mapIt(it.text).join("\n"),
-                        reasons.strip(chars = {';', ' '}), role, link)
+                        reasons.strip(chars = {';', ' '}), role, link, ids)
     except CatchableError as e2:
       l.say &"   could not queue it for review either: {e2.msg}"
   for x in group:
     try:
-      l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp)
+      l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
+                            rawText = (if l.dryRun: x.text else: ""))   # for compare
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 
@@ -192,7 +210,7 @@ proc noteOtherBot*(l: Listener, m: TgMessage) {.async.} =
       if words.len > 0:
         try: (chat, msg) = await l.tg.linkTarget(words[0])
         except CatchableError: discard
-    l.state.addOtherBot(m.id, chat, msg, m.text)
+    l.state.addOtherBot(m.id, chat, msg, m.text, m.albumId)
   except CatchableError as e:
     l.say "   could not note the other bot's post: " & e.msg
 
@@ -207,12 +225,15 @@ proc processQueue*(l: Listener) {.async.} =
   while l.queue.len > 0 and not l.stop[]:
     let m = l.queue.popFirst
     var group = @[m]
-    if m.albumId != 0:
+    if m.albumId != 0 and not m.edited:
       # The pictures of an album arrive as separate messages, back to back.
       if l.queue.len == 0: await sleepAsync(l.albumWaitMs)
       while l.queue.len > 0 and l.queue.peekFirst.chatId == m.chatId and
-          l.queue.peekFirst.albumId == m.albumId:
-        group.add l.queue.popFirst
+          l.queue.peekFirst.albumId == m.albumId and not l.queue.peekFirst.edited:
+        let x = l.queue.popFirst
+        if group.allIt(it.id != x.id): group.add x      # the same picture twice: once
+      # Telegram wants the ids in increasing order (forwardMessages)
+      group.sort(proc (a, b: TgMessage): int = cmp(a.id, b.id))
     await l.handleGroup(group)
     if not l.dryRun:
       try: await l.tg.markRead(m.chatId, group.mapIt(it.id))
@@ -248,7 +269,7 @@ proc sendApproved*(l: Listener) {.async.} =
   for r in l.state.approvedReviews():
     if l.stop[]: return
     try:
-      if not await l.tg.forward(l.cfg.targetChat, r.chatId, @[r.msgId]):
+      if not await l.tg.forward(l.cfg.targetChat, r.chatId, r.albumIds):
         var link = r.link
         if link == "": link = await l.tg.link(r.chatId, r.msgId)
         if link == "": raise newException(ValueError, "no link to the post")

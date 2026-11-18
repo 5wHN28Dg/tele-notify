@@ -95,6 +95,10 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
       discard await s.client.call(%*{"@type": "openChat", "chat_id": chat})
     except TdError as e:
       l.log &"⚠️  chat {chat} from config.json is not available: {e.msg}"
+  if l.dryRun:
+    # so TDLib reliably delivers the Python bot's posts there (compare)
+    try: discard await s.client.call(%*{"@type": "openChat", "chat_id": cfg.targetChat})
+    except TdError as e: l.log &"⚠️  target_chat {cfg.targetChat} is not available: {e.msg}"
   setControlCHook(proc () {.noconv.} = stopRequested[] = true)
   signal(SIGTERM, onSignal)
   await l.checkDowntimeAtStart()
