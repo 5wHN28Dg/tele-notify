@@ -1,7 +1,7 @@
 ## TdClient against a fake libtdjson: four cdecl procs that answer like
 ## TDLib does (copying "@extra", adding "@client_id").
 
-import std/[unittest, asyncdispatch, json, deques]
+import std/[unittest, asyncdispatch, json, deques, os]
 import telenotify/[td, tdjson]
 
 var outbox = initDeque[string]()
@@ -77,6 +77,10 @@ suite "TdClient":
     check authState(%*{"@type": "updateNewMessage"}) == ""
     check isClosedUpdate(%*{"@type": "updateAuthorizationState",
                             "authorization_state": {"@type": "authorizationStateClosed"}})
+
+  test "the library is looked for where install.sh puts it":
+    check getAppDir() / ".." / "lib" / "tele-notify" / "libtdjson.so" in candidates("")
+    check candidates("/my/libtdjson.so") == @["/my/libtdjson.so"]
 
   test "a missing library is a clear error":
     expect TdLibError:

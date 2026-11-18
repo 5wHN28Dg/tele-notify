@@ -172,6 +172,24 @@ proc parseConfig*(j: JsonNode): Config =
   if result.locations.len == 0:
     raise newException(ConfigError, "config has no location_keywords_*")
 
+proc configCandidates*(): seq[string] =
+  ## Where config.json is looked for when no --config is given, in order:
+  ## $TELENOTIFY_CONFIG, ~/.config/tele-notify/config.json (or under
+  ## $XDG_CONFIG_HOME), then ./config.json.
+  let env = getEnv("TELENOTIFY_CONFIG").strip
+  if env.len > 0: return @[env.expandTilde]
+  let xdg = getEnv("XDG_CONFIG_HOME").strip
+  let base = if xdg.len > 0 and xdg.isAbsolute: xdg else: getHomeDir() / ".config"
+  @[base / "tele-notify" / "config.json", "config.json"]
+
+proc defaultConfigPath*(): string =
+  ## The first candidate that exists; if none does, the standard place
+  ## (so the error message names it).
+  let c = configCandidates()
+  for p in c:
+    if fileExists(p): return p
+  c[0]
+
 proc loadConfig*(path: string): Config =
   let text = try: readFile(path)
              except IOError as e: raise newException(ConfigError, "cannot read " & path & ": " & e.msg)

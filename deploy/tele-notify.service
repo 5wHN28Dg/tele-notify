@@ -1,15 +1,11 @@
 # systemd *user* service for tele-notify (issue #6).
 #
-# Install (no sudo needed):
-#   mkdir -p ~/.config/systemd/user
-#   cp deploy/tele-notify.service ~/.config/systemd/user/
-#   # edit WorkingDirectory/ExecStart below if the repo isn't in ~/tele-notify
-#   systemctl --user daemon-reload
+# Installed by deploy/install.sh (no sudo). Then, once:
+#   telenotify login                      # your Telegram login
 #   systemctl --user enable --now tele-notify
-#   loginctl enable-linger "$USER"     # keep it running when you're logged out
+#   loginctl enable-linger "$USER"        # keep it running when you're logged out
 #
-# Logs: journalctl --user -u tele-notify -f
-# Log in once *before* enabling: ./telenotify login --config:config.json
+# Config: ~/.config/tele-notify/config.json. Logs: journalctl --user -u tele-notify -f
 
 [Unit]
 Description=tele-notify: forwards matching Telegram job posts
@@ -17,8 +13,8 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-WorkingDirectory=%h/tele-notify
-ExecStart=%h/tele-notify/telenotify run --config:%h/tele-notify/config.json
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/telenotify run --config:%h/.config/tele-notify/config.json
 Restart=always
 RestartSec=30
 # be a good neighbour

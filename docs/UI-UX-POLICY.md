@@ -283,7 +283,7 @@ exists, its steps below are followed by hand as a checklist). Every evidence run
 
 - computes the real home with `pwd.getpwuid(os.getuid()).pw_dir` **before** changing anything, and refuses to start if
   any path it will use (symlinks followed) is under `~/.local/share/tele-notify*`, the corpus folder,
-  `~/tele-notify` or `~/Projects/bqtechjobs`;
+  `~/.config/tele-notify`, `~/tele-notify` or `~/Projects/bqtechjobs`;
 - runs with the run folder's temporary `HOME` and config (no `api_id` / `api_hash`, `data_dir` inside the run
   folder); `TELENOTIFY_LABELS` and
   `TELENOTIFY_CORPUS` inside it; `TELENOTIFY_BIN` set to the repository's build or a fake;

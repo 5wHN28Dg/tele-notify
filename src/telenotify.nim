@@ -44,6 +44,9 @@ usage:
   telenotify review [--config:FILE] [--dry-run]
   telenotify stats [--config:FILE] [--days:N] [--dry-run]
   telenotify compare [--config:FILE] [--days:N]
+
+Without --config, the config is $TELENOTIFY_CONFIG, else ~/.config/tele-notify/config.json,
+else ./config.json.
 """
 
 proc printDecision(d: Decision) =
@@ -119,7 +122,7 @@ proc main() =
   var scrape = true
   var showText, dryRun = false
   var days = 7
-  configPath = "config.json"
+  configPath = ""
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
@@ -140,6 +143,7 @@ proc main() =
       of "help", "h": echo usage; quit 0
       else: quit "unknown option --" & key & "\n" & usage
     of cmdEnd: discard
+  if configPath == "": configPath = defaultConfigPath()
   let cfg = try: loadConfig(configPath)
             except ConfigError as e: quit "config error: " & e.msg
   case cmd

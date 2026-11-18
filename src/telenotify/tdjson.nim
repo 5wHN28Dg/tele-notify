@@ -9,7 +9,8 @@
 ## Where it is looked for, in order:
 ## 1. the `tdlib_path` config key, if set;
 ## 2. `lib/libtdjson.so` next to the program (where `deploy/build-tdlib.sh`
-##    puts it);
+##    puts it), `../lib/`, or `../lib/tele-notify/` (where
+##    `deploy/install.sh` puts it: ~/.local/bin and ~/.local/lib/tele-notify);
 ## 3. the system library path (`libtdjson.so`).
 
 import std/[dynlib, os]
@@ -30,12 +31,15 @@ type
 
   TdLibError* = object of CatchableError
 
-proc candidates(configured: string): seq[string] =
+proc candidates*(configured: string): seq[string] =
   # A path you set is the only one tried: silently loading another copy
   # would hide the mistake (and run a TDLib you didn't choose).
   if configured != "": return @[configured]
   result.add getAppDir() / "lib" / "libtdjson.so"
   result.add getAppDir() / ".." / "lib" / "libtdjson.so"
+  # deploy/install.sh: the program in ~/.local/bin, the library in
+  # ~/.local/lib/tele-notify
+  result.add getAppDir() / ".." / "lib" / "tele-notify" / "libtdjson.so"
   result.add "libtdjson.so"
 
 proc loadTdLib*(configured = ""): TdLib =

@@ -51,3 +51,56 @@ def test_relative_data_dir_is_next_to_the_config(tmp_path, monkeypatch):
     p = resolve(cfg, dry_run=False)
     assert p.data_dir == tmp_path / "conf" / "data" / "bot"
     assert p.state == tmp_path / "conf" / "data" / "bot" / "state.sqlite3"
+
+
+def test_config_without_flag_env_then_xdg_then_cwd(tmp_path, monkeypatch):
+    from telenotify_tui.paths import default_config
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TELENOTIFY_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    std = tmp_path / "xdg" / "tele-notify" / "config.json"
+    assert default_config() == std                      # nothing anywhere: the standard place
+    (tmp_path / "config.json").write_text("{}")
+    assert default_config() == Path("config.json")      # only ./config.json exists
+    std.parent.mkdir(parents=True)
+    std.write_text("{}")
+    assert default_config() == std                      # the standard place wins
+    monkeypatch.setenv("TELENOTIFY_CONFIG", str(tmp_path / "mine.json"))
+    assert default_config() == tmp_path / "mine.json"   # the variable wins, even if missing
+    monkeypatch.setenv("TELENOTIFY_CONFIG", "  ")
+    assert default_config() == std
+
+
+def test_tui_main_uses_the_default_config(tmp_path, monkeypatch):
+    import telenotify_tui.__main__ as m
+    monkeypatch.delenv("TELENOTIFY_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    std = tmp_path / "xdg" / "tele-notify" / "config.json"
+    std.parent.mkdir(parents=True)
+    std.write_text("{}")
+    seen = {}
+
+    class FakeApp:
+        def __init__(self, paths):
+            seen["config"] = paths.config
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(m, "TeleNotifyApp", FakeApp)
+    monkeypatch.setattr(m.rtl, "terminal_mode", lambda: __import__("contextlib").nullcontext())
+    m.main([])
+    assert seen["config"] == std.resolve()
+
+
+def test_binary_next_to_config_wins_over_path(tmp_path, monkeypatch):
+    from telenotify_tui.paths import find_binary
+    monkeypatch.delenv("TELENOTIFY_BIN", raising=False)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for p in (bindir / "telenotify", tmp_path / "telenotify"):
+        p.write_text("#!/bin/sh\n")
+        p.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    assert find_binary(tmp_path / "config.json") == tmp_path / "telenotify"      # a build being tried out
+    assert find_binary(tmp_path / "cfg" / "config.json") == bindir / "telenotify"  # nothing there: the installed one
