@@ -7,6 +7,7 @@ it is visible, so the numbers stay live while the bot runs.
 
 from __future__ import annotations
 
+from collections import deque
 from typing import ClassVar
 from weakref import WeakKeyDictionary
 
@@ -14,6 +15,7 @@ from textual import events
 from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding, BindingType
 from textual.errors import NoWidget
+from textual.widget import Widget
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
 
 from .paths import Paths
@@ -28,21 +30,28 @@ REFRESH_SECONDS = 5
 
 
 class TeleNotifyApp(App):
-    """The screen. `press_made_at` maps a widget to when the latest mouse press on it was
-    *made*: Textual rebuilds a mouse event (with a new time) before a widget sees it, so
-    dialogs that ignore early presses (screens/armed.py) read the real time here."""
+    """The screen. `press_made_at` maps a widget to the times its clicks were *made*
+    (the press, oldest first, one per completed click): Textual rebuilds a mouse event
+    (with a new time) before a widget sees it, so dialogs that ignore early presses
+    (screens/armed.py) read the real time here."""
 
     TITLE = "tele-notify"
 
     async def on_event(self, event: events.Event) -> None:
-        # the driver's own MouseDown (not the forwarded copy, which has a later time)
-        if isinstance(event, events.MouseDown) and not event.is_forwarded:
+        # the driver's own events (not the forwarded copies, which have later times): a
+        # press counts once its release on the same widget makes it a click, as Textual's
+        # own Click is made; a press dragged off counts for nothing
+        if isinstance(event, (events.MouseDown, events.MouseUp)) and not event.is_forwarded:
             try:
                 widget, _ = self.get_widget_at(event.x, event.y)
             except (NoWidget, ScreenStackError):   # outside every widget, or no screen yet
                 widget = None
-            if widget is not None:
-                self.press_made_at[widget] = event.time
+            if isinstance(event, events.MouseDown):
+                self._down = (widget, event.time) if widget is not None else None
+            else:
+                if self._down is not None and self._down[0] is widget:
+                    self.press_made_at.setdefault(widget, deque()).append(self._down[1])
+                self._down = None
         await super().on_event(event)
 
     CSS_PATH = "app.tcss"
@@ -58,7 +67,8 @@ class TeleNotifyApp(App):
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
-        self.press_made_at: WeakKeyDictionary = WeakKeyDictionary()
+        self.press_made_at: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
+        self._down: tuple[Widget, float] | None = None
         self.paths = paths
         self.refresh_seconds = refresh_seconds
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)

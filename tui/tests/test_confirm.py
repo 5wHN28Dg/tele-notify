@@ -226,7 +226,17 @@ STALLS = {
     "early y, then an arrow": lambda yes, no, early, late: [_key("y", "y", early), _key("down", None, late)],
     "early enter on the action, then an arrow": lambda yes, no, early, late: [_key("enter", "\r", early),
                                                                               _key("down", None, late)],
+    # the later press on the same button is dragged off: it isn't a click, so it can't lend its time
+    "early click, then a late press dragged off": lambda yes, no, early, late: [
+        _down(yes, early), _up(yes, early), _down(yes, late), _up_at(1, 1, late)],
 }
+
+
+def _up_at(x: int, y: int, made: float):
+    from textual import events
+    e = events.MouseUp(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+    e.time = made
+    return e
 
 
 def _down(w, t):
@@ -301,3 +311,24 @@ async def test_two_queued_clicks_dont_crash(paths, fake_systemctl):  # noqa: F81
             app.post_message(e)
         await settle(app, pilot)
         assert app.is_running
+
+
+async def test_a_press_dragged_off_doesnt_make_a_later_key_too_quick(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    import time
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        screen = app.screen
+        yes = screen.query_one("#confirm-yes", Button)
+        yes.focus()
+        early = screen._armed_at - 0.1
+        app.post_message(_down(yes, early))                    # pressed, then dragged off: no click
+        app.post_message(_up_at(1, 1, early))
+        while time.monotonic() < screen._armed_at + 0.05:
+            await pilot.pause(0.05)
+        app.post_message(_key("enter", "\r", time.monotonic()))
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
