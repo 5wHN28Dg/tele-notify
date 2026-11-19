@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
@@ -25,7 +26,20 @@ REFRESH_SECONDS = 5
 
 
 class TeleNotifyApp(App):
+    """The screen. `input_at` is when the latest key or mouse press was *made*: Textual
+    rebuilds mouse events (with a new time) before they reach a widget, so dialogs that
+    ignore early presses (screens/armed.py) read it here."""
+
     TITLE = "tele-notify"
+    input_at: float | None = None
+
+    async def on_event(self, event: events.Event) -> None:
+        # a mouse event comes here twice: from the driver (no widget yet, the real time)
+        # and again rebuilt for the widget under it (a new time), bubbling up: keep the first
+        if isinstance(event, events.Key) or (isinstance(event, events.MouseDown) and event.widget is None):
+            self.input_at = event.time
+        await super().on_event(event)
+
     CSS_PATH = "app.tcss"
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("1", "show('dashboard')", "Dashboard"),

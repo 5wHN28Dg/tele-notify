@@ -77,6 +77,8 @@ class ConfirmModal(Armed, ModalScreen[bool]):
     ConfirmModal Button.-style-default.-error.-active, ConfirmModal Button.-style-default.-error:focus {
         background: $error-muted; color: $text-error; background-tint: $foreground 0%;
     }
+    /* pressed: Textual tints by 30 %, which drops any variant under 4.5:1 */
+    ConfirmModal Button.-style-default.-active { tint: $background 0%; }
     ConfirmModal #confirm-wait { color: $text-muted; height: 1; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [Binding("y", "answer(True)", "Confirm"),

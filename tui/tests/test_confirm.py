@@ -201,3 +201,61 @@ async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_
         await pilot.press("y")                               # a press made now confirms
         await settle(app, pilot)
         assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+async def test_a_click_made_too_early_but_handled_late_cant_confirm(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    # Textual rebuilds a mouse event (new time) before the screen sees it: the app keeps the real one
+    import time
+
+    from textual import events
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause()
+        screen = app.screen
+        b = screen.query_one("#confirm-yes", Button)
+        x, y = b.region.x + 2, b.region.y + 1
+        made = screen._armed_at - 0.1                         # inside the delay
+        args = (None, x, y, 0, 0, 1, False, False, False)
+        clicks = [events.MouseDown(*args, screen_x=x, screen_y=y), events.MouseUp(*args, screen_x=x, screen_y=y),
+                  events.Click(*args, screen_x=x, screen_y=y)]
+        for e in clicks:
+            e.time = made
+        while time.monotonic() < screen._armed_at + 0.05:   # ... handled after it
+            await pilot.pause(0.05)
+        for e in clicks:
+            app.post_message(e)
+        await settle(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert not [c for c in fake_systemctl if c[0] == "action"]
+        assert "Too quick" in str(screen.query_one("#confirm-wait").render())
+        await pilot.pause(0.3)                                 # the rejected press's active effect ends
+        await pilot.click("#confirm-yes")                      # a click made now confirms
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+@pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
+async def test_pressed_buttons_stay_readable(paths, fake_systemctl, theme):  # noqa: F811
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.theme = theme
+        await settle(app, pilot)
+        for svc in ("#svc-stop", "#svc-restart"):              # destructive and warning variants
+            await pilot.click(svc)
+            await pilot.pause()
+            for sel in ("#confirm-yes", "#confirm-no"):
+                b = app.screen.query_one(sel, Button)
+                b.add_class("-active")                         # how a press looks for 0.2 s
+                await pilot.pause()
+                # Textual's 30 % tint drops the text under 4.5:1; without it the pressed
+                # button looks like the unpressed one, whose contrast is tested above
+                assert b.styles.tint.a == 0, (theme, svc, sel)
+                if b.variant == "error":
+                    bg = b.styles.background
+                    assert _ratio(bg + b.styles.color, bg) >= 4.5, (theme, svc, sel)
+                b.remove_class("-active")
+            await pilot.press("escape")
+            await settle(app, pilot)

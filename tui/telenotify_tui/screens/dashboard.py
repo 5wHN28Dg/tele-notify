@@ -250,6 +250,8 @@ class ConfirmScreen(Armed, ModalScreen[bool]):
     ConfirmScreen Button.-style-default.-error.-active, ConfirmScreen Button.-style-default.-error:focus {
         background: $error-muted; color: $text-error; background-tint: $foreground 0%;
     }
+    /* pressed: Textual tints by 30 %, which drops any variant under 4.5:1 */
+    ConfirmScreen Button.-style-default.-active { tint: $background 0%; }
     ConfirmScreen #confirm-wait { color: $text-muted; height: 1; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "answer(False)", "Cancel"), Binding("y", "answer(True)", "Confirm", show=False),
