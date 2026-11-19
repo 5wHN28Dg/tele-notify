@@ -15,7 +15,7 @@ Read, in this order:
    8.2 to 8.4, 8.8 and 9, Appendix B, and the rules that Appendix C lists for this kind of change (Appendix H finds
    any rule by ID). For a profile edit, also section 1;
 2. the project's profile, `docs/ux-profile.md`, from the base branch (its screen table, main tasks, applicability
-   list and accepted Not-checked reasons);
+   list and accepted Not-checked reasons); for a profile edit, also the PR's version (1.7);
 3. the project's own policy, `docs/UI-UX-POLICY.md` (rules TN-R1 … TN-R14; the stricter of the two wins);
 4. the change: `gh pr diff <n>` and `gh pr view <n>`, and its evidence (the PR's CI artifacts and comments). Get
    them yourself.
@@ -31,7 +31,16 @@ Then:
   `full` bidi modes, the longest synthetic Arabic post and the hostile fixture (markup, escape sequences, bidi
   controls, very long words), the 1-million-post state file, a locked state file, a stopped or missing bot, a
   broken config, the dry run and the real mode, a first-time user, an expert in a hurry, a user who makes every
-  mistake. Look for gaming of the policy (0.7). Record at least one concrete thing you tried per touched rule group.
+  mistake, the largest terminal font (the cell grid a 200 % font gives, about 80 × 24), Orca on the command-line
+  path where it applies, Telegram offline, slow or interrupted (fakes), `TEXTUAL_ANIMATIONS=none` for reduced
+  motion. Look for gaming of the policy (0.7). Record at least one concrete thing you tried per touched rule group.
+
+- **Filter changes:** check that the PR reports `telenotify eval` aggregate numbers on the private corpus (only
+  counts, never text) and that the combined score in the profile didn't fall (real-data evaluation, Z1, ALERT2).
+- **Not checked** is accepted only for a reason on the profile's accepted list, or one the owner accepted in writing
+  for this change (quoted in the PR with date).
+- **Until the harness is on main**, take evidence from the PR's branch of `tui/audit/` or follow the checklist in
+  `docs/UI-UX-POLICY.md` 3.3 by hand.
 
 Hard rules:
 - Use the harness (`tui/audit/`) or a temporary `HOME` with fakes. Never read or run against `~/.local/share/tele-notify*`,
