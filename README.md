@@ -74,11 +74,14 @@ Then:
 
 ## Run the bot
 
-The Nim bot talks to Telegram through [TDLib](https://core.telegram.org/tdlib), Telegram's official library. Build it once (about an hour on one core; needs cmake, a C++ compiler, zlib and OpenSSL headers):
+The Nim bot talks to Telegram through [TDLib](https://core.telegram.org/tdlib), Telegram's official library. Build it once (needs cmake, a C++ compiler, zlib and OpenSSL headers). Each parallel job needs about 4 GB of RAM:
 
 ```bash
-JOBS=2 deploy/build-tdlib.sh      # puts lib/libtdjson.so next to the program
+JOBS=2 deploy/build-tdlib.sh      # 8 GB of RAM or more: about 20–40 minutes
+JOBS=1 deploy/build-tdlib.sh      # 4 GB of RAM (the smallest supported machine): about an hour
 ```
+
+Either puts `lib/libtdjson.so` next to the program.
 
 Then install it (no sudo; run it again after each `git pull` to update):
 

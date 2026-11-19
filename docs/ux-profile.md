@@ -4,18 +4,28 @@ Stage: **live** (v4.0 is released, and the README invites others to install it) 
 policy v4.13 (`global/UI-UX-POLICY.md` in the owner's prompts repo) · Written 2026-11-19 at adoption (phase 1).
 Reviewed: blind and adversarial passes on PR #53.
 
-**State of the adoption.** The profile and review brief exist. The hook-up lines (policy Appendix G) are **not yet**
-in AGENTS.md or this project's CLAUDE.md. Until they are, AGENTS.md wins every conflict, and agents start no tier-2
-or tier-3 UI change on this product (policy, Quick start, phase 1). Whether the terminal screen is inside the
-delegation in CLAUDE.md is also unanswered (policy 0.2), so until the owner answers, agents make **no UI changes to
-`tui/`** and only propose them. Changes to tests and to the bot's own code inside the delegation go ahead.
+**State of the adoption.** The hook-up lines (policy Appendix G) are in this project's CLAUDE.md, and the terminal
+screen is inside the delegation there: on 2026-11-19 the owner answered "Yes, screen + hook-up". Phase 1 is done;
+phase 2 (the automated evidence) is due by 2026-12-19, and phase 3 (the first full audit and the first round with
+users) by 2027-02-19.
+
+**Owner decisions, 2026-11-19** (answers to the agent's questions in the session, quoted):
+- the proposals in this profile (experience intent, intent orders, task targets, budgets, tie-breakers): "Accept as
+  written";
+- the combined score: "F0.5";
+- the owner budget: "30 min/month";
+- the minimum device: "2 cores, 4 GB";
+- the channel description and the T0 checklist: "Yes, draft it" and "Draft it, I'll confirm";
+- removing the two synthetic labels from the corpus: "Yes, remove them" (done, with a backup beside the file).
+
+Changing any of them is the owner's call; until then they are settled.
 
 **Phase-1 check** (the never-waivable set, U1, A1 and A5, plus T13 and MSG6) was done by hand on 2026-11-19. Its fails
 are tracked as `ux` issues #55 and #62 to #73. Earlier harness finds are #54 to #60, and finds from this profile's
 reviews are #74 to #86 (all: `gh issue list --label ux`). A10 and T1 passed, T9 is N/A, and T0 waits for the owner's
 checklist below. Z1 failed: TUI tests wrote two synthetic labels into the owner's real `review-labels.jsonl`. The
-cause is fixed in PR #61 (merged 2026-11-19). The two lines are still in the file until the owner removes
-them, and they count in every `telenotify eval` until then.
+cause is fixed in PR #61 (merged 2026-11-19), and the two lines were removed on the owner's answer (backup
+`review-labels.jsonl.bak-2026-11-19` beside the file).
 
 This profile covers the whole product: the bot and its command line (`telenotify`, `deploy/install.sh`,
 `deploy/build-tdlib.sh`), the messages it sends, and the terminal screen (`telenotify-tui`). The older project
@@ -23,8 +33,8 @@ policy, `docs/UI-UX-POLICY.md`, keeps its rules as **TN-R1 … TN-R14**. Where i
 looser, it stays until the next full audit or 2027-05-18, whichever comes first (policy 0.2). The mapping is at the
 end.
 
-Items marked **(owner)** are decisions only the owner makes. Until the owner sets them, they are proposals, listed in
-"Waiting for the owner" at the end, and nothing that depends on them counts as settled.
+Items marked **(owner)** are decisions only the owner makes. The ones the owner accepted on 2026-11-19 (above) are
+settled; the rest are listed in "Waiting for the owner" at the end.
 
 ## Purpose (and what it must never do)
 
@@ -62,7 +72,7 @@ may install it. Not a reader, viewer, sharing tool, training product, family fil
 
 ## Experience intent and reference products (owner)
 
-Proposed; the agent's draft until the owner confirms it.
+Accepted by the owner on 2026-11-19.
 
 | Part | Intent | Reference product |
 |---|---|---|
@@ -74,12 +84,11 @@ Proposed; the agent's draft until the owner confirms it.
 | Messages to the user | Rare and worth reading | Signal's system notices |
 | What the channel's readers get | Only real matches, the original post untouched (today a short fallback text when forwarding is blocked, #80) | a curated job-alert channel |
 
-Tie-breakers for UI choices this profile doesn't settle (1.3), **(owner)**, proposed: the reference product named
-above for that part; then Textual's widgets for the screen and clig.dev for the command line. Until the owner
-confirms them, they settle nothing (0.2).
+Tie-breakers for UI choices this profile doesn't settle (1.3), accepted by the owner on 2026-11-19: the reference
+product named above for that part; then Textual's widgets for the screen and clig.dev for the command line.
 
-The intent orders in the screen table, the main-task targets and the budgets are also the agent's proposals,
-**(owner)**, until the owner confirms them.
+The intent orders in the screen table, the main-task targets and the budgets were accepted by the owner on the same
+day.
 
 ## Core interactions (with feel specs)
 
@@ -155,7 +164,7 @@ The intent orders in the screen table, the main-task targets and the budgets are
 
 - **OS:** Linux with a systemd user session. Nothing else is supported.
 - **Typical device:** the owner's laptop (Ubuntu GNOME, 37.5 GiB RAM, a 1920 × 1080 class screen).
-- **Oldest and smallest supported device (owner):** proposed: a 2-core machine with 4 GB of RAM, simulated by
+- **Oldest and smallest supported device (owner):** a 2-core machine with 4 GB of RAM (owner, 2026-11-19), simulated by
   running the benchmark walk under a 2-CPU, 4 GB memjob limit. On it, TDLib builds with `JOBS=1` (about 4 GB per
   parallel job, `deploy/build-tdlib.sh`), which takes about an hour.
 - **Terminals:** Kitty 0.47 (main); Ptyxis and GNOME Terminal (VTE); Zed's terminal; inside `tmux` and over `ssh`.
@@ -172,7 +181,7 @@ The intent orders in the screen table, the main-task targets and the budgets are
 
 ## Main tasks
 
-Targets proposed 2026-11-19, **(owner)**. Actions are counted by the harness's keyboard-only (K) and mouse-only (M)
+Targets set 2026-11-19 (accepted by the owner). Actions are counted by the harness's keyboard-only (K) and mouse-only (M)
 scripts, from the start state named in brackets, with each key, click and arrow press as one action; waits such as
 `DECIDE_DELAY` are excluded. Where a target says "K/M", both scripts must meet it.
 
@@ -250,7 +259,7 @@ All screen budgets are measured on the 1-million-post synthetic state file, unde
   the first tab on the large state file (#56).
 - Local interactions (tab switch, selection, typing): 100 ms (P7).
 - No event-loop block over 1 s (P1), from asyncio's slow-callback log.
-- **ALERT1, latency (owner):** proposed: from a source post's Telegram date to the forward reaching the owner's phone, 95 % under
+- **ALERT1, latency (owner, 2026-11-19):** from a source post's Telegram date to the forward reaching the owner's phone, 95 % under
   60 s while connected, with the catch-up after downtime reported separately (its own median and 95th percentile).
   **Not checked** until the bot records each post's Telegram date (#74); then also a timed run with a fake Telegram
   in the benchmark walk.
@@ -264,7 +273,7 @@ Settings and the Chats table, decide 3 review posts.
 
 - **What:** `telenotify eval` on the private corpus (`~/.local/share/tele-notify-corpus/eval.jsonl`), run locally;
   only aggregate counts go into PRs (this project's CLAUDE.md already requires them for filter changes).
-- **Combined score (owner):** proposed **F0.5** over posts labelled TRUE and FALSE, where a publish is a positive.
+- **Combined score (owner, 2026-11-19):** **F0.5** over posts labelled TRUE and FALSE, where a publish is a positive.
   F0.5 weighs precision twice as much as recall: a wrong publish reaches every reader of the channel, while a missed
   one costs only the owner. Review counts as not published.
 - **Review guard (owner):** F0.5 can be raised by sending more posts to review, which costs the owner time. So every
@@ -279,7 +288,7 @@ Settings and the Chats table, decide 3 review posts.
 
 ## Owner budget (owner)
 
-Proposed: 30 minutes a month.
+30 minutes a month (owner, 2026-11-19).
 
 ## Declarations
 
@@ -362,10 +371,29 @@ profile is stricter and wins: those are owner-check items (policy 1.6).
 
 ## Law and platform duties, T0 (owner)
 
-The owner keeps this checklist. To start it (agent's draft, owner to complete):
-- Telegram's API Terms of Service for an automated user account (rate limits, no spam, no misuse of others' data).
-- Republishing others' posts: only from public sources, or with the admins' agreement (T13).
-- Iraq's and the owner's local rules on republishing job adverts: owner question.
+The owner keeps this checklist. The agent drafted it on 2026-11-19 from Telegram's pages, read that day:
+[API Terms](https://core.telegram.org/api/terms), [Obtaining api_id](https://core.telegram.org/api/obtaining_api_id),
+[Terms of Service](https://telegram.org/tos) and [Content Licensing](https://telegram.org/tos/content-licensing).
+Telegram's privacy policy and Security Guidelines weren't read yet. The owner marks each line **yes** (met),
+**no** or **unsure**. Until the owner marks it, a line is an open question. An open question blocks merging a change
+that touches it.
+
+| # | Duty (short quote) | Source | How tele-notify stands (agent's reading) | Owner |
+|---|---|---|---|---|
+| 1 | "You must obtain your own api_id for your application" | API Terms 2.1 | each installer uses their own `api_id` in their config; the README should say so | |
+| 2 | App title "must not include the word 'Telegram'"; no official logo | API Terms 2.3, 2.4 | the name is tele-notify, and there's no logo | |
+| 3 | Users "must be aware" the app uses the Telegram API | API Terms 2.2 | the README says it uses TDLib; there's no store page or intro | |
+| 4 | No "actions on behalf of the user without the user's knowledge and consent"; no "ghost mode" read tampering | API Terms 1.4 | forwards happen only by the owner's own setup and review; reading marks chats read as a normal client does (to check) | |
+| 5 | No "flooding, spamming, faking subscriber and view counters"; accounts on unofficial clients are "under observation" | Obtaining | one forward per match, no counters; there are no numeric limits on these pages, and TDLib's `FLOOD_WAIT` is obeyed (to check) | |
+| 6 | No use of Telegram data to "train, fine-tune … or deployment of artificial intelligence, machine learning models" | API Terms 1.5; Content Licensing | the filter is keyword rules, not ML. **Unsure:** OCR uses tesseract's LSTM model on images from posts; the private corpus is used only to test the rules | |
+| 7 | Content access "for any purpose other than ordinary, legitimate, and intended use" is prohibited; data scraping is prohibited | Content Licensing; ToS | **unsure:** it reads chats the account joined, as a client; "scraping" isn't defined. The bot also follows job-board links outside Telegram | |
+| 8 | "Adhere to any stipulated conditions … in regard to copyright" placed by the content's owners | Content Licensing | **unsure:** it republishes others' posts by forwarding (the source shows); no source's conditions were checked | |
+| 9 | Clients that access channel content "must include support for official sponsored messages … and may not interfere" | API Terms 3.3 | **unsure:** it shows no channel to a person, so it neither shows nor blocks sponsored messages | |
+| 10 | Guard users' privacy "with utmost care" and follow the Security Guidelines | API Terms 1.1 | the session and state are kept in `~/.local/share/tele-notify` (mode 700); others' messages are stored, and their text is cleared after `keep_text_days`. The guidelines weren't read yet | |
+| 11 | Republishing only from public sources, or with the admins' agreement | this policy, T13 | not checked today (#68) | |
+| 12 | Iraq's and your local rules on republishing job adverts and storing others' messages (phone numbers in posts) | local law | owner question | |
+
+If the account is banned without a breach, Telegram's page says to write to recover@telegram.org (Obtaining).
 
 ## Review brief
 
@@ -377,18 +405,12 @@ None.
 
 ## Waiting for the owner
 
-1. Hook-up lines: add policy Appendix G to AGENTS.md or this project's CLAUDE.md, and say whether the terminal screen
-   is inside the delegation (policy 0.2).
-2. Content policy wording; experience intent and reference products.
-3. The combined score (F0.5 proposed), the snapshot and held-out part, and whether the visible score stands in until
-   then.
-4. The owner budget (30 min/month proposed).
-5. The Not-checked reasons above, and your own access needs.
-6. The T0 checklist.
-7. The public channel's description (MSG6): the agent drafts it, the owner changes it.
-8. The tie-breakers, every screen's intent order, the main-task targets, the budgets (start-up, ALERT1's 60 s,
-   memory), the minimum device and the review guard's limit: all proposals until confirmed.
-9. Remove the two synthetic test labels (ids `-2:7` and `-1:11`) from `~/.local/share/tele-notify-corpus/review-labels.jsonl`.
+1. The content policy's wording (the proposal above stands meanwhile).
+2. The snapshot and held-out part of the corpus, and whether the visible score stands in until then.
+3. The review guard's limit (proposed: no rise without the owner's OK).
+4. Accepting the proposed Not-checked reasons (#85, #86), and your own access needs.
+5. Confirming the T0 checklist the agent drafts.
+6. Changing the public channel's description to the agent's draft (MSG6).
 
 ## Mapping of the project policy (TN-R) to this policy
 
