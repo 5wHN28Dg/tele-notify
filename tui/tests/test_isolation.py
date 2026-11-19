@@ -47,6 +47,10 @@ def test_settings_corpus_is_not_the_real_one():
 async def test_deciding_a_post_writes_its_label_under_the_test_home(paths, state):
     # the original leak, end to end: no labels fixture, press s on Review
     home = Path(os.environ["HOME"])
+    # check before anything is written: if the fixture ever broke, this test
+    # must fail here, not after appending to the real file
+    assert home.resolve() != REAL_HOME
+    assert outside_private(review_data.labels_path())
     app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
     async with app.run_test() as pilot:
         await open_review(pilot)
@@ -54,4 +58,8 @@ async def test_deciding_a_post_writes_its_label_under_the_test_home(paths, state
         await pilot.pause()
     written = home / ".local" / "share" / "tele-notify-corpus" / "review-labels.jsonl"
     assert written.exists()
-    assert outside_private(review_data.labels_path())
+
+
+def test_cwd_has_no_config():
+    # the last config candidate is ./config.json; the repository root has one
+    assert not Path("config.json").exists()
