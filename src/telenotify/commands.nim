@@ -13,6 +13,27 @@ proc sessionEnded*(authState: string, stopping: bool): bool =
   ## Closed too).
   authState != "" and authState != "authorizationStateReady" and not stopping
 
+proc recordLoginNeeded*(st: State, why: string, dryRun: bool) =
+  ## Telegram logged the account out (or it never logged in): keep one alert
+  ## with the commands to run, so the terminal screen can show it (the bot
+  ## can't message you any more). Once until the next successful login, however
+  ## often systemd restarts the bot. Never raises.
+  try:
+    st.setMeta("connection", "logged out")
+    if st.getMeta("login_needed") != "1":
+      let service = if dryRun: "tele-notify-dryrun" else: "tele-notify"
+      st.addAlert(&"Telegram has logged this account out ({why}), so the bot can't read or " &
+                  &"forward anything. To log in again, run `telenotify login`, then " &
+                  &"`systemctl --user restart {service}`.")
+      st.setMeta("login_needed", "1")
+  except CatchableError:
+    discard
+
+proc clearLoginNeeded*(st: State) =
+  ## Logged in again: a later log-out alerts again. Never raises.
+  try: st.setMeta("login_needed", "")
+  except CatchableError: discard
+
 proc printable*(s: string): string =
   ## Post text without control characters, so a post (or a scraped job
   ## page) can't clear or rewrite your terminal in `review`.
@@ -70,57 +91,62 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   var titles = initTable[int64, string]()
   let watched = cfg.chats
   var accessReady = false   # the start-up check reads the current state first
-  let s = await connect(cfg, interactive = false, onUpdate =
-    proc (u: JsonNode) {.closure, gcsafe.} =
-      if l == nil: return
-      case u{"@type"}.getStr
-      of "updateNewMessage":
-        var m = parseMessage(u["message"])
-        if m.outgoing:
-          # in a dry run, your own posts in the target chat are the Python bot's
-          if l.dryRun and m.chatId == l.cfg.targetChat: asyncCheck l.noteOtherBot(m)
-          return
-        if m.chatId notin watched: return
-        m.chatTitle = titles.getOrDefault(m.chatId, $m.chatId)
-        l.enqueue m
-      of "updateMessageContent":
-        # an edit: look again if it's recent (handleGroup decides if needed)
-        let chat = u{"chat_id"}.getBiggestInt
-        if chat in watched:
-          let id = u{"message_id"}.getBiggestInt
-          let tg = l.tg
-          proc refetch() {.async.} =
-            try:
-              var m = await tg.getMessage(chat, id)
-              if getTime().toUnix - m.date > 2 * 86400: return
-              m.edited = true
-              m.chatTitle = titles.getOrDefault(chat, $chat)
-              l.enqueue m
-            except CatchableError: discard   # deleted meanwhile, etc.
-          asyncCheck refetch()
-      of "updateSupergroup", "updateBasicGroup":
-        # banned from / left a watched channel or group (#16). TDLib sends
-        # these for every chat while starting up: until the start-up check
-        # has run (and the titles are known) they're left to it.
-        if not accessReady: return
-        let (chat, access) = parseAccessUpdate(u)
-        if chat in watched: asyncCheck l.onChatAccess(chat, access, live = true)
-      of "updateConnectionState":
-        l.onConnectionState(u{"state", "@type"}.getStr)
-      of "updateAuthorizationState":
-        # logged out from another device, or TDLib closing: stop (and let
-        # systemd restart us) instead of hanging while looking alive
-        let a = u.authState
-        if sessionLost == "" and sessionEnded(a, stopping = l.stop[]):
-          sessionLost = a
-          l.stop[] = true      # l.stop is stopRequested (set below)
-      of "updateMessageSendFailed":
-        # TDLib accepted a forward/send but Telegram refused it later
-        # (no right to post any more, slow mode, flood limit...)
-        let err = u{"error", "message"}.getStr(u{"error_message"}.getStr("unknown error"))
-        asyncCheck l.alert("a message to chat " & $u{"message", "chat_id"}.getBiggestInt &
-                           " could not be sent: " & err)
-      else: discard)
+  var s: Session
+  try:
+    s = await connect(cfg, interactive = false, onUpdate =
+      proc (u: JsonNode) {.closure, gcsafe.} =
+        if l == nil: return
+        case u{"@type"}.getStr
+        of "updateNewMessage":
+          var m = parseMessage(u["message"])
+          if m.outgoing:
+            # in a dry run, your own posts in the target chat are the Python bot's
+            if l.dryRun and m.chatId == l.cfg.targetChat: asyncCheck l.noteOtherBot(m)
+            return
+          if m.chatId notin watched: return
+          m.chatTitle = titles.getOrDefault(m.chatId, $m.chatId)
+          l.enqueue m
+        of "updateMessageContent":
+          # an edit: look again if it's recent (handleGroup decides if needed)
+          let chat = u{"chat_id"}.getBiggestInt
+          if chat in watched:
+            let id = u{"message_id"}.getBiggestInt
+            let tg = l.tg
+            proc refetch() {.async.} =
+              try:
+                var m = await tg.getMessage(chat, id)
+                if getTime().toUnix - m.date > 2 * 86400: return
+                m.edited = true
+                m.chatTitle = titles.getOrDefault(chat, $chat)
+                l.enqueue m
+              except CatchableError: discard   # deleted meanwhile, etc.
+            asyncCheck refetch()
+        of "updateSupergroup", "updateBasicGroup":
+          # banned from / left a watched channel or group (#16). TDLib sends
+          # these for every chat while starting up: until the start-up check
+          # has run (and the titles are known) they're left to it.
+          if not accessReady: return
+          let (chat, access) = parseAccessUpdate(u)
+          if chat in watched: asyncCheck l.onChatAccess(chat, access, live = true)
+        of "updateConnectionState":
+          l.onConnectionState(u{"state", "@type"}.getStr)
+        of "updateAuthorizationState":
+          # logged out from another device, or TDLib closing: stop (and let
+          # systemd restart us) instead of hanging while looking alive
+          let a = u.authState
+          if sessionLost == "" and sessionEnded(a, stopping = l.stop[]):
+            sessionLost = a
+            l.stop[] = true      # l.stop is stopRequested (set below)
+        of "updateMessageSendFailed":
+          # TDLib accepted a forward/send but Telegram refused it later
+          # (no right to post any more, slow mode, flood limit...)
+          let err = u{"error", "message"}.getStr(u{"error_message"}.getStr("unknown error"))
+          asyncCheck l.alert("a message to chat " & $u{"message", "chat_id"}.getBiggestInt &
+                             " could not be sent: " & err)
+        else: discard)
+  except NotLoggedIn as e:
+    recordLoginNeeded(st, "not logged in", dry)
+    raise e
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
@@ -141,6 +167,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   await l.checkDowntimeAtStart()
   l.titles = titles
   accessReady = true
+  clearLoginNeeded(st)
   await l.checkWatchedChats()
   asyncCheck l.heartbeat()
   await l.bootstrap()
@@ -152,6 +179,8 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l.log "stopping"
   try: st.setMeta("connection", "stopped")
   except CatchableError: discard
+  if sessionLost != "":
+    recordLoginNeeded(st, sessionLost, dry)   # before closing the state: the screen shows it
   await s.client.close()
   st.close()
   if sessionLost != "":
