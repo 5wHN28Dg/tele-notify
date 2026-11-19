@@ -14,7 +14,7 @@ delegation in CLAUDE.md is also unanswered (policy 0.2), so until the owner answ
 are tracked as `ux` issues #55 and #62 to #73. Earlier harness finds are #54 to #60, and finds from this profile's
 reviews are #74 to #86 (all: `gh issue list --label ux`). A10 and T1 passed, T9 is N/A, and T0 waits for the owner's
 checklist below. Z1 failed: TUI tests wrote two synthetic labels into the owner's real `review-labels.jsonl`. The
-cause is fixed in PR #61 (open at the time of writing). The two lines are still in the file until the owner removes
+cause is fixed in PR #61 (merged 2026-11-19). The two lines are still in the file until the owner removes
 them, and they count in every `telenotify eval` until then.
 
 This profile covers the whole product: the bot and its command line (`telenotify`, `deploy/install.sh`,
