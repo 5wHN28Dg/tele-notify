@@ -477,3 +477,14 @@ async def test_the_totals_header_names_each_series_mark(paths):
             await pilot.pause(0.1)
         for series in ("publish", "review", "reject"):
             assert f"{dash.SERIES_MARK[series]}{series}" in header
+
+
+@pytest.mark.parametrize("series,style", [("publish", "green"), ("review", "yellow"), ("reject", "grey50")])
+def test_a_sliver_has_the_colour_of_its_series(series, style):
+    # one post among hundreds still shows, in its own series' colour
+    bars = [dd.DayCount("2026-11-01", publish=500), dd.DayCount("2026-11-02", **{series: 1})]
+    chart = render_chart(bars, "day", height=3)
+    bottom = chart.plain.splitlines()[2]
+    start = bottom.index("▁")
+    styles = [str(sp.style) for sp in chart.spans if sp.start <= len("\n".join(chart.plain.splitlines()[:2])) + 1 + start < sp.end]
+    assert styles == [style]

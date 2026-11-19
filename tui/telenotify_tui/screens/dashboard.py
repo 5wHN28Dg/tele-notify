@@ -57,7 +57,7 @@ CHART_WIDTH = 46    # the activity panel's width (50) less its border and paddin
 CHART_HEIGHT = 3
 # each series has its own fill as well as its colour (colour is never the only signal): solid,
 # dark shade, light shade; the totals header above the chart names them
-SERIES_MARK = {"publish": "█", "review": "▓", "reject": "░"}
+SERIES_MARK = {"publish": "█", "review": "▓", "reject": "▒"}
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -123,8 +123,8 @@ def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT) -> Text:
     """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▓), then
-    reject (dim, ░). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
-    shape, so the height stays exact.
+    reject (dim, ▒). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+    shape, so the height stays exact, and is told apart by colour only (tracked in #67).
 
     Bars are two columns wide with a gap while they fit, then one column,
     then without gaps. Up to 15 days each bar is labelled with its day of the
@@ -145,7 +145,10 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
         r = round((d.publish + d.review) * units / top)
         t = round(d.total * units / top)
         if d.total and t == 0:
-            t = 1  # any activity shows at least a sliver
+            # any activity shows at least a sliver, in the colour of the series that has most
+            biggest = max(("publish", d.publish), ("review", d.review), ("reject", d.reject), key=lambda x: x[1])[0]
+            t = 1
+            p, r = (1, 1) if biggest == "publish" else (0, 1) if biggest == "review" else (0, 0)
         scaled.append((p, max(r, p), max(t, r, p)))
     for row in range(height - 1, -1, -1):
         lo = row * 8
