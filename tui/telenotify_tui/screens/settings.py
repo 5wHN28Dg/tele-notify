@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import sqlite3
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
@@ -42,6 +41,7 @@ from .. import bot
 from ..clean import clean
 from ..rtl import visual
 from . import settings_data as sd
+from .armed import Armed
 
 FORM_HELP = {
     "max_experience_years": "More than this many years required means \"not for me\" (default 1)",
@@ -58,14 +58,13 @@ FORM_HELP = {
 
 # ----------------------------------------------------------------- modals
 
-class ConfirmModal(ModalScreen[bool]):
+class ConfirmModal(Armed, ModalScreen[bool]):
     """A question with a button that names its action and Cancel. Dismisses with
     True only on that button or `y`. Cancel has the focus, so enter is safe; the
     action is styled destructive when it loses something; for ARM_DELAY seconds
     after opening, presses are ignored, so a key or click carried over from the
     step before can't confirm."""
 
-    ARM_DELAY = 0.5
 
     DEFAULT_CSS = """
     ConfirmModal { align: center middle; }
@@ -75,8 +74,8 @@ class ConfirmModal(ModalScreen[bool]):
     ConfirmModal Button { margin-right: 2; }
     /* the stock -error button's text is 4.47:1; these pass 4.5:1 in both themes */
     ConfirmModal Button.-style-default.-error, ConfirmModal Button.-style-default.-error:hover,
-    ConfirmModal Button.-style-default.-error.-active {
-        background: $error-muted; color: $text-error;
+    ConfirmModal Button.-style-default.-error.-active, ConfirmModal Button.-style-default.-error:focus {
+        background: $error-muted; color: $text-error; background-tint: $foreground 0%;
     }
     ConfirmModal #confirm-wait { color: $text-muted; height: 1; }
     """
@@ -87,7 +86,6 @@ class ConfirmModal(ModalScreen[bool]):
         super().__init__()
         self.message, self.yes = message, yes
         self.variant = "error" if destructive else "warning"
-        self._armed_at = 0.0
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -98,17 +96,10 @@ class ConfirmModal(ModalScreen[bool]):
                 yield Button("Cancel (n)", id="no")
 
     def on_mount(self) -> None:
-        self._armed_at = time.monotonic() + self.ARM_DELAY
+        self._arm()
         self.query_one("#no", Button).focus()
 
-    def _armed(self) -> bool:
-        return time.monotonic() >= self._armed_at
 
-    def _too_soon(self) -> bool:
-        if self._armed():
-            return False
-        self.query_one("#confirm-wait", Static).update("Just opened: press again to confirm.")
-        return True
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "yes" and self._too_soon():
@@ -968,7 +959,7 @@ class SettingsPane(Vertical):
         self.app.push_screen(ConfirmModal(
             f"Not saved: config.json was changed elsewhere for {keys}, which you changed too.\n"
             "Drop your edits to these and use the file's values? Your other edits are kept.",
-            "Drop my edits to these"), done)
+            "Use the file's values"), done)
 
     async def _offer_restart(self, mode: str) -> None:
         """After a save: offer to restart the bot, but only when it is running

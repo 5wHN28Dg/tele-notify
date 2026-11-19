@@ -50,6 +50,7 @@ from ..rtl import Block, visual
 from ..store import Alert, ChatStats, Judged, Store
 from . import dashboard_data as dd
 from . import search_data
+from .armed import Armed
 
 ALIVE_SECONDS = 120
 FEED_ROWS = 50
@@ -229,12 +230,11 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
 
 # --------------------------------------------------------------- modal
 
-class ConfirmScreen(ModalScreen[bool]):
+class ConfirmScreen(Armed, ModalScreen[bool]):
     """A question with a button that names its action and Cancel; Escape, `n` or
     Cancel answers no. Cancel has the focus; presses in the first ARM_DELAY
     seconds are ignored (a click where the opening button was, a held key)."""
 
-    ARM_DELAY = 0.5
 
     DEFAULT_CSS = """
     ConfirmScreen { align: center middle; }
@@ -247,8 +247,8 @@ class ConfirmScreen(ModalScreen[bool]):
     ConfirmScreen Button { margin-left: 2; }
     /* the stock -error button's text is 4.47:1; these pass 4.5:1 in both themes */
     ConfirmScreen Button.-style-default.-error, ConfirmScreen Button.-style-default.-error:hover,
-    ConfirmScreen Button.-style-default.-error.-active {
-        background: $error-muted; color: $text-error;
+    ConfirmScreen Button.-style-default.-error.-active, ConfirmScreen Button.-style-default.-error:focus {
+        background: $error-muted; color: $text-error; background-tint: $foreground 0%;
     }
     ConfirmScreen #confirm-wait { color: $text-muted; height: 1; }
     """
@@ -259,7 +259,6 @@ class ConfirmScreen(ModalScreen[bool]):
         super().__init__()
         self.question, self.action = question, action
         self.variant = "error" if destructive else "warning"
-        self._armed_at = 0.0
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -270,17 +269,10 @@ class ConfirmScreen(ModalScreen[bool]):
                 yield Button("Cancel (n)", id="confirm-no")
 
     def on_mount(self) -> None:
-        self._armed_at = time.monotonic() + self.ARM_DELAY
+        self._arm()
         self.query_one("#confirm-no", Button).focus()
 
-    def _armed(self) -> bool:
-        return time.monotonic() >= self._armed_at
 
-    def _too_soon(self) -> bool:
-        if self._armed():
-            return False
-        self.query_one("#confirm-wait", Static).update("Just opened: press again to confirm.")
-        return True
 
     def action_answer(self, yes: bool) -> None:
         if yes and self._too_soon():

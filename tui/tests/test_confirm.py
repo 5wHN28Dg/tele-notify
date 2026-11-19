@@ -153,4 +153,51 @@ async def test_a_too_early_press_says_why_nothing_happened(paths, cfg_path, monk
         await pilot.pause()
         await pilot.press("y")
         await pilot.pause()
-        assert "press again" in str(app.screen.query_one("#confirm-wait").render())
+        assert "Too quick" in str(app.screen.query_one("#confirm-wait").render())
+
+
+@pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
+async def test_the_focused_destructive_button_is_readable(paths, fake_systemctl, theme):  # noqa: F811
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.theme = theme
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause()
+        await pilot.press("shift+tab")                      # Cancel -> the destructive button
+        await pilot.pause()
+        b = app.screen.query_one("#confirm-yes", Button)
+        assert app.focused is b
+        assert b.styles.background_tint.a == 0               # Textual's focus tint would drop it to 4.36:1
+        bg = b.styles.background
+        assert _ratio(bg + b.styles.color, bg) >= 4.5, theme
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+
+async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    # a slow machine: the press is made inside the delay, handled after it
+    import time
+
+    from textual import events
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ConfirmScreen)
+        early = events.Key("y", "y")
+        early.time = screen._armed_at - 0.1                   # made inside the delay
+        while time.monotonic() < screen._armed_at + 0.05:   # ... handled after it
+            await pilot.pause(0.05)
+        screen.post_message(early)
+        await pilot.pause()
+        await screen.run_action("answer(True)")
+        await settle(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert not [c for c in fake_systemctl if c[0] == "action"]
+        await pilot.press("y")                               # a press made now confirms
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]

@@ -162,7 +162,7 @@ async def test_conflict_can_take_the_files_value_and_keep_other_edits(paths, cfg
         assert isinstance(app.screen, ConfirmModal)
         assert "chats" in str(app.screen.query_one("#confirm-text", Static).render())
         yes = app.screen.query_one("#yes", Button)                # it drops the user's own edits
-        assert yes.variant == "error" and "Drop my edits" in str(yes.label)
+        assert yes.variant == "error" and "Use the file's values" in str(yes.label)
         await pilot.press("y")                                   # use the file's chats
         await pilot.pause()
         assert pane.edited["chats"] == [-1, -9] and pane.edited["extra_seniority"] == ["lead"]
