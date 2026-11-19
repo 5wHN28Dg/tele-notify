@@ -180,19 +180,19 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 |---|---|---|---|---|
 | Matching jobs reach my channel on their own | owner, recipients | continuous | each match is forwarded once | ALERT1 latency below; ALERT2 score |
 | See whether the bot is fine | owner | daily | service state, connection, dry run or real, pending reviews and alerts read on the Dashboard | 0 actions (screen just opened); first useful screen within 2 s warm on the 1M-post state file |
-| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K: no keys exist today (#83), so Tab presses count |
+| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K 2 once keys exist (#83; today Tab presses, at most 6) |
 | Review an unsure post (sends to the public channel) | owner | daily | the post is sent, discarded or kept, labelled, with undo offered | K/M 1 per post (Review open, post read); from Dashboard +1 |
 | Undo a review decision | owner | weekly | any decision the bot hasn't acted on is back in the queue, its label removed | K/M 1 for the last one; K/M 3 for an older one from History (today only the last of this run, #76) |
 | Find why a post got its verdict | owner | weekly | the post's verdict and reasons are on screen | K: `3` + the words + 1; M: 1 + the words + 1 (Dashboard open) |
 | Read the numbers for a period | owner | weekly | the period's counts and chart are on screen | K: `p` + arrows + enter, at most 6; M 2 (Dashboard open) |
 | Add, edit or delete a keyword, then save (deletes data) | owner | weekly | the change is in `config.json`, a backup kept, the bot restarted if asked | 4 actions + typing |
 | Remove duplicate keywords (deletes data) | owner | rare | each list keeps one spelling, then saved | K/M 1 + save (Settings open) |
-| Revert unsaved settings (throws away edits) | owner | rare | the screen shows `config.json` again | 2 actions (Revert, confirm) |
+| Revert unsaved settings (throws away edits) | owner | rare | the screen shows `config.json` again | K/M 2 (Settings open, unsaved edits) |
 | Watch or unwatch a chat, seeing who can read it (T13) | owner | monthly | the chat is (un)watched in the saved config | K/M 4 (Settings open); the source's audience shown (not built yet, #68) |
-| Change the target channel (sends to others) | owner | rare | matches go to the new chat after save and restart | 4 actions + confirm |
+| Change the target channel (sends to others) | owner | rare | matches go to the new chat after save and restart | K/M 4 + confirm (Settings › Chats open) |
 | Switch between the dry run and the real bot (live system, starts public forwarding) | owner | rare | the mode is saved, the bot restarted in it, and the screen shows which | K/M 4 + confirm (fails today: needs a reopen, #77) |
-| Turn "publish when unsure" on or off (sends to others) | owner | rare | the option is saved and in effect after restart | 4 actions |
-| Test settings on the corpus before saving | owner | monthly | the corpus result is shown next to the saved settings' result | 1 action |
+| Turn "publish when unsure" on or off (sends to others) | owner | rare | the option is saved and in effect after restart | K/M 4 (Settings › Other filters open) |
+| Test settings on the corpus before saving | owner | monthly | the corpus result is shown next to the saved settings' result | K/M 1 (Settings open) |
 | Remove a wrong post from the channel (MSG6) | owner | rare | the post is gone from the channel | not built yet (#69) |
 | Report a problem (FIELD1) | other installers | rare | a report with diagnostics, private data removed, reaches the owner | not built yet (#72) |
 | Change how long post text is kept (`keep_text_days`, deletes data) | owner | rare | the setting is saved; the screen says what will be cleared | not in Settings yet (config only, #84) |
@@ -250,7 +250,7 @@ All screen budgets are measured on the 1-million-post synthetic state file, unde
   the first tab on the large state file (#56).
 - Local interactions (tab switch, selection, typing): 100 ms (P7).
 - No event-loop block over 1 s (P1), from asyncio's slow-callback log.
-- **ALERT1, latency (owner):** proposed: from a source post's Telegram date to its forward in the channel, 95 % under
+- **ALERT1, latency (owner):** proposed: from a source post's Telegram date to the forward reaching the owner's phone, 95 % under
   60 s while connected, with the catch-up after downtime reported separately (its own median and 95th percentile).
   **Not checked** until the bot records each post's Telegram date (#74); then also a timed run with a fake Telegram
   in the benchmark walk.
@@ -333,7 +333,7 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
 Not N/A, so they apply: A20 (copying needs a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
 Dashboard's alert count, #79), A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
 targets: terminal cells, and a destructive button spaced from others; Delete sits beside Edit and Add, and Discard
-beside Send: checked in the first full audit), A22, T2 and T4 (a Telegram session; the bot
+beside Send: checked in the first full audit, #87), A22, T2 and T4 (a Telegram session; the bot
 fetches job pages and runs OCR on images), ST3 (Telegram outages and catch-up), ST5 (the screen, `telenotify review`
 and the bot edit the same state and config).
 
