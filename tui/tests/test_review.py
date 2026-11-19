@@ -272,17 +272,19 @@ async def test_locked_state_file_is_a_note_not_a_crash(paths, state, labels, mon
             app.query_one(ReviewPane).reload()                   # nor can the queue be read
             await pilot.pause()
             assert BUSY_NOTE in note(app)   # the Dashboard's wording for a lock
+            assert "#11 NOT recorded" in note(app)               # ...beside, never instead of, the failed decision
             assert app.is_running
         finally:
             db.execute("ROLLBACK")
             db.close()
         assert status_of(state, 11) == "pending"
-        app.query_one(ReviewPane).reload()                       # lock gone: back to normal
+        app.query_one(ReviewPane).reload()                       # lock gone: the failure is still said
         await pilot.pause()
-        assert note(app) == ""
+        assert "#11 NOT recorded" in note(app) and BUSY_NOTE not in note(app)
         await pilot.press("s")
         await pilot.pause()
         assert status_of(state, 11) == "to_send"
+        assert "NOT recorded" not in note(app)                   # until the decision is made
     assert len(read_labels(labels)) == 1
 
 
@@ -638,6 +640,24 @@ async def test_a_locked_state_file_is_worded_as_on_the_dashboard(paths, state, m
             shown = note(app) + str(app.query_one("#review-empty", Static).render())
             assert BUSY_NOTE in shown
             assert "database is locked" not in shown
+        finally:
+            db.execute("ROLLBACK")
+            db.close()
+
+
+async def test_the_busy_note_is_whole_at_80x24(paths, state, monkeypatch):
+    # never cut what matters (W7): the note wraps rather than losing its end
+    monkeypatch.setattr(review_mod, "UI_TIMEOUT", 0.1)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        db = lock(state)
+        try:
+            app.query_one(ReviewPane).reload()
+            await pilot.pause()
+            box = app.query_one("#review-note", Static)
+            assert box.size.width * box.size.height >= len(BUSY_NOTE), box.size   # room for all of it
+            assert "retrying" in app.export_screenshot()                        # and it is drawn
         finally:
             db.execute("ROLLBACK")
             db.close()
