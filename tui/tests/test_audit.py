@@ -554,23 +554,32 @@ def test_the_terminals_are_started_sized_in_cells_and_isolated(tmp_path: Path):
     assert terminal.session_folder(sbx.plan(tmp_path / "o", base=tmp_path / "b")).parent == tmp_path / "b"
 
 
-def test_the_systemd_run_stand_in_runs_the_command_without_a_scope(tmp_path: Path):
+def _stand_in(tmp_path: Path) -> Path:
     from audit import terminal
     stand_in = tmp_path / "systemd-run"
     stand_in.write_text(terminal.SYSTEMD_RUN, encoding="utf-8")
     stand_in.chmod(0o700)
-    log = tmp_path / "calls.log"
+    return stand_in
+
+
+def test_the_systemd_run_stand_in_says_no_and_runs_a_command_without_a_scope(tmp_path: Path):
+    stand_in, log = _stand_in(tmp_path), tmp_path / "calls.log"
+
+    def run(*argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run([str(stand_in), *argv], capture_output=True, text=True, timeout=10, check=False,
+                              env={"PATH": "/usr/bin:/bin", "TN_AUDIT_SCOPE_LOG": str(log)})
+    # Ptyxis's probe: no systemd here, so it starts the tab itself
+    assert run("--version").returncode == 1
     for argv in (["--user", "--scope", "--collect", "--quiet", "--", "echo", "hi", "--x"],
                  ["--user", "--scope", "--unit", "u1", "-p", "Delegate=yes", "--same-dir", "echo", "hi", "--x"],
                  ["--user", "--scope", "--unit=u2", "echo", "hi", "--x"]):
-        r = subprocess.run([str(stand_in), *argv], capture_output=True, text=True, timeout=10, check=False,
-                           env={"PATH": "/usr/bin:/bin", "TN_AUDIT_SCOPE_LOG": str(log)})
+        r = run(*argv)
         assert (r.returncode, r.stdout) == (0, "hi --x\n"), argv
-    # a "--" inside the command stays the command's
-    r = subprocess.run([str(stand_in), "--user", "--scope", "echo", "a", "--", "b"], capture_output=True, text=True,
-                       timeout=10, check=False, env={"PATH": "/usr/bin:/bin", "TN_AUDIT_SCOPE_LOG": str(log)})
-    assert r.stdout == "a -- b\n"
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 4
+    assert run("--user", "--scope", "echo", "a", "--", "b").stdout == "a -- b\n"     # the command's own "--"
+    for bad in (["--user", "--scope"], ["--user", "--"], ["--user", "-p"]):           # nothing to run
+        r = run(*bad)
+        assert r.returncode == 1 and r.stdout == "" and "systemd-run:" in r.stderr, bad
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 8
 
 
 def test_mounts_inside_the_session_folder_are_found():
@@ -583,28 +592,135 @@ def test_mounts_inside_the_session_folder_are_found():
         "/tmp/tn-audit/r-term/run/doc x", "/tmp/tn-audit/r-term/run/gvfs"]
 
 
-def test_a_row_reading_is_background_against_the_next_colour():
+def test_processes_are_found_by_their_mark_and_ended(tmp_path: Path):
     from audit import terminal
-    r = terminal.row_reading([{"colour": "#000000", "share": 0.8}, {"colour": "#ffffff", "share": 0.1}])
-    assert (r["background"], r["text"], r["contrast"]) == ("#000000", "#ffffff", 21.0)
-    assert terminal.row_reading([{"colour": "#000000", "share": 1.0}])["contrast"] is None
+    proc = tmp_path / "proc"
+    for pid, env in (("101", b"A=1\0TN_AUDIT_TERM_SHOT=/x/3\0"), ("102", b"TN_AUDIT_TERM_SHOT=/x/30\0"),
+                     ("103", b"B=TN_AUDIT_TERM_SHOT=/x/3\0"), ("self", b"TN_AUDIT_TERM_SHOT=/x/3\0")):
+        (proc / pid).mkdir(parents=True)
+        (proc / pid / "environ").write_bytes(env)
+    assert terminal.marked_pids(terminal.SHOT_MARK, "/x/3", str(proc)) == [101]
+    # a real one, started in a session of its own like the screen child
+    p = subprocess.Popen(["sleep", "30"], env={"PATH": "/usr/bin:/bin", terminal.SHOT_MARK: str(tmp_path)},
+                         start_new_session=True)
+    try:
+        assert terminal.marked_pids(terminal.SHOT_MARK, str(tmp_path)) == [p.pid]
+        terminal.end_pids([p.pid])
+        assert p.wait(5) is not None and terminal.marked_pids(terminal.SHOT_MARK, str(tmp_path)) == []
+    finally:
+        p.kill()
+        p.wait()
 
 
-def test_the_terminal_summary_names_errors_and_sizes():
+def test_a_dead_displays_lock_and_socket_are_removed_only_if_ours_and_dead(tmp_path: Path):
+    from audit import terminal
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (tmp_path / ".X11-unix").mkdir()
+    (tmp_path / ".X7-lock").write_text(f"{dead.pid:>10}\n", encoding="ascii")
+    (tmp_path / ".X11-unix" / "X7").write_text("", encoding="ascii")
+    (tmp_path / ".X8-lock").write_text(f"{os.getpid():>10}\n", encoding="ascii")     # still in use
+    (tmp_path / ".X11-unix" / "X8").write_text("", encoding="ascii")
+    assert len(terminal.clear_x_display(":7", str(tmp_path))) == 2
+    assert not (tmp_path / ".X7-lock").exists() and not (tmp_path / ".X11-unix" / "X7").exists()
+    assert terminal.clear_x_display(":8", str(tmp_path)) == [] and (tmp_path / ".X8-lock").exists()
+    assert terminal.clear_x_display("", str(tmp_path)) == []
+
+
+def test_stale_session_folders_are_swept_but_not_live_ones(tmp_path: Path):
+    from audit import terminal
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    stale = tmp_path / f"terminal-20261119-200000-{dead.pid}-term"
+    live = tmp_path / f"terminal-20261119-200000-{os.getpid()}-term"
+    other = tmp_path / f"screenshots-20261119-200000-{dead.pid}"
+    for d in (stale / "run", live / "run", other):
+        d.mkdir(parents=True)
+    assert terminal.sweep_stale(tmp_path) == [stale.name]
+    assert not stale.exists() and live.exists() and other.exists()
+
+
+def _cells(*cells: tuple[tuple[int, int, int], tuple[int, int, int] | None, int]) -> bytes:
+    """One row of 4x2-pixel cells: (background, ink or None, how many of the cell's 8 pixels are ink)."""
+    rows = []
+    for y in range(2):
+        line = b""
+        for bg, ink, n in cells:
+            px = [bytes(bg)] * 4
+            if ink is not None:
+                for i in range(4 * y, min(n, 4 * y + 4)):
+                    px[i - 4 * y] = bytes(ink)
+            line += b"".join(px)
+        rows.append(line)
+    return b"".join(rows)
+
+
+def test_the_footer_reading_finds_each_run_and_the_lowest_contrast():
+    from audit import terminal
+    grey, black, white, blue = (208, 208, 208), (31, 31, 31), (255, 255, 255), (1, 120, 212)
+    mid, light_u, dim, divider = (163, 163, 163), (100, 100, 100), (126, 126, 126), (172, 172, 172)
+    pix = _cells((grey, blue, 3), (grey, black, 3), (grey, mid, 2), (grey, light_u, 3), (grey, black, 3),
+                 (grey, None, 0), (grey, dim, 3), (grey, dim, 3), (grey, divider, 3), (black, white, 2))
+    cells = terminal.cell_colours(pix, 10 * 4, 4, 2, 10)
+    assert cells[0] == ("#d0d0d0", "#0178d4", True) and cells[2] == ("#d0d0d0", "#a3a3a3", False)
+    assert cells[5] == ("#d0d0d0", None, False)
+    found = terminal.runs(cells, "kQ/ui Un▏.", 10)
+    assert [(r["cells"], r["text"], r["ink"], r["thin"], r["graphic"]) for r in found] == [
+        ([10, 10], "k", "#0178d4", False, False),
+        ([11, 14], "Q/ui", "#1f1f1f", False, False),      # lighter glyphs inside a word join it
+        ([16, 17], "Un", "#7e7e7e", False, False),        # a word in a dimmer ink keeps its own run
+        ([18, 18], "▏", "#acacac", False, True),          # a divider: lines and blocks, read apart from text
+        ([19, 19], ".", "#ffffff", True, False)]          # thin only: never reaches its colour
+    assert found[0]["contrast"] == 2.93                   # the key letter (2.937, rounded down)
+    low = terminal.lowest(found)
+    assert low["min_contrast"] == 2.63 and low["lowest"]["text"] == "Un"
+    assert low["min_graphic_contrast"] == 1.47
+
+
+def test_a_shot_in_another_state_than_asked_is_an_error():
+    from audit import terminal
+    s = terminal.Shot("kitty", "80x24", "light", "real", "words", "keys-panel")
+    ok = {"cols": 80, "rows": 24, "theme": "textual-light", "tab": "dashboard", "keys_panel": True}
+    assert terminal.mismatches(s, ok) == []
+    wrong = terminal.mismatches(s, {**ok, "cols": 79, "theme": "textual-dark", "tab": "review", "keys_panel": False})
+    assert len(wrong) == 4 and "size 79x24" in wrong[0]
+    assert terminal.mismatches(terminal.Shot("kitty", "80x24", "dark", "real", "words", "3-search"),
+                               {**ok, "theme": "textual-dark", "tab": "search", "keys_panel": False}) == []
+
+
+def test_the_leak_scan_caps_decompression_and_says_where_it_found(tmp_path: Path, monkeypatch):
+    import zlib
+    monkeypatch.setattr(evidence, "MAX_SCAN", 100)
+    (tmp_path / "late.png").write_bytes(_png(_ihdr(), (b"zTXt", b"T\x00\x00" + zlib.compress(b"x" * 1000 +
+                                                                                           b"someone")),
+                                             (b"IEND", b"")))
+    (tmp_path / "early.png").write_bytes(_png(_ihdr(), (b"zTXt", b"T\x00\x00" + zlib.compress(b"by someone")),
+                                              (b"IEND", b"")))
+    hits = evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone", names=[])
+    assert [h["file"] for h in hits] == ["early.png"]
+    assert hits[0]["at"].startswith("zTXt chunk at byte 33, decompressed")
+
+
+def test_the_terminal_summary_names_errors_and_the_lowest_contrast():
     from audit import terminal
     s = terminal.Shot("kitty", "80x24", "dark", "real", "words", "1-dashboard")
-    rows = [{**terminal._row(s, {"kitty": "kitty 0.47.0"}), "cells_seen": "80x23",
-             "rows_read": {"footer": {"contrast": 9.1}}},
+    low = {"text": "q", "ink": "#0178d4", "background": "#d0d0d0", "contrast": 2.94}
+    rows = [{**terminal._row(s, {"kitty": "kitty 0.47.0"}), "cells_seen": "80x24", "image_px": [1, 1],
+             "rows_read": {"footer": {"min_contrast": 2.94, "lowest": low}}},
             {**terminal._row(s, {}), "error": "the screen didn't get ready"}]
     md = terminal.summary(rows, {"compositor": "mutter 50", "monitor": "1x1", "font": "f", "kitty_config": "NONE"},
                           "mutter died")
-    assert "stopped early:** mutter died" in md and "80x24 (80x23)" in md and "9.1" in md
-    assert "ERROR: the screen didn't get ready" in md and "1 shot(s) where the terminal gave" in md
+    assert "stopped early:** mutter died" in md and "80x24 (80x24)" in md
+    assert "2.94 (`q` #0178d4 on #d0d0d0)" in md and "ERROR: the screen didn't get ready" in md
 
 
 def test_the_terminal_job_refuses_a_protected_kitty_config_and_bad_sizes(out: Path):
     conf = guard.real_home() / ".config" / "tele-notify" / "kitty.conf"
     r = audit("terminal", "--kitty-config", str(conf), "--out", str(out / "t"))
+    assert r.returncode == 2 and "refusing" in r.stderr and not (out / "t").exists()
+    link = out / "innocent-kitty.conf"                      # a link into a protected place counts as its target
+    link.symlink_to(conf)
+    r = audit("terminal", "--kitty-config", str(link), "--out", str(out / "t"))
     assert r.returncode == 2 and "refusing" in r.stderr and not (out / "t").exists()
     r = audit("terminal", "--sizes", "80by24", "--out", str(out / "t"))
     assert r.returncode == 2 and "COLUMNSxROWS" in r.stderr and not (out / "t").exists()
@@ -617,15 +733,26 @@ def _live() -> bool:
 
 @pytest.mark.skipif(not _live(), reason="live: needs mutter, Xwayland, xdotool, ImageMagick, kitty and TN_AUDIT_LIVE=1")
 def test_the_terminal_job_captures_a_real_kitty_window(out: Path):
+    from audit import terminal
     r = audit("terminal", "--terminals", "kitty", "--sizes", "80x24", "--modes", "dry-run", "--only", "1-dash",
               "--out", str(out), timeout=300)
     assert r.returncode == 0, r.stderr + r.stdout
     [row] = json.loads((out / "terminal" / "index.json").read_text(encoding="utf-8"))
     assert {"terminal", "version", "size", "theme", "mode", "bidi", "file"} <= set(row) and "error" not in row
     assert row["cells_seen"] == "80x24" and row["bidi"] == "words" and row["term_env"]["TERM"] == "xterm-kitty"
+    assert (row["theme_seen"], row["tab_seen"], row["keys_panel_seen"]) == ("textual-dark", "dashboard", False)
     png = out / row["file"]
     assert png.read_bytes().startswith(evidence.PNG_SIGNATURE) and row["image_px"][0] > 300
+    assert "Dashboard" in (out / row["text_file"]).read_text(encoding="utf-8")     # what was drawn, for the scan
     footer = row["rows_read"]["footer"]
-    assert footer["cells"] == [0, 23, 80, 1] and footer["contrast"] > 3     # the footer's keys are readable
+    assert footer["cells"] == [0, 23, 80, 1] and footer["runs"]
+    assert footer["min_contrast"] == min(r["contrast"] for r in footer["runs"] if not r["thin"] and not r["graphic"])
+    assert any("Quit" in r["text"] for r in footer["runs"])
     assert json.loads((out / "leaks.json").read_text())["clean"]
-    assert not any(Path("/tmp/tn-audit").glob("terminal-*"))     # run and session folders are gone
+    # this run's session is gone: its folder, mounts, processes and X display
+    session = json.loads((out / "run-terminal.json").read_text(encoding="utf-8"))["result"]["session"]
+    folder = Path("/tmp/tn-audit") / session["folder"]
+    assert not folder.exists() and terminal.mounts_under(folder) == []
+    assert terminal.marked_pids(terminal.SESSION_MARK, str(folder)) == []
+    n = session["display"].lstrip(":")
+    assert not Path(f"/tmp/.X{n}-lock").exists() and not Path(f"/tmp/.X11-unix/X{n}").exists()

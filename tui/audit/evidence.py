@@ -77,16 +77,21 @@ def leaks(out: Path, home: Path | None = None, login: str | None = None,
             except OSError as e:
                 hits.append({"file": str(rel), "what": f"can't be read: {e.strerror}"})
                 continue
-            raw = png_text(raw) if raw.startswith(PNG_SIGNATURE) else raw
-            text = raw.decode("utf-8", "replace").casefold()
-            for n in needles:
-                if n in raw:
-                    hits.append({"file": str(rel), "what": "real home path", "at": raw.index(n)})
-            for w, what in words.items():
-                for form in _forms(w):
-                    if form in text:
-                        hits.append({"file": str(rel), "what": what, "at": text.index(form)})
-                        break
+            parts = png_parts(raw) if raw.startswith(PNG_SIGNATURE) else None
+            for where, piece in parts if parts is not None else [(None, raw)]:
+                text = piece.decode("utf-8", "replace").casefold()
+                for n in needles:
+                    if n in piece:
+                        at = piece.index(n)
+                        hits.append({"file": str(rel), "what": "real home path",
+                                     "at": at if where is None else f"{where}, offset {at}"})
+                for w, what in words.items():
+                    for form in _forms(w):
+                        if form in text:
+                            at = text.index(form)
+                            hits.append({"file": str(rel), "what": what,
+                                         "at": at if where is None else f"{where}, character {at}"})
+                            break
     return hits
 
 
@@ -94,43 +99,52 @@ MAX_SCAN = 64 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def png_text(raw: bytes) -> bytes:
-    """What of a PNG can hold words: every chunk but the compressed pixels (IDAT), with
-    zTXt / iTXt / iCCP payloads decompressed. Compressed pixels are noise to a byte search
-    (a false hit now and then, and text drawn as pixels isn't bytes anyway). A file that
-    doesn't parse as a PNG to its end is returned whole, so nothing is skipped by a fake
-    signature."""
+def png_parts(raw: bytes) -> list[tuple[str, bytes]] | None:
+    """What of a PNG can hold words, as (where, bytes): every chunk but the compressed pixels
+    (IDAT), with zTXt / iTXt / iCCP payloads also decompressed (at most MAX_SCAN bytes each).
+    Compressed pixels are noise to a byte search (a false hit now and then), and text drawn as
+    pixels isn't bytes anyway: the `terminal` job keeps the screen's text next to each PNG for
+    this scan. None when the file doesn't parse as a PNG to its end: it is then read whole, so
+    nothing is skipped by a fake signature."""
     import zlib
+
+    def inflate(data: bytes) -> bytes:
+        return zlib.decompressobj().decompress(data, MAX_SCAN)
 
     pos, parts = len(PNG_SIGNATURE), []
     try:
         while pos < len(raw):
             if pos + 12 > len(raw):
-                return raw
+                return None
             n = int.from_bytes(raw[pos:pos + 4], "big")
             kind = raw[pos + 4:pos + 8]
             body = raw[pos + 8:pos + 8 + n]
-            if len(body) != n or zlib.crc32(raw[pos + 4:pos + 8 + n]) != int.from_bytes(raw[pos + 8 + n:pos + 12 + n], "big"):
-                return raw
+            crc = int.from_bytes(raw[pos + 8 + n:pos + 12 + n], "big")
+            if len(body) != n or zlib.crc32(raw[pos + 4:pos + 8 + n]) != crc:
+                return None
+            name = kind.decode("latin-1")
+            where = f"{name} chunk at byte {pos}"
             pos += 12 + n
             if kind == b"IDAT":
                 continue
-            parts.append(kind + b" " + body)
+            parts.append((where, body))
             if kind in (b"zTXt", b"iCCP"):         # keyword NUL method data
                 _key, _, rest = body.partition(b"\0")
-                parts.append(zlib.decompress(rest[1:]))
+                parts.append((where + ", decompressed", inflate(rest[1:])))
             elif kind == b"iTXt":                  # keyword NUL flag method lang NUL tkey NUL text
                 _key, _, rest = body.partition(b"\0")
                 flag, rest = rest[:1], rest[2:]
                 _lang, _, rest = rest.partition(b"\0")
                 _tkey, _, txt = rest.partition(b"\0")
                 if flag == b"\1":
-                    parts.append(zlib.decompress(txt))
+                    parts.append((where + ", decompressed", inflate(txt)))
             if kind == b"IEND":
-                return b"\n".join(parts) if pos == len(raw) else raw
+                return parts if pos == len(raw) else None
     except (zlib.error, ValueError):
-        return raw
-    return raw
+        return None
+    return None
+
+
 SHORT_COMMON = {"bin", "abu", "usr", "var", "tmp", "lib", "dev", "run", "opt", "etc", "src", "app", "box", "pc"}
 
 
