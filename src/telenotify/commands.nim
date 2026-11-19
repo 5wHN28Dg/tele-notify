@@ -13,21 +13,31 @@ proc sessionEnded*(authState: string, stopping: bool): bool =
   ## Closed too).
   authState != "" and authState != "authorizationStateReady" and not stopping
 
+proc loginAlert*(why: string, dryRun: bool): string =
+  ## What to run first, then why, in plain words. `why` is "not logged in" (the
+  ## bot started without a login) or a TDLib authorization state.
+  let service = if dryRun: "tele-notify-dryrun" else: "tele-notify"
+  let cause = case why
+    of "not logged in": "this account isn't logged in to Telegram (yet, or any more)"
+    of "authorizationStateLoggingOut", "authorizationStateClosed":
+      "Telegram logged this account out (from another device, or Telegram ended the session)"
+    else: "Telegram ended this account's session"
+  &"Run `telenotify login`, then `systemctl --user restart {service}`: {cause}, so the bot " &
+    "can't read or forward anything."
+
 proc recordLoginNeeded*(st: State, why: string, dryRun: bool) =
-  ## Telegram logged the account out (or it never logged in): keep one alert
-  ## with the commands to run, so the terminal screen can show it (the bot
-  ## can't message you any more). Once until the next successful login, however
-  ## often systemd restarts the bot. Never raises.
-  try:
-    st.setMeta("connection", "logged out")
-    if st.getMeta("login_needed") != "1":
-      let service = if dryRun: "tele-notify-dryrun" else: "tele-notify"
-      st.addAlert(&"Telegram has logged this account out ({why}), so the bot can't read or " &
-                  &"forward anything. To log in again, run `telenotify login`, then " &
-                  &"`systemctl --user restart {service}`.")
-      st.setMeta("login_needed", "1")
-  except CatchableError:
-    discard
+  ## The account isn't logged in: keep one alert with the commands to run, so
+  ## the terminal screen can show it (the bot can't message you any more). Once
+  ## until the next successful login, however often systemd restarts the bot.
+  ## Never raises.
+  try: st.markLoginNeeded(loginAlert(why, dryRun))
+  except CatchableError: discard
+
+proc isLogOut*(authState: string): bool =
+  ## A lost session that means the login is gone (not TDLib closing by itself).
+  authState in ["authorizationStateLoggingOut", "authorizationStateWaitPhoneNumber",
+                "authorizationStateWaitCode", "authorizationStateWaitPassword",
+                "authorizationStateClosed"]
 
 proc clearLoginNeeded*(st: State) =
   ## Logged in again: a later log-out alerts again. Never raises.
@@ -179,7 +189,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l.log "stopping"
   try: st.setMeta("connection", "stopped")
   except CatchableError: discard
-  if sessionLost != "":
+  if sessionLost.isLogOut:
     recordLoginNeeded(st, sessionLost, dry)   # before closing the state: the screen shows it
   await s.client.close()
   st.close()

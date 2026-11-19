@@ -16,7 +16,8 @@ suite "login needed":
       recordLoginNeeded(st, "authorizationStateWaitPhoneNumber", dryRun = false)
     let alerts = st.alertTexts()
     check alerts.len == 1
-    check "telenotify login" in alerts[0]
+    check alerts[0].startsWith("Run `telenotify login`")   # the step first
+    check "authorizationState" notin alerts[0]                # plain words
     check "systemctl --user restart tele-notify" in alerts[0]
     check st.getMeta("connection") == "logged out"
 
@@ -33,3 +34,12 @@ suite "login needed":
     clearLoginNeeded(st)
     recordLoginNeeded(st, "authorizationStateLoggingOut", dryRun = false)
     check st.alertTexts().len == 2
+
+
+  test "plain causes: never logged in is not called a log-out":
+    check "logged out" notin loginAlert("not logged in", dryRun = false)
+    check "logged this account out" in loginAlert("authorizationStateLoggingOut", dryRun = false)
+
+  test "TDLib closing by itself isn't a log-out":
+    check not isLogOut("authorizationStateClosing")
+    check isLogOut("authorizationStateLoggingOut")

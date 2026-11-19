@@ -245,6 +245,21 @@ proc addAlert*(s: State, text: string) =
   s.db.exec(sql"INSERT INTO alerts (at, text) VALUES (?, ?)", now(), text)
   s.db.exec(sql"DELETE FROM alerts WHERE id <= (SELECT MAX(id) FROM alerts) - 500")
 
+proc markLoginNeeded*(s: State, alert: string) =
+  ## The account isn't logged in: the connection says so, and `alert` is kept
+  ## once until `login_needed` is cleared. All or nothing, so a failure can't
+  ## skip the alert or add it twice.
+  s.db.exec(sql"BEGIN IMMEDIATE")
+  try:
+    s.setMeta("connection", "logged out")
+    if s.getMeta("login_needed") != "1":
+      s.addAlert(alert)
+      s.setMeta("login_needed", "1")
+    s.db.exec(sql"COMMIT")
+  except CatchableError as e:
+    s.db.exec(sql"ROLLBACK")
+    raise e
+
 proc alertTexts*(s: State, limit = 50): seq[string] =
   ## Newest first.
   for r in s.db.fastRows(sql"SELECT text FROM alerts ORDER BY id DESC LIMIT ?", limit):
