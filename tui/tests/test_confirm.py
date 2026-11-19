@@ -175,68 +175,6 @@ async def test_the_focused_destructive_button_is_readable(paths, fake_systemctl,
         await settle(app, pilot)
 
 
-async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_systemctl, monkeypatch):  # noqa: F811
-    # a slow machine: the press is made inside the delay, handled after it
-    import time
-
-    from textual import events
-    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
-    app = TeleNotifyApp(paths, refresh_seconds=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await settle(app, pilot)
-        await pilot.click("#svc-stop")
-        await pilot.pause()
-        screen = app.screen
-        assert isinstance(screen, ConfirmScreen)
-        early = events.Key("y", "y")
-        early.time = screen._armed_at - 0.1                   # made inside the delay
-        while time.monotonic() < screen._armed_at + 0.05:   # ... handled after it
-            await pilot.pause(0.05)
-        screen.post_message(early)
-        await pilot.pause()
-        await screen.run_action("answer(True)")
-        await settle(app, pilot)
-        assert isinstance(app.screen, ConfirmScreen)
-        assert not [c for c in fake_systemctl if c[0] == "action"]
-        await pilot.press("y")                               # a press made now confirms
-        await settle(app, pilot)
-        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
-
-
-async def test_a_click_made_too_early_but_handled_late_cant_confirm(paths, fake_systemctl, monkeypatch):  # noqa: F811
-    # Textual rebuilds a mouse event (new time) before the screen sees it: the app keeps the real one
-    import time
-
-    from textual import events
-    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
-    app = TeleNotifyApp(paths, refresh_seconds=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await settle(app, pilot)
-        await pilot.click("#svc-stop")
-        await pilot.pause()
-        screen = app.screen
-        b = screen.query_one("#confirm-yes", Button)
-        x, y = b.region.x + 2, b.region.y + 1
-        made = screen._armed_at - 0.1                         # inside the delay
-        args = (None, x, y, 0, 0, 1, False, False, False)
-        clicks = [events.MouseDown(*args, screen_x=x, screen_y=y), events.MouseUp(*args, screen_x=x, screen_y=y),
-                  events.Click(*args, screen_x=x, screen_y=y)]
-        for e in clicks:
-            e.time = made
-        while time.monotonic() < screen._armed_at + 0.05:   # ... handled after it
-            await pilot.pause(0.05)
-        for e in clicks:
-            app.post_message(e)
-        await settle(app, pilot)
-        assert isinstance(app.screen, ConfirmScreen)
-        assert not [c for c in fake_systemctl if c[0] == "action"]
-        assert "Too quick" in str(screen.query_one("#confirm-wait").render())
-        await pilot.pause(0.3)                                 # the rejected press's active effect ends
-        await pilot.click("#confirm-yes")                      # a click made now confirms
-        await settle(app, pilot)
-        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
-
-
 @pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
 async def test_pressed_buttons_stay_readable(paths, fake_systemctl, theme):  # noqa: F811
     app = TeleNotifyApp(paths, refresh_seconds=0)
@@ -259,3 +197,107 @@ async def test_pressed_buttons_stay_readable(paths, fake_systemctl, theme):  # n
                 b.remove_class("-active")
             await pilot.press("escape")
             await settle(app, pilot)
+
+
+# ----------------------------------------------- a slow machine (events as the driver sends them)
+
+def _mouse(cls, widget, made: float):
+    x, y = widget.region.x + 2, widget.region.y + 1
+    e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+    e.time = made
+    return e
+
+
+def _key(key: str, char: str | None, made: float):
+    from textual import events
+    e = events.Key(key, char)
+    e.time = made
+    return e
+
+
+STALLS = {
+    # (what's made inside the delay, what's made after it): all handled after it
+    "early click": lambda yes, no, early, late: [_down(yes, early), _up(yes, early)],
+    "pressed early, released late": lambda yes, no, early, late: [_down(yes, early), _up(yes, late)],
+    "early click, then Cancel": lambda yes, no, early, late: [_down(yes, early), _up(yes, early),
+                                                              _down(no, late), _up(no, late)],
+    "early click, then Tab": lambda yes, no, early, late: [_down(yes, early), _up(yes, early),
+                                                           _key("tab", "\t", late)],
+    "early y, then an arrow": lambda yes, no, early, late: [_key("y", "y", early), _key("down", None, late)],
+    "early enter on the action, then an arrow": lambda yes, no, early, late: [_key("enter", "\r", early),
+                                                                              _key("down", None, late)],
+}
+
+
+def _down(w, t):
+    from textual import events
+    return _mouse(events.MouseDown, w, t)
+
+
+def _up(w, t):
+    from textual import events
+    return _mouse(events.MouseUp, w, t)
+
+
+@pytest.mark.parametrize("case", list(STALLS))
+async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_systemctl, monkeypatch, case):  # noqa: F811
+    import time
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        screen = app.screen
+        assert isinstance(screen, ConfirmScreen)
+        yes, no = screen.query_one("#confirm-yes", Button), screen.query_one("#confirm-no", Button)
+        if "enter" in case:
+            yes.focus()
+            await pilot.pause()
+        early, late = screen._armed_at - 0.1, screen._armed_at + 0.05
+        while time.monotonic() < late + 0.05:                # the machine stalls past the delay
+            await pilot.pause(0.05)
+        for e in STALLS[case](yes, no, early, late):
+            app.post_message(e)
+        await settle(app, pilot)
+        assert app.is_running
+        assert not [c for c in fake_systemctl if c[0] == "action"], case
+
+
+async def test_after_the_delay_a_press_confirms(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    import time
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        screen = app.screen
+        yes = screen.query_one("#confirm-yes", Button)
+        app.post_message(_key("y", "y", time.monotonic()))     # too early: says so
+        await pilot.pause()
+        assert "Too quick" in str(screen.query_one("#confirm-wait").render())
+        while time.monotonic() < screen._armed_at + 0.05:
+            await pilot.pause(0.05)
+        now = time.monotonic()
+        app.post_message(_down(yes, now))
+        app.post_message(_up(yes, now))
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+async def test_two_queued_clicks_dont_crash(paths, fake_systemctl):  # noqa: F811
+    # the first click closes the dialog; the second must not close it again
+    import time
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        yes = app.screen.query_one("#confirm-yes", Button)
+        no = app.screen.query_one("#confirm-no", Button)
+        now = time.monotonic()
+        for e in (_down(yes, now), _up(yes, now), _down(no, now), _up(no, now)):
+            app.post_message(e)
+        await settle(app, pilot)
+        assert app.is_running

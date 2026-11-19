@@ -8,10 +8,12 @@ it is visible, so the numbers stay live while the bot runs.
 from __future__ import annotations
 
 from typing import ClassVar
+from weakref import WeakKeyDictionary
 
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding, BindingType
+from textual.errors import NoWidget
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
 
 from .paths import Paths
@@ -26,18 +28,21 @@ REFRESH_SECONDS = 5
 
 
 class TeleNotifyApp(App):
-    """The screen. `input_at` is when the latest key or mouse press was *made*: Textual
-    rebuilds mouse events (with a new time) before they reach a widget, so dialogs that
-    ignore early presses (screens/armed.py) read it here."""
+    """The screen. `press_made_at` maps a widget to when the latest mouse press on it was
+    *made*: Textual rebuilds a mouse event (with a new time) before a widget sees it, so
+    dialogs that ignore early presses (screens/armed.py) read the real time here."""
 
     TITLE = "tele-notify"
-    input_at: float | None = None
 
     async def on_event(self, event: events.Event) -> None:
-        # a mouse event comes here twice: from the driver (no widget yet, the real time)
-        # and again rebuilt for the widget under it (a new time), bubbling up: keep the first
-        if isinstance(event, events.Key) or (isinstance(event, events.MouseDown) and event.widget is None):
-            self.input_at = event.time
+        # the driver's own MouseDown (not the forwarded copy, which has a later time)
+        if isinstance(event, events.MouseDown) and not event.is_forwarded:
+            try:
+                widget, _ = self.get_widget_at(event.x, event.y)
+            except (NoWidget, ScreenStackError):   # outside every widget, or no screen yet
+                widget = None
+            if widget is not None:
+                self.press_made_at[widget] = event.time
         await super().on_event(event)
 
     CSS_PATH = "app.tcss"
@@ -53,6 +58,7 @@ class TeleNotifyApp(App):
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
+        self.press_made_at: WeakKeyDictionary = WeakKeyDictionary()
         self.paths = paths
         self.refresh_seconds = refresh_seconds
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)

@@ -231,6 +231,7 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
 # --------------------------------------------------------------- modal
 
 class ConfirmScreen(Armed, ModalScreen[bool]):
+    YES_ID = "confirm-yes"
     """A question with a button that names its action and Cancel; Escape, `n` or
     Cancel answers no. Cancel has the focus; presses in the first ARM_DELAY
     seconds are ignored (a click where the opening button was, a held key)."""
@@ -277,16 +278,14 @@ class ConfirmScreen(Armed, ModalScreen[bool]):
 
 
     def action_answer(self, yes: bool) -> None:
-        if yes and self._too_soon():
-            return
-        self.dismiss(yes)
+        self._answer(yes)                        # an early `y` was stopped in Armed.on_key
 
     @on(Button.Pressed)
     def _pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        if event.button.id == "confirm-yes" and self._too_soon():
+        if event.button.id == "confirm-yes" and self._too_soon(event.button):
             return
-        self.dismiss(event.button.id == "confirm-yes")
+        self._answer(event.button.id == "confirm-yes")
 
 
 class RangeScreen(ModalScreen["tuple[date, date] | None"]):

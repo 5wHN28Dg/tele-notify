@@ -104,14 +104,12 @@ class ConfirmModal(Armed, ModalScreen[bool]):
 
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "yes" and self._too_soon():
+        if event.button.id == "yes" and self._too_soon(event.button):
             return
-        self.dismiss(event.button.id == "yes")
+        self._answer(event.button.id == "yes")
 
     def action_answer(self, yes: bool) -> None:
-        if yes and self._too_soon():
-            return
-        self.dismiss(yes)
+        self._answer(yes)                        # an early `y` was stopped in Armed.on_key
 
 
 class EvalModal(ModalScreen[None]):
