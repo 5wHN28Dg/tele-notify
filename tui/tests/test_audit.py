@@ -51,7 +51,10 @@ def test_the_guard_refuses_every_protected_place(fake_home: Path, tmp_path: Path
     for p in (share / "tele-notify" / "state.sqlite3", share / "tele-notify-corpus" / "eval.jsonl",
               share / "tele-notify-old" / "x", share / "tele-notify", fake_home / "tele-notify" / "telenotify",
               fake_home / "Projects" / "bqtechjobs" / "config.json",
-              tmp_path / "disk" / "tn-data" / "state.sqlite3"):          # the data folder's real place
+              tmp_path / "disk" / "tn-data" / "state.sqlite3",           # the data folder's real place
+              fake_home / ".config" / "tele-notify" / "config.json",     # the installed config
+              fake_home / ".local" / "lib" / "tele-notify" / "libtdjson.so",
+              fake_home / ".local" / "bin" / "telenotify"):
         assert guard.why_forbidden(p, fake_home), p
     link = tmp_path / "innocent"
     link.symlink_to(fake_home / "Projects" / "bqtechjobs")

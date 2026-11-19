@@ -39,7 +39,10 @@ def protected(home: Path) -> tuple[Path, list[Path]]:
     """(the share folder whose tele-notify* entries are protected, other protected roots).
     Roots are given both as written and resolved."""
     share = home / ".local" / "share"
-    roots = [share / "tele-notify-corpus", home / "tele-notify", home / "Projects" / "bqtechjobs"]
+    roots = [share / "tele-notify-corpus", home / "tele-notify", home / "Projects" / "bqtechjobs",
+             home / ".config" / "tele-notify",                    # the installed config (deploy/install.sh)
+             home / ".local" / "lib" / "tele-notify",             # TDLib and the installed screen
+             home / ".local" / "bin" / "telenotify", home / ".local" / "bin" / "telenotify-tui"]
     try:
         roots += [share / e.name for e in os.scandir(share) if e.name.startswith("tele-notify")]
     except OSError:

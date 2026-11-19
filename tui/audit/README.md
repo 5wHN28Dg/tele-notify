@@ -1,13 +1,13 @@
 # The audit harness
 
-Evidence for the [UI and UX policy](../../docs/UI-UX-POLICY.md) (section 3.3), one command per job, never touching your bot's data, services, desktop or browser. Run it from `tui/` with the screen's venv:
+Evidence for the owner's UI and UX policy and this product's [profile](../../docs/ux-profile.md) (the project policy's [section 3.3](../../docs/UI-UX-POLICY.md)), one command per job, never touching your bot's data, services, desktop or browser. Run it from `tui/` with the screen's venv:
 
 ```bash
 cd tui
 .venv/bin/python -m audit <job> --out DIR [options]
 ```
 
-Every run first reads your real home from the password database and refuses to start if any path it will use (symlinks followed, `--out` included) is in `~/.local/share/tele-notify*`, the corpus folder, `~/tele-notify` or `~/Projects/bqtechjobs`. It then works in its own new folder `/tmp/tn-audit/<run>/` (deleted at the end): a temporary `HOME`, a tiny synthetic `config.json` (no `api_id` / `api_hash`), `data_dir`, labels and corpus inside it, `PATH` = the fakes folder + `/usr/bin:/bin`, and an environment built from scratch (no `DISPLAY`, `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`). Fakes stand in for `systemctl` (answers per service: active, inactive, failed or missing; logs every call), `xdg-open`, `gio`, the browser (`$BROWSER`) and `telenotify` (`--bin repo` uses the repository's build instead). The fakes' call logs are copied to `DIR/fake-calls/`. Data is synthetic only (`audit/data.py`). The test suite's autouse fixtures are not used: `DECIDE_DELAY` is real.
+Every run first reads your real home from the password database and refuses to start if any path it will use (symlinks followed, `--out` included) is in `~/.local/share/tele-notify*`, the corpus folder, `~/.config/tele-notify`, `~/.local/lib/tele-notify`, the installed `~/.local/bin/telenotify` and `telenotify-tui`, `~/tele-notify` or `~/Projects/bqtechjobs`. It then works in its own new folder `/tmp/tn-audit/<run>/` (deleted at the end): a temporary `HOME`, a tiny synthetic `config.json` (no `api_id` / `api_hash`), `data_dir`, labels and corpus inside it, `PATH` = the fakes folder + `/usr/bin:/bin`, and an environment built from scratch (no `DISPLAY`, `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`). Fakes stand in for `systemctl` (answers per service: active, inactive, failed or missing; logs every call), `xdg-open`, `gio`, the browser (`$BROWSER`) and `telenotify` (`--bin repo` uses the repository's build instead). The fakes' call logs are copied to `DIR/fake-calls/`. Data is synthetic only (`audit/data.py`). The test suite's autouse fixtures are not used: `DECIDE_DELAY` is real.
 
 Every job ends with a leak scan (`DIR/leaks.json`): any file holding your login name or real home path makes the command exit 3. `DIR/run-<job>.json` records the screen's commit and the machine's load.
 
