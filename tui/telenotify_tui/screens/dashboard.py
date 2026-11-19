@@ -55,6 +55,9 @@ ALIVE_SECONDS = 120
 FEED_ROWS = 50
 CHART_WIDTH = 46    # the activity panel's width (50) less its border and padding
 CHART_HEIGHT = 3
+# each series has its own fill as well as its colour (colour is never the only signal): solid,
+# dark shade, light shade; the totals header above the chart names them
+SERIES_MARK = {"publish": "█", "review": "▓", "reject": "▒"}
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -119,7 +122,9 @@ def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
 
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT) -> Text:
-    """A small stacked bar chart: publish (green) at the bottom, then review (yellow), then reject (dim).
+    """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▓), then
+    reject (dim, ▒). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+    shape, so the height stays exact, and is told apart by colour only (tracked in #67).
 
     Bars are two columns wide with a gap while they fit, then one column,
     then without gaps. Up to 15 days each bar is labelled with its day of the
@@ -139,16 +144,22 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
         p = round(d.publish * units / top)
         r = round((d.publish + d.review) * units / top)
         t = round(d.total * units / top)
-        if d.total and t == 0:
-            t = 1  # any activity shows at least a sliver
+        if d.total and t < 8:
+            # a bar within one partial cell (any activity shows at least a sliver): one series fits,
+            # so it takes the colour of the series that has most
+            biggest = max(("publish", d.publish), ("review", d.review), ("reject", d.reject), key=lambda x: x[1])[0]
+            t = max(t, 1)
+            p, r = (t, t) if biggest == "publish" else (0, t) if biggest == "review" else (0, 0)
         scaled.append((p, max(r, p), max(t, r, p)))
     for row in range(height - 1, -1, -1):
         lo = row * 8
         for i, (p, r, t) in enumerate(scaled):
             fill = min(8, max(0, t - lo))
             mid = lo + max(fill, 1) / 2
-            style = "green" if mid < p else "yellow" if mid < r else "grey50"
-            out.append(eighths[fill] * bar_w, style=style)
+            series = "publish" if mid < p else "review" if mid < r else "reject"
+            style = {"publish": "green", "review": "yellow", "reject": "grey50"}[series]
+            glyph = SERIES_MARK[series] if fill == 8 else eighths[fill]
+            out.append(glyph * bar_w, style=style)
             if gap and i < n - 1:
                 out.append(" ")
         out.append("\n")
@@ -621,7 +632,9 @@ class DashboardPane(Vertical):
         note.update(Text(f"{ps.period.describe()}{whole}   (p: change the period, d: pick dates)", style="dim"))
         tot = ps.totals
         t = Text()
-        t.append(f"{'judged':>8}{'publish':>9}{'review':>8}{'reject':>8}{'forwarded':>11}\n", style="bold")
+        m = SERIES_MARK
+        t.append(f"{'judged':>8}{m['publish'] + 'publish':>9}{m['review'] + 'review':>8}"
+                 f"{m['reject'] + 'reject':>8}{'forwarded':>11}\n", style="bold")
         t.append(f"{tot.judged:>8}")
         t.append(f"{tot.publish:>9}", style="green")
         t.append(f"{tot.review:>8}", style="yellow")
