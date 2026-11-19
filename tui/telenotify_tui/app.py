@@ -51,10 +51,13 @@ class TeleNotifyApp(App):
         """When the oldest unused press on the footer key for `key` was made (each footer key's
         presses in order, so a later press elsewhere can't lend this one its time). None: no
         record (Textual's test pilot, or not a footer click), so the key keeps its own time."""
+        found = None
         for widget, times in list(self.footer_downs.items()):
-            if getattr(widget, "key", None) == key and times:
-                return times.popleft()
-        return None
+            if not widget.is_attached:     # a footer rebuilt since: its presses can't make a key
+                del self.footer_downs[widget]
+            elif found is None and getattr(widget, "key", None) == key and times:
+                found = times.popleft()
+        return found
 
     async def on_event(self, event: events.Event) -> None:
         # the driver's own events (not the forwarded copies, which have later times): a
@@ -66,7 +69,9 @@ class TeleNotifyApp(App):
             except (NoWidget, ScreenStackError):   # outside every widget, or no screen yet
                 widget = None
             if isinstance(event, events.MouseDown):
-                if isinstance(widget, FooterKey):   # a footer key acts on the press itself
+                # a footer key acts on the press itself; a disabled one only rings the bell and
+                # makes no key, so its press is not kept (it would put the queue one behind)
+                if isinstance(widget, FooterKey) and not getattr(widget, "_disabled", False):
                     self.footer_downs.setdefault(widget, deque()).append(event.time)
                 if widget is not None:
                     self._down[event.button] = (widget, event.time)

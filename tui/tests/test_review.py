@@ -746,3 +746,36 @@ async def test_pilot_footer_clicks_never_dead_end(paths, state, now, monkeypatch
         await pilot.click(send)
         await pilot.pause()
         assert status_of(state, 11) == "to_send"
+
+
+async def test_a_double_click_on_the_last_posts_footer_key_leaves_nothing_behind(paths, state, now, monkeypatch):
+    # the second press lands on the now-disabled key: no key is made, so no press may be kept
+    import time
+
+    from textual import events
+    from textual.widgets._footer import FooterKey
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+
+        def click_footer(key):
+            [k] = [w for w in app.query(FooterKey) if w.key == key]
+            x, y = k.region.x + 1, k.region.y
+            for cls in (events.MouseDown, events.MouseUp):
+                app.post_message(cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y))
+        click_footer("s")                        # the last post: sent
+        await pilot.pause(0.1)
+        click_footer("s")                        # the double click's second press: key disabled now
+        await pilot.pause(0.3)
+        assert status_of(state, 11) == "to_send"
+        add_pending(state, 100, "a new post", now)
+        pane.reload()
+        await pilot.pause()
+        await pilot.pause(0.8)                   # read it
+        assert time.monotonic() - pane._shown_at > 0.3
+        click_footer("s")                        # one click after reading decides
+        await pilot.pause(0.3)
+        assert status_of(state, 100) == "to_send"
