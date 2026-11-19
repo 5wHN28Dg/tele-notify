@@ -37,6 +37,14 @@ class TeleNotifyApp(App):
 
     TITLE = "tele-notify"
 
+    def simulate_key(self, key: str) -> None:
+        """A click on a footer key: Textual makes the key when the click is *handled*; stamp it
+        with when the click was made, so a slow machine can't turn an early click into a late one."""
+        event = events.Key(key, None)
+        if self.down_made_at is not None:
+            event.time = self.down_made_at
+        self.post_message(event)
+
     async def on_event(self, event: events.Event) -> None:
         # the driver's own events (not the forwarded copies, which have later times): a
         # press counts once its release on the same widget makes it a click, as Textual's
@@ -47,6 +55,7 @@ class TeleNotifyApp(App):
             except (NoWidget, ScreenStackError):   # outside every widget, or no screen yet
                 widget = None
             if isinstance(event, events.MouseDown):
+                self.down_made_at = event.time   # the newest real press (a footer key acts on it)
                 if widget is not None:
                     self._down[event.button] = (widget, event.time)
                 else:
@@ -73,6 +82,7 @@ class TeleNotifyApp(App):
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
+        self.down_made_at: float | None = None
         self.press_made_at: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths

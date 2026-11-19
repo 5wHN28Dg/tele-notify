@@ -651,22 +651,41 @@ async def test_a_tap_made_too_early_but_handled_late_doesnt_decide(paths, state,
         assert status_of(state, 100) == "pending"
 
 
-async def test_enter_on_send_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
+async def test_a_footer_click_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
+    # the footer's "s Send" makes a key when the click is *handled*; the click's own time counts
     from textual import events
+    from textual.widgets._footer import FooterKey
     monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
     add_pending(state, 100, "second post never shown", now - 10)
     app = TeleNotifyApp(paths, refresh_seconds=0)
-    async with app.run_test(size=(140, 40)) as pilot:
+    async with app.run_test(size=(160, 40)) as pilot:
         await open_review(pilot)
         pane = app.query_one(ReviewPane)
         pane._shown_at -= 10
         await pilot.press("s")
         await pilot.pause()
-        app.query_one("#btn-send").focus()
-        await pilot.pause()
-        early = events.Key("enter", "\r")
-        early.time = pane._shown_at + 0.1
-        await pilot.pause(0.6)
-        app.post_message(early)
+        assert status_of(state, 11) == "to_send"
+        [send] = [k for k in app.query(FooterKey) if k.key == "s"]
+        x, y = send.region.x + 1, send.region.y
+        e = events.MouseDown(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+        e.time = pane._shown_at + 0.1            # made inside the delay...
+        await pilot.pause(0.6)                   # ...handled after it
+        app.post_message(e)
         await pilot.pause()
         assert status_of(state, 100) == "pending"
+
+
+async def test_a_key_that_decided_nothing_leaves_no_time_behind(paths, state, now, monkeypatch):
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("enter", "down")       # no decision: nothing to remember
+        await pilot.pause(1.0)
+        assert pane._press_at is None
+        await pilot.click("#btn-send")           # read for a second: the click decides
+        await pilot.pause()
+        assert status_of(state, 100) == "to_send" or status_of(state, 11) == "to_send"

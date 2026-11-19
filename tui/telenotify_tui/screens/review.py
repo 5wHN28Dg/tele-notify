@@ -399,8 +399,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def on_key(self, event: events.Key) -> None:
         # a key carries the time it was pressed; a slow machine may handle it much later
-        if event.key in ("s", "k", "d", "enter"):
-            self._press_at = event.time
+        if event.key in ("s", "k", "d") and self.current is not None:
+            self._press_at = event.time   # a footer click's key carries the click's time (app.simulate_key)
+        else:
+            self._press_at = None
 
     def _made(self) -> float:
         """When the press deciding now was made (else now), used once."""
@@ -559,7 +561,11 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             # a click: when it was made, from the app's record (Textual rebuilds mouse events,
             # with a later time, before a widget sees them); none recorded means now
             clicks = getattr(self.app, "press_made_at", {}).pop(event.button, None)
-            if clicks:                  # else enter on the focused button: its key's time stays
+            if clicks:
                 self._press_at = clicks[-1]
+            elif getattr(self.app, "is_headless", False):
+                self._press_at = None   # Textual's test pilot clicks past the app: no stall there
+            else:
+                self._press_at = float("-inf")   # a click we can't vouch for counts as too early
             actions[event.button.id]()
             self._press_at = None
