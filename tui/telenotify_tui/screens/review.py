@@ -26,7 +26,7 @@ import webbrowser
 from typing import ClassVar
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -163,6 +163,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._shown_at = 0.0                       # time.monotonic() when the open post was drawn
         self._last: tuple[Review, str] | None = None   # the last decision made here, while undoable
         self._decided_note = ""                    # what that decision's note said
+        self._press_at: float | None = None        # when the key or click deciding now was *made*
 
     # seconds during which s / d (keys and buttons) are ignored after a new post
     # is shown: a double tap or a held key mustn't decide a post nobody has read
@@ -396,11 +397,21 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     # ----------------------------------------------------------- actions
 
+    def on_key(self, event: events.Key) -> None:
+        # a key carries the time it was pressed; a slow machine may handle it much later
+        if event.key in ("s", "k", "d", "enter"):
+            self._press_at = event.time
+
+    def _made(self) -> float:
+        """When the press deciding now was made (else now), used once."""
+        made, self._press_at = self._press_at, None
+        return made if made is not None else time.monotonic()
+
     def _decide(self, status: str) -> None:
         r = self.current
         if r is None:
             return
-        if time.monotonic() - self._shown_at < self.DECIDE_DELAY:
+        if self._made() - self._shown_at < self.DECIDE_DELAY:
             # a double tap / held key, or a click that landed as the next post appeared
             before = f"{self._decided_note}  ·  " if self._decided_note else ""
             self.note(f"{before}#{r.msg_id} has only just appeared: read it, then decide", "warn")
@@ -545,4 +556,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                    "btn-undo": self.action_undo}
         if event.button.id in actions:
             event.stop()
+            # a click: when it was made, from the app's record (Textual rebuilds mouse events,
+            # with a later time, before a widget sees them); none recorded means now
+            clicks = getattr(self.app, "press_made_at", {}).pop(event.button, None)
+            if clicks:                  # else enter on the focused button: its key's time stays
+                self._press_at = clicks[-1]
             actions[event.button.id]()
+            self._press_at = None

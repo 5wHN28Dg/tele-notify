@@ -619,3 +619,54 @@ async def test_buttons_fit_an_80_column_terminal(paths, state, now):
         assert app.query_one("#btn-undo", Button).display
         assert app.query_one("#btn-keep", Button).region.width > 0
         assert app.query_one("#btn-undo", Button).region.right <= 80
+
+
+async def test_a_tap_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
+    # a slow machine: the second tap is made inside DECIDE_DELAY but handled after it (CI saw this)
+    from textual import events
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post never shown", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10                     # the first post has been read
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+        shown = pane._shown_at                   # the second post appeared now
+        early = events.Key("s", "s")
+        early.time = shown + 0.1                 # made inside the delay...
+        await pilot.pause(0.6)                   # ...handled after it
+        app.post_message(early)
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+        btn = app.query_one("#btn-send")         # the same for a click on Send
+        x, y = btn.region.x + 1, btn.region.y
+        for cls in (events.MouseDown, events.MouseUp):
+            e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+            e.time = shown + 0.1
+            app.post_message(e)
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+
+
+async def test_enter_on_send_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
+    from textual import events
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post never shown", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("s")
+        await pilot.pause()
+        app.query_one("#btn-send").focus()
+        await pilot.pause()
+        early = events.Key("enter", "\r")
+        early.time = pane._shown_at + 0.1
+        await pilot.pause(0.6)
+        app.post_message(early)
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
