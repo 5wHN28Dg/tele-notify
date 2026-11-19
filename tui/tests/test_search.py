@@ -234,7 +234,7 @@ def test_main_reason_skips_gather_notes():
 
 # ------------------------------------------------- issue #56: no freezes
 
-SLOW_QUERY = 0.6   # a query this slow (a big state file) must not hold the event loop
+SLOW_QUERY = 1.0   # a blocking query would stall the loop this long; the limit is half of it
 
 
 class LoopWatch:

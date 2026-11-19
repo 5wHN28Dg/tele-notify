@@ -71,7 +71,9 @@ class TeleNotifyApp(App):
             if isinstance(event, events.MouseDown):
                 # a footer key acts on the press itself; a disabled one only rings the bell and
                 # makes no key, so its press is not kept (it would put the queue one behind)
-                if isinstance(widget, FooterKey) and not getattr(widget, "_disabled", False):
+                # nor is one while another widget holds the mouse (a drag): it never sees the press
+                if (isinstance(widget, FooterKey) and not getattr(widget, "_disabled", False)
+                        and self.mouse_captured in (None, widget)):
                     self.footer_downs.setdefault(widget, deque()).append(event.time)
                 if widget is not None:
                     self._down[event.button] = (widget, event.time)

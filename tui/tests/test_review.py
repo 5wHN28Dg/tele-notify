@@ -761,9 +761,13 @@ async def test_a_double_click_on_the_last_posts_footer_key_leaves_nothing_behind
         pane = app.query_one(ReviewPane)
         pane._shown_at -= 10
 
+        # one place on the screen, as a user would click (the footer is rebuilt after each
+        # decision, and a key read mid-rebuild has no position yet)
+        [k] = [w for w in app.query(FooterKey) if w.key == "s"]
+        spot = (k.region.x + 1, k.region.y)
+
         def click_footer(key):
-            [k] = [w for w in app.query(FooterKey) if w.key == key]
-            x, y = k.region.x + 1, k.region.y
+            x, y = spot
             for cls in (events.MouseDown, events.MouseUp):
                 app.post_message(cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y))
         click_footer("s")                        # the last post: sent
@@ -779,3 +783,20 @@ async def test_a_double_click_on_the_last_posts_footer_key_leaves_nothing_behind
         click_footer("s")                        # one click after reading decides
         await pilot.pause(0.3)
         assert status_of(state, 100) == "to_send"
+
+
+async def test_a_footer_press_during_a_drag_leaves_nothing_behind(paths, state, now, monkeypatch):
+    # while another widget holds the mouse the footer never sees the press: nothing to keep
+    from textual import events
+    from textual.widgets._footer import FooterKey
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        [k] = [w for w in app.query(FooterKey) if w.key == "s"]
+        x, y = k.region.x + 1, k.region.y
+        app.capture_mouse(app.query_one("#detail-text"))      # a drag in progress elsewhere
+        app.post_message(events.MouseDown(None, x, y, 0, 0, 3, False, False, False, screen_x=x, screen_y=y))
+        await pilot.pause()
+        app.capture_mouse(None)
+        assert not any(app.footer_downs.values())
