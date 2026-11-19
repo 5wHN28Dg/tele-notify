@@ -6,8 +6,13 @@ Reviewed: blind and adversarial passes on PR #53.
 
 **State of the adoption.** The profile and review brief exist. The hook-up lines (policy Appendix G) are **not yet**
 in AGENTS.md or this project's CLAUDE.md. Until they are, AGENTS.md wins every conflict, and agents start no tier-2
-or tier-3 UI change on this product (policy, Quick start, phase 1). Tier-0 and tier-1 fixes go ahead with both
-review passes.
+or tier-3 UI change on this product (policy, Quick start, phase 1). Whether the terminal screen is inside the
+delegation in CLAUDE.md is also unanswered (policy 0.2), so until the owner answers, agents make **no UI changes to
+`tui/`** and only propose them. Changes to tests and to the bot's own code inside the delegation go ahead.
+
+**Phase-1 check** (the never-waivable set, U1, A1 and A5, plus T13 and MSG6) was done by hand on 2026-11-19. Its fails
+are tracked as `ux` issues #54 to #60, #62 to #81 (list: `gh issue list --label ux`). A10 and T1 passed, T9 is N/A,
+and T0 waits for the owner's checklist below. Z1's test leak was fixed in PR #61.
 
 This profile covers the whole product: the bot and its command line (`telenotify`, `deploy/install.sh`,
 `deploy/build-tdlib.sh`), the messages it sends, and the terminal screen (`telenotify-tui`). The older project
@@ -47,6 +52,8 @@ may install it. Not a reader, viewer, sharing tool, training product, family fil
 - **Objects:** post (a message in a watched chat; an album counts as one), verdict (publish, review, reject) with
   its reasons, chat (watched or the target), keyword list, review queue, alert, period (for the numbers), the bot
   (real or dry run).
+- **Not the original post:** when forwarding is blocked, the bot posts its own short "match / post link" text in the
+  channel (#80).
 - **Verbs:** watch / unwatch a chat; judge (the filter); forward; review a post (send, discard, match no send, undo);
   search; re-judge; test settings on the corpus; save settings; start / stop / restart the bot.
 
@@ -64,16 +71,21 @@ Proposed; the agent's draft until the owner confirms it.
 | Messages to the user | Rare and worth reading | Signal's system notices |
 | What the channel's readers get | Only real matches, the original post untouched | a curated job-alert channel |
 
-Tie-breakers for UI choices this profile doesn't settle (1.3): Textual's own widgets and defaults; then clig.dev for
-the command line; then the reference product named above for that part.
+Tie-breakers for UI choices this profile doesn't settle (1.3), **(owner)**, proposed: the reference product named
+above for that part; then Textual's widgets for the screen and clig.dev for the command line. Until the owner
+confirms them, they settle nothing (0.2).
+
+The intent orders in the screen table, the main-task targets and the budgets are also the agent's proposals,
+**(owner)**, until the owner confirms them.
 
 ## Core interactions (with feel specs)
 
-- **Deciding a review post** (`s` / `k` / `d`, or the buttons). The decision shows within 100 ms and the next post
-  appears. Keys wait `DECIDE_DELAY` after a post appears, and the wait is shown, so a double tap can't decide an
-  unread post. `u` undoes until the bot has sent the post. Success: a one-line note saying what happened. Failure
-  (state locked, already decided elsewhere): a plain-words note, and the post stays. Reference: Newsboat's
-  mark-and-next.
+- **Deciding a review post** (`s` / `k` / `d`, or the buttons). The spec: the decision shows within 100 ms and the
+  next post appears; keys wait `DECIDE_DELAY` after a post appears, and the wait is visible, so a double tap can't
+  decide an unread post; any decision the bot hasn't acted on can be undone; success is a one-line note saying what
+  happened; on failure (state locked, decided elsewhere) a plain-words note explains it. Reference: Newsboat's
+  mark-and-next. **Today** the wait isn't shown, `u` undoes only the last decision of this run, and a post decided
+  elsewhere drops from the list (#76).
 - **Picking a search result.** Moving the selection shows that post's verdict and reasons beside the list within
   100 ms. Reference: `lazygit`'s list and detail pane.
 
@@ -103,6 +115,13 @@ the command line; then the reference product named above for that part.
   - Low vision: the terminal's own font size; checked as the cell grid a 200 % font gives on the typical screen
     (A4, about 80 × 24 on a 1920 × 1080 laptop).
   - Motor: keyboard only or mouse only (A18). Chords (`ctrl+s`, `ctrl+r`, `ctrl+q`) need an alternative (A22).
+    Copying a post needs a mouse drag today (A20, #78).
+  - Tremor: the review double-tap guard (`DECIDE_DELAY`) and the safe focus in dialogs (S2, #55).
+  - One hand: every main-task key is a single key or has a button; chords are the gap (A22).
+  - Cognitive: plain words (A24), one decision per dialog, nothing to remember (the footer shows the keys).
+  - Photosensitivity: nothing flashes (A10 passed). The Dashboard refreshes every few seconds by itself; it must be
+    possible to pause it (A11).
+  - Deafness: the product makes no sound.
   - **Blindness: the non-visual path is incomplete (tracked; severity 2).** The screen draws in a terminal grid that
     Kitty doesn't expose to screen readers. The command line is the non-visual path where it exists:
 
@@ -116,7 +135,9 @@ the command line; then the reference product named above for that part.
     | Start, stop, restart | `systemctl --user` (outside the product) |
     | Install, log in, update | the README steps and command output |
 
-    Each gap is a tracked item; none is recorded as N/A.
+    The gaps are tracked in #70; none is recorded as N/A. "Find why a post got its verdict" has no path at all, so
+    that gap shuts a blind user out of a main task (severity 1 by 9.5; the reviewer of the fix rates it). Orca
+    reading the screen itself in GNOME Terminal (VTE exposes its text) is an owner-check item below.
 - **Age:** adults only; no children use it.
 - **Languages:** the UI is English. Content (posts, chat titles, keywords) is Arabic, English and mixed, with emoji,
   numbers, links, emails and phone numbers, from strangers: untrusted.
@@ -124,13 +145,14 @@ the command line; then the reference product named above for that part.
 ## Platforms
 
 - **OS:** Linux with a systemd user session. Nothing else is supported.
-- **Typical and oldest supported device:** the owner's laptop (Ubuntu GNOME, 37.5 GiB RAM, a 1920 × 1080 class
-  screen). There is no older supported device; the README's build needs at least 4 GB of RAM for TDLib.
+- **Typical device:** the owner's laptop (Ubuntu GNOME, 37.5 GiB RAM, a 1920 × 1080 class screen).
+- **Oldest and smallest supported device (owner):** proposed: a 2-core machine with 4 GB of RAM (what the TDLib
+  build needs), simulated by running the benchmark walk under a 2-CPU, 4 GB memjob limit.
 - **Terminals:** Kitty 0.47 (main); Ptyxis and GNOME Terminal (VTE); Zed's terminal; inside `tmux` and over `ssh`.
   All truecolour.
-- **Sizes:** 80 × 24 smallest; 120 × 40 typical; 200 × 50 largest checked.
+- **Sizes:** 80 × 24 smallest (80 × 23 inside `tmux` with its status line, also checked); 120 × 40 typical; 200 × 50 largest checked.
 - **Themes:** `textual-dark` (default) and `textual-light`, switched in Textual's command palette (`ctrl+p`), not
-  saved between runs (tracked).
+  saved between runs (#73). The palette also offers 19 other themes that aren't supported (#81).
 - **Inputs:** the keyboard and the mouse are both first-class in the screen; the keyboard alone in the command line.
 - **Assistive technology:** the terminal's font size; GNOME's High Contrast and Large Text through the terminal;
   GNOME's Reduced Motion and animations off (Textual's own animations must follow them, A11; Textual has
@@ -140,32 +162,36 @@ the command line; then the reference product named above for that part.
 
 ## Main tasks
 
-Targets set 2026-11-19 (actions counted by the harness's keyboard-only and mouse-only scripts; waits such as
-`DECIDE_DELAY` excluded).
+Targets proposed 2026-11-19, **(owner)**. Actions are counted by the harness's keyboard-only (K) and mouse-only (M)
+scripts, from the start state named in brackets, with each key, click and arrow press as one action; waits such as
+`DECIDE_DELAY` are excluded. Where a target says "K/M", both scripts must meet it.
 
 | Task (users' words) | Who | How often | Done means | Targets |
 |---|---|---|---|---|
 | Matching jobs reach my channel on their own | owner, recipients | continuous | each match is forwarded once | ALERT1 latency below; ALERT2 score |
-| See whether the bot is fine | owner | daily | service state, connection, dry run or real, pending reviews and alerts read on the Dashboard | 0 actions after start; first useful screen within 2 s warm |
-| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | 2 actions (button, confirm) |
-| Review an unsure post (sends to the public channel) | owner | daily | the post is sent, discarded or kept, labelled, with undo offered | 1 action per post after reading |
-| Undo a review decision | owner | weekly | the post is back in the queue, its label removed | 1 action |
-| Find why a post got its verdict | owner | weekly | the post's verdict and reasons are on screen | the words typed + 1 action |
-| Read the numbers for a period | owner | weekly | the period's counts and chart are on screen | 2 actions (`p`, pick) |
+| See whether the bot is fine | owner | daily | service state, connection, dry run or real, pending reviews and alerts read on the Dashboard | 0 actions (screen just opened); first useful screen within 2 s warm on the 1M-post state file |
+| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K: no keys exist today, so Tab presses count (#57) |
+| Review an unsure post (sends to the public channel) | owner | daily | the post is sent, discarded or kept, labelled, with undo offered | K/M 1 per post (Review open, post read); from Dashboard +1 |
+| Undo a review decision | owner | weekly | any decision the bot hasn't acted on is back in the queue, its label removed | K/M 1 for the last one; K/M 3 for an older one from History (today only the last of this run, #76) |
+| Find why a post got its verdict | owner | weekly | the post's verdict and reasons are on screen | K: `3` + the words + 1; M: 1 + the words + 1 (Dashboard open) |
+| Read the numbers for a period | owner | weekly | the period's counts and chart are on screen | K: `p` + arrows + enter, at most 6; M 2 (Dashboard open) |
 | Add, edit or delete a keyword, then save (deletes data) | owner | weekly | the change is in `config.json`, a backup kept, the bot restarted if asked | 4 actions + typing |
-| Remove duplicate keywords (deletes data) | owner | rare | each list keeps one spelling, then saved | 2 actions + save |
+| Remove duplicate keywords (deletes data) | owner | rare | each list keeps one spelling, then saved | K/M 1 + save (Settings open) |
 | Revert unsaved settings (throws away edits) | owner | rare | the screen shows `config.json` again | 2 actions (Revert, confirm) |
-| Watch or unwatch a chat, seeing who can read it (T13) | owner | monthly | the chat is (un)watched in the saved config | 4 actions; the source's audience shown (not built yet, tracked) |
+| Watch or unwatch a chat, seeing who can read it (T13) | owner | monthly | the chat is (un)watched in the saved config | K/M 4 (Settings open); the source's audience shown (not built yet, #68) |
 | Change the target channel (sends to others) | owner | rare | matches go to the new chat after save and restart | 4 actions + confirm |
-| Switch between the dry run and the real bot (live system, starts public forwarding) | owner | rare | the mode is saved, the bot restarted in it, and the screen shows which | 4 actions + confirm |
+| Switch between the dry run and the real bot (live system, starts public forwarding) | owner | rare | the mode is saved, the bot restarted in it, and the screen shows which | K/M 4 + confirm (fails today: needs a reopen, #77) |
 | Turn "publish when unsure" on or off (sends to others) | owner | rare | the option is saved and in effect after restart | 4 actions |
 | Test settings on the corpus before saving | owner | monthly | the corpus result is shown next to the saved settings' result | 1 action |
-| Remove a wrong post from the channel (MSG6) | owner | rare | the post is gone from the channel | not built yet (tracked) |
-| Install, log in and start the service (first setup) | owner, other installers | once | the bot runs from `~/.local/bin`, logged in, as a user service | README steps only; each warning explained beforehand |
-| Update after `git pull` (live system) | owner, other installers | monthly | `deploy/install.sh` rebuilt and restarted it, or said why not | 1 command; S8 (tracked) |
-| Log in again after Telegram logs the account out (recovering access) | owner | rare | `telenotify login` works and the service restarts | README steps only |
-| Log out and uninstall (leaving) | owner, other installers | rare | the session, service, programs and data are gone, or kept where the README says | not documented yet (tracked; T2, D8) |
-| Change the Arabic display mode or the theme (the accessibility settings) | owner | rare | the mode is in effect | 1 flag or variable for Arabic; theme through the command palette, not saved (tracked) |
+| Remove a wrong post from the channel (MSG6) | owner | rare | the post is gone from the channel | not built yet (#69) |
+| Report a problem (FIELD1) | other installers | rare | a report with diagnostics, private data removed, reaches the owner | not built yet (#72) |
+| Change how long post text is kept (`keep_text_days`, deletes data) | owner | rare | the setting is saved; the screen says what will be cleared | not in Settings yet (config only) |
+| Open the screen the first time (no state file, no chat list yet) | owner, other installers | once | the screen says what's missing and the next step | 0 actions; within 60 s to the first main task |
+| Install, log in and start the service (first setup) | owner, other installers | once | the bot runs from `~/.local/bin`, logged in, as a user service | README steps only, each warning explained beforehand; TDLib build time measured and stated in the README (20–60 min today); the rest within 10 min |
+| Update after `git pull` (live system) | owner, other installers | monthly | `deploy/install.sh` rebuilt and restarted it, or said why not | 1 command; PASS/FAIL and rollback (#64) |
+| Log in again after Telegram logs the account out (recovering access) | owner | rare | `telenotify login` works and the service restarts | the screen says what to run (#65); within 3 min |
+| Log out and uninstall (leaving) | owner, other installers | rare | the session, service, programs and data are gone, or kept where the README says | not documented yet (#72) |
+| Change the Arabic display mode or the theme (the accessibility settings) | owner | rare | the mode is in effect | 1 flag or variable for Arabic; theme through the command palette, not saved (#73) |
 
 First run budget: 3 screens before the first main task (default).
 
@@ -176,39 +202,48 @@ table adds the intent order and the rest of the product. One row per layout; gro
 
 | Screen or group | Job | Must be visible at smallest size | Primary action | Input per method | Intent order |
 |---|---|---|---|---|---|
-| Dashboard tab, Feed view (`f`, default) | bot health, start / stop, numbers, live feed | as the tab table | none (state screen) | `p` / click the picker | 1 service and connection state; 2 dry run or real, pending reviews, alerts; 3 the period's numbers |
+| Dashboard tab, Feed view (`f`, default) | bot health, start / stop, numbers, live feed | as the tab table | none (state screen) | `p` / click the picker | 1 service and connection state; 2 dry run or real, pending reviews, alerts; 3 the period's numbers; 4 the live feed |
 | Dashboard tab, Chats view (`c`) | numbers per chat for the period | the state line and the chat table's first rows | none | `c` / click | 1 the chat table; 2 the period |
-| Dashboard tab, Alerts view (`a`) | read alerts | the state line and the newest alerts | none | `a` / click | 1 the newest alert; 2 its time |
-| Review tab (post view) | decide unsure posts | as the tab table | Send | `s` / click Send | 1 the post (chat, text); 2 its reasons; 3 the decision buttons |
+| Dashboard tab, Alerts view (`a`) | read alerts; see each watched chat's health | the state line, the newest alerts, the chat-health table's first rows | none | `a` / click | 1 the newest alert; 2 its time; 3 chats that can't be read |
+| Review tab (post view) | decide unsure posts | as the tab table | Send | `s` / click Send | 1 dry run or real (what Send will do); 2 the post (chat, text); 3 its reasons; 4 the decision buttons |
 | Review tab, History view (`h`) | see and undo recent decisions | the recent decisions and Undo | Undo | `u` / click | 1 the last decision; 2 Undo |
 | Search tab | find a post and why | as the tab table | none (typing searches) | type / click a row | 1 results with verdicts; 2 the chosen post's reasons; 3 the search box |
 | Search tab, paste a post (`p`) | try a post | the paste box and its verdict | Judge | type, then the key / click | 1 the box; 2 the verdict and reasons |
 | Settings tab, list sections (Roles & levels, Places, Other filters) | edit a list | as the tab table | Save | `ctrl+s` / click Save | 1 the chosen list; 2 saved or unsaved and problems; 3 Edit / Delete / Add |
-| Settings tab, Chats | watch, unwatch, pick the target | as the tab table | Save | `ctrl+s` / click Save | 1 the chat table with watched marks; 2 the target chat; 3 saved or unsaved |
+| Settings tab, Chats (chat table) | watch, unwatch, pick the target | as the tab table | Save | `ctrl+s` / click Save | 1 the chat table with watched marks; 2 the target chat; 3 saved or unsaved |
+| Settings tab, Chats (chat-ID editor, before the bot has saved a chat list) | type chat IDs and the target | the ID list, the target field, Save | Save | `ctrl+s` / click Save | 1 why it's IDs; 2 the fields; 3 saved or unsaved |
 | Settings tab, Bot | dry run, alerts, paths | the options and the saved marker | Save | `ctrl+s` / click Save | 1 the options; 2 saved or unsaved |
 | Dashboard confirm dialog (`ConfirmScreen`: start, stop, restart the service) | a decision now | the question, the service and mode, both buttons | the safe choice has focus | `esc` / `n` cancels | 1 the question; 2 the consequence; 3 the buttons |
 | Settings confirm dialogs (`ConfirmModal`: revert unsaved changes; use the file's value after an outside change; save and restart; quit with unsaved changes) | a decision now | the question, the object, both buttons | the safe choice has focus | `esc` / `n` cancels | 1 the question; 2 the consequence; 3 the buttons |
 | Dates form (`RangeScreen`, custom period) | type a range | both fields, the error, the buttons | Show | enter / click | 1 the fields; 2 the error; 3 the buttons |
 | Filter-read view (`CheckModal`, review `r`) | show what the filter read from links | the text and Close | Close | `esc` / click Close | 1 the text; 2 Close |
 | Corpus test view (`EvalModal`, settings `t`) | before / after numbers on the corpus | the before / after table and Close | Close | `esc` / click Close | 1 the changed counts; 2 Close |
-| Command line: `check`, `eval`, `review`, `stats`, `compare`, `run` output, usage and errors | as its help says | readable at 80 columns | n/a | keyboard | 1 the result or error; 2 the next step |
+| Command palette (Textual's, `ctrl+p`) | switch the theme, run commands | the search field and the matches | the chosen command | `ctrl+p` / not reachable by mouse | 1 the field; 2 the matches |
+| Toasts (`app.notify`: save, error and restart results) | say what happened | the whole message while shown | none | n/a | 1 the result |
+| Command line: `check`, `eval`, `stats`, `compare`, `run` output, usage and errors | as its help says | readable at 80 columns | n/a | keyboard | 1 the result or error; 2 the next step |
+| Command line: `telenotify review` (sends to the public channel) | decide unsure posts | the post, its reasons, the prompt | n/a | keyboard | 1 the post; 2 the reasons; 3 the prompt and what each key does |
+| Command line: `telenotify-tui --help`, its flags and start-up warnings | start the screen | readable at 80 columns | n/a | keyboard | 1 the usage; 2 the warning |
 | Command line: `login` prompts | log in to Telegram | each prompt says what it wants | n/a | keyboard | 1 the question; 2 what it's for |
 | Command line: `deploy/install.sh` and `deploy/build-tdlib.sh` output | install, update, build TDLib | each step and the final summary | n/a | keyboard | 1 PASS / FAIL per part; 2 what to do |
-| Messages: alerts in the owner's Saved Messages (back after downtime, no connection, a watched chat lost, a backlog cut) | tell the owner something needs them | the first line says why | n/a | Telegram | 1 why; 2 what to do |
+| Messages: alerts in the owner's Saved Messages (back after downtime, no connection, a watched chat lost, a backlog cut, a send failed) | tell the owner something needs them | the first line says why | n/a | Telegram | 1 why; 2 what to do |
 | Messages: forwards to the public channel | the original post, unchanged | n/a (Telegram's UI) | n/a | n/a | n/a |
+| Messages: the fallback "match / post link" text in the public channel (when forwarding is blocked) | point readers to the post | the role and a link readers can open | n/a | Telegram | 1 what the job is; 2 the link (#80) |
 
 ## Budgets (with tolerance) and the benchmark walk
 
 Tolerance: 5 % or the measurement's noise, median of 10 runs (policy 1.5). Baselines are measured in the first
 evidence run (phase 2) and written here then.
 
+All screen budgets are measured on the 1-million-post synthetic state file, under the minimum-device limits above.
+
 - Screen start-up to the first useful Dashboard: 2 s warm, 5 s cold (default). The harness measured about 4.5 s for
   the first tab on the large state file (#56).
 - Local interactions (tab switch, selection, typing): 100 ms (P7).
 - No event-loop block over 1 s (P1), from asyncio's slow-callback log.
-- **ALERT1, latency:** from a source post's time to its forward in the channel, 95 % under 60 s while connected,
-  measured from the state file's post and forward times (aggregate only). The catch-up after downtime or a lost
-  connection is reported separately (its own median and 95th percentile), not left out.
+- **ALERT1, latency (owner):** proposed: from a source post's Telegram date to its forward in the channel, 95 % under
+  60 s while connected, with the catch-up after downtime reported separately (its own median and 95th percentile).
+  **Not checked** until the bot records each post's Telegram date (#74); then also a timed run with a fake Telegram
+  in the benchmark walk.
 - The bot's own memory: under 200 MB resident (proposed; measured in phase 2).
 
 **Benchmark walk:** open the screen on the harness's synthetic state file with 1 million posts (about 10 times the
@@ -222,6 +257,10 @@ Settings and the Chats table, decide 3 review posts.
 - **Combined score (owner):** proposed **F0.5** over posts labelled TRUE and FALSE, where a publish is a positive.
   F0.5 weighs precision twice as much as recall: a wrong publish reaches every reader of the channel, while a missed
   one costs only the owner. Review counts as not published.
+- **Review guard (owner):** F0.5 can be raised by sending more posts to review, which costs the owner time. So every
+  filter PR also reports the TRUE→review and all→review counts, and neither may rise without the owner's OK.
+- **Same corpus, same run:** the corpus grows as the owner reviews. Every filter PR runs main and the branch in the
+  same session on the same corpus file and reports its line count and sha256 (no text).
 - **Snapshot and held-out part (owner):** only the owner cuts the fixed snapshot and its held-out part (stored
   encrypted outside every repository). Until then there is no held-out score, so nothing ratchets yet. Whether the
   visible corpus's score may stand in meanwhile is an owner question. PRs still report it and may not lower it
@@ -245,12 +284,14 @@ forwards). Not 7.1 to 7.5.
 
 The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes and their variables, plus
 `tui/telenotify_tui/app.tcss`. Additions:
-- **Verdict styles:** publish uses `$success`, review `$warning`, reject `$error`, and each always has its word (A5).
+- **Verdict styles (target):** publish uses `$success`, review `$warning`, reject `$error`, and each always has its
+  word (A5). **Today** the code uses literal Rich colours (`bold green/yellow/red`, `dim`) in Search and the Dashboard
+  (#75).
 - **Spacing:** 0, 1 or 2 cells.
 - **Glossary:** post, verdict (publish, review, reject), review queue, send, discard, match no send (`k`), chat,
   watched, target chat, dry run, real bot, period, corpus.
 - **Voice:** plain and short; say what happened and what to do; no exclamation marks.
-- Exceptions to V3 (literal colours): none.
+- Exceptions to V3 (literal colours): none; the literals today are fails (#75).
 
 ## Evidence tools and synthetic data
 
@@ -273,15 +314,14 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
 |---|---|
 | WEB, GNOME, AND, WIN, GM, READER, VIEW, SHARE, TRAIN, FIELD2, FILTER, HAND1 | not those platforms or kinds |
 | A6, A13 to A16, A29, A30 | no pictures behind text, no video, no sound, no generated documents, no haptics |
-| A20 | no gestures, drags or device motion are needed |
 | N5 | no URLs or incoming links |
 | T9 | no children use it |
-| O1, O4 | no system notifications or badges |
 | L1, L6, and L4's UI-locale part | the UI is English only (L4's search part applies: Arabic letter forms and diacritics) |
 | D7 | no updater of its own (`deploy/install.sh` is run by hand) |
 | MSG4's command menu | it acts as a user account, not a bot; its controls live in the screen (MSG4 says so) |
 
-Not N/A, so they apply: A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
+Not N/A, so they apply: A20 (copying needs a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
+Dashboard's alert count, #79), A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
 targets: terminal cells, and a destructive button spaced from others), A22, T2 and T4 (a Telegram session; the bot
 fetches job pages and runs OCR on images), ST3 (Telegram outages and catch-up), ST5 (the screen, `telenotify review`
 and the bot edit the same state and config).
@@ -293,7 +333,8 @@ Proposed; none is accepted until the owner writes so. Checks on the owner's lapt
 each release (8.5) unless agent evidence covers them:
 - how it really looks and feels in Kitty and VTE, and whether an OSC 52 copy reaches the clipboard (about 5 min);
 - Orca reading the command line's output in GNOME Terminal (about 10 min);
-- whether alerts in Saved Messages notify the owner's phone (about 2 min).
+- whether alerts in Saved Messages notify the owner's phone (about 2 min);
+- Orca reading the screen itself in GNOME Terminal (about 10 min).
 
 Proposed reasons, each a severity-2 tracked item due by the next release, expiring 2027-05-19:
 - a real Telegram ban or log-out of the account (needs the live account; covered with fakes in tests).
