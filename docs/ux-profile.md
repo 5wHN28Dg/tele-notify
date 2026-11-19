@@ -371,10 +371,29 @@ profile is stricter and wins: those are owner-check items (policy 1.6).
 
 ## Law and platform duties, T0 (owner)
 
-The owner keeps this checklist. To start it (agent's draft, owner to complete):
-- Telegram's API Terms of Service for an automated user account (rate limits, no spam, no misuse of others' data).
-- Republishing others' posts: only from public sources, or with the admins' agreement (T13).
-- Iraq's and the owner's local rules on republishing job adverts: owner question.
+The owner keeps this checklist. The agent drafted it on 2026-11-19 from Telegram's pages, read that day:
+[API Terms](https://core.telegram.org/api/terms), [Obtaining api_id](https://core.telegram.org/api/obtaining_api_id),
+[Terms of Service](https://telegram.org/tos) and [Content Licensing](https://telegram.org/tos/content-licensing).
+Telegram's privacy policy and Security Guidelines weren't read yet. The owner marks each line **yes** (met),
+**no** or **unsure**. Until the owner marks it, a line is an open question. An open question blocks merging a change
+that touches it.
+
+| # | Duty (short quote) | Source | How tele-notify stands (agent's reading) | Owner |
+|---|---|---|---|---|
+| 1 | "You must obtain your own api_id for your application" | API Terms 2.1 | each installer uses their own `api_id` in their config; the README should say so | |
+| 2 | App title "must not include the word 'Telegram'"; no official logo | API Terms 2.3, 2.4 | the name is tele-notify, and there's no logo | |
+| 3 | Users "must be aware" the app uses the Telegram API | API Terms 2.2 | the README says it uses TDLib; there's no store page or intro | |
+| 4 | No "actions on behalf of the user without the user's knowledge and consent"; no "ghost mode" read tampering | API Terms 1.4 | forwards happen only by the owner's own setup and review; reading marks chats read as a normal client does (to check) | |
+| 5 | No "flooding, spamming, faking subscriber and view counters"; accounts on unofficial clients are "under observation" | Obtaining | one forward per match, no counters; there are no numeric limits on these pages, and TDLib's `FLOOD_WAIT` is obeyed (to check) | |
+| 6 | No use of Telegram data to "train, fine-tune … or deployment of artificial intelligence, machine learning models" | API Terms 1.5; Content Licensing | the filter is keyword rules, not ML. **Unsure:** OCR uses tesseract's LSTM model on images from posts; the private corpus is used only to test the rules | |
+| 7 | Content access "for any purpose other than ordinary, legitimate, and intended use" is prohibited; data scraping is prohibited | Content Licensing; ToS | **unsure:** it reads chats the account joined, as a client; "scraping" isn't defined. The bot also follows job-board links outside Telegram | |
+| 8 | "Adhere to any stipulated conditions … in regard to copyright" placed by the content's owners | Content Licensing | **unsure:** it republishes others' posts by forwarding (the source shows); no source's conditions were checked | |
+| 9 | Clients that access channel content "must include support for official sponsored messages … and may not interfere" | API Terms 3.3 | **unsure:** it shows no channel to a person, so it neither shows nor blocks sponsored messages | |
+| 10 | Guard users' privacy "with utmost care" and follow the Security Guidelines | API Terms 1.1 | the session and state are kept in `~/.local/share/tele-notify` (mode 700); others' messages are stored, and their text is cleared after `keep_text_days`. The guidelines weren't read yet | |
+| 11 | Republishing only from public sources, or with the admins' agreement | this policy, T13 | not checked today (#68) | |
+| 12 | Iraq's and your local rules on republishing job adverts and storing others' messages (phone numbers in posts) | local law | owner question | |
+
+If the account is banned without a breach, Telegram's page says to write to recover@telegram.org (Obtaining).
 
 ## Review brief
 
