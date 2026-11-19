@@ -403,3 +403,31 @@ async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_syst
         app.post_message(_up(yes, now))
         await settle(app, pilot)
         assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+async def test_a_late_two_button_click_in_a_stall_confirms(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    import time
+
+    from textual import events
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        screen = app.screen
+        yes = screen.query_one("#confirm-yes", Button)
+        while time.monotonic() < screen._armed_at + 0.05:
+            await pilot.pause(0.05)
+        now = time.monotonic()
+        x, y = yes.region.x + 2, yes.region.y + 1
+
+        def ev(cls, button):
+            e = cls(None, x, y, 0, 0, button, False, False, False, screen_x=x, screen_y=y)
+            e.time = now
+            return e
+        # left down, right down, right up, left up: all queued before the screen handles any
+        for e in (ev(events.MouseDown, 1), ev(events.MouseDown, 3), ev(events.MouseUp, 3), ev(events.MouseUp, 1)):
+            app.post_message(e)
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]

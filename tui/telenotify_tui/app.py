@@ -47,14 +47,17 @@ class TeleNotifyApp(App):
             except (NoWidget, ScreenStackError):   # outside every widget, or no screen yet
                 widget = None
             if isinstance(event, events.MouseDown):
-                self._down = (widget, event.time) if widget is not None else None
-            else:
                 if widget is not None:
-                    # a release with no press on the same widget still makes a Click in
-                    # Textual; it's recorded as made at the dawn of time, so it's refused
-                    made = self._down[1] if self._down is not None and self._down[0] is widget else float("-inf")
+                    self._down[event.button] = (widget, event.time)
+                else:
+                    self._down.pop(event.button, None)
+            else:
+                down = self._down.pop(event.button, None)
+                if widget is not None:
+                    # a release with no press of that button on the same widget still makes
+                    # a Click in Textual; it's recorded as made long ago, so it's refused
+                    made = down[1] if down is not None and down[0] is widget else float("-inf")
                     self.press_made_at.setdefault(widget, deque()).append(made)
-                self._down = None
         await super().on_event(event)
 
     CSS_PATH = "app.tcss"
@@ -71,7 +74,7 @@ class TeleNotifyApp(App):
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
         self.press_made_at: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
-        self._down: tuple[Widget, float] | None = None
+        self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
         self.refresh_seconds = refresh_seconds
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
