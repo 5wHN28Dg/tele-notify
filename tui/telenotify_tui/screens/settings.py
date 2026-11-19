@@ -73,8 +73,15 @@ class ConfirmModal(ModalScreen[bool]):
                               padding: 1 2; }
     ConfirmModal Horizontal { height: auto; margin-top: 1; }
     ConfirmModal Button { margin-right: 2; }
+    /* the stock -error button's text is 4.47:1; these pass 4.5:1 in both themes */
+    ConfirmModal Button.-style-default.-error, ConfirmModal Button.-style-default.-error:hover,
+    ConfirmModal Button.-style-default.-error.-active {
+        background: $error-muted; color: $text-error;
+    }
+    ConfirmModal #confirm-wait { color: $text-muted; height: 1; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("y", "answer(True)", "Confirm"),
+                                             Binding("n,escape", "answer(False)", "Cancel")]
 
     def __init__(self, message: str, yes: str, destructive: bool = True):
         super().__init__()
@@ -85,6 +92,7 @@ class ConfirmModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(Text(visual(self.message)), id="confirm-text")
+            yield Static("", id="confirm-wait")
             with Horizontal():
                 yield Button(f"{self.yes} (y)", variant=self.variant, id="yes")
                 yield Button("Cancel (n)", id="no")
@@ -96,13 +104,19 @@ class ConfirmModal(ModalScreen[bool]):
     def _armed(self) -> bool:
         return time.monotonic() >= self._armed_at
 
+    def _too_soon(self) -> bool:
+        if self._armed():
+            return False
+        self.query_one("#confirm-wait", Static).update("Just opened: press again to confirm.")
+        return True
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "yes" and not self._armed():
+        if event.button.id == "yes" and self._too_soon():
             return
         self.dismiss(event.button.id == "yes")
 
     def action_answer(self, yes: bool) -> None:
-        if yes and not self._armed():
+        if yes and self._too_soon():
             return
         self.dismiss(yes)
 
@@ -953,7 +967,8 @@ class SettingsPane(Vertical):
 
         self.app.push_screen(ConfirmModal(
             f"Not saved: config.json was changed elsewhere for {keys}, which you changed too.\n"
-            "Use the file's value for these and keep your other edits?", "Use the file's", destructive=False), done)
+            "Drop your edits to these and use the file's values? Your other edits are kept.",
+            "Drop my edits to these"), done)
 
     async def _offer_restart(self, mode: str) -> None:
         """After a save: offer to restart the bot, but only when it is running

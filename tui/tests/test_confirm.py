@@ -67,7 +67,7 @@ async def test_service_dialog_names_the_action_and_its_effect(paths, fake_system
         assert str(yes.label).startswith("Stop") and yes.variant == "error"
         assert "Cancel" in str(app.screen.query_one("#confirm-no", Button).label)
         question = str(app.screen.query_one("#confirm-question").render())
-        assert "forward" in question                # says what stopping means
+        assert "forwards nothing" in question       # the conftest paths are the dry run
         await pilot.press("escape")
         await settle(app, pilot)
 
@@ -95,3 +95,62 @@ async def test_a_carried_over_press_cant_confirm(paths, cfg_path, fake_systemctl
             await settle(app, pilot)
             assert isinstance(app.screen, ConfirmScreen)
             assert not [c for c in fake_systemctl if c[0] == "action"]
+
+
+async def test_the_real_service_dialog_says_forwarding_stops(paths, fake_systemctl):  # noqa: F811
+    app = TeleNotifyApp(replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause()
+        question = str(app.screen.query_one("#confirm-question").render())
+        assert "forwarding matches" in question and "forwards nothing" not in question
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+
+def _ratio(fg, bg) -> float:
+    def lum(c):
+        def ch(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
+    a, b = sorted((lum(fg), lum(bg)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
+@pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
+async def test_the_destructive_button_text_is_readable(paths, cfg_path, fake_systemctl, theme):  # noqa: F811
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.theme = theme
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause()
+        for sel in ("#confirm-yes",):
+            b = app.screen.query_one(sel, Button)
+            bg = b.styles.background
+            fg = bg + b.styles.color                 # text colour over the button, alpha applied
+            assert _ratio(fg, bg) >= 4.5, (theme, str(fg), str(bg))
+        await pilot.press("escape")
+        await settle(app, pilot)
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        b = app.screen.query_one("#yes", Button)
+        bg = b.styles.background
+        assert _ratio(bg + b.styles.color, bg) >= 4.5, theme
+
+
+async def test_a_too_early_press_says_why_nothing_happened(paths, cfg_path, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(ConfirmModal, "ARM_DELAY", 5.0)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert "press again" in str(app.screen.query_one("#confirm-wait").render())
