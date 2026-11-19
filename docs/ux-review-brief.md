@@ -38,12 +38,14 @@ Then:
   motion. Look for gaming of the policy (0.7). Record at least one concrete thing you tried per touched rule group.
 
 - **Filter changes:** check that the PR reports `telenotify eval` aggregate numbers on the private corpus (only
-  counts, never text) and that the combined score in the profile didn't fall (real-data evaluation, Z1, ALERT2).
+  counts, never text), for main and the branch in the same run on the same corpus file, with its line count and
+  sha256; that the combined score (the profile's) didn't fall; and that the TRUE→review and all→review counts didn't
+  rise without the owner's OK quoted (the review guard). Real-data evaluation, Z1, ALERT2.
 - **Not checked** is accepted only for a reason on the profile's accepted list, or one the owner accepted in writing
   for this change (quoted in the PR with date).
 - **The review machinery runs from the base branch** (8.4): the harness, fixtures, goldens and this brief. A PR that
   changes any of them is a narrowing: say so and check that diff too. Until the harness is on main, use it only from
-  the `ui-audit-harness` branch at the commit the PR names (never the PR's own copy), or follow the checklist in
+  the `ui-audit-harness` branch at commit `1037269` (pinned here; changing the pin is a change to this brief), or follow the checklist in
   `docs/UI-UX-POLICY.md` 3.3 by hand. For evidence made on the owner's machine, check its manifest against the
   base-branch scripts and rerun one randomly chosen fixture yourself; a mismatch is gaming (0.7).
 - **Images:** mark a rule Pass only for images you were shown, and list them.

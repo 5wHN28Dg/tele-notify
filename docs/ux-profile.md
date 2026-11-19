@@ -11,8 +11,11 @@ delegation in CLAUDE.md is also unanswered (policy 0.2), so until the owner answ
 `tui/`** and only propose them. Changes to tests and to the bot's own code inside the delegation go ahead.
 
 **Phase-1 check** (the never-waivable set, U1, A1 and A5, plus T13 and MSG6) was done by hand on 2026-11-19. Its fails
-are tracked as `ux` issues #54 to #60, #62 to #81 (list: `gh issue list --label ux`). A10 and T1 passed, T9 is N/A,
-and T0 waits for the owner's checklist below. Z1's test leak was fixed in PR #61.
+are tracked as `ux` issues #55 and #62 to #73. Earlier harness finds are #54 to #60, and finds from this profile's
+reviews are #74 to #86 (all: `gh issue list --label ux`). A10 and T1 passed, T9 is N/A, and T0 waits for the owner's
+checklist below. Z1 failed: TUI tests wrote two synthetic labels into the owner's real `review-labels.jsonl`. The
+cause is fixed in PR #61 (open at the time of writing). The two lines are still in the file until the owner removes
+them, and they count in every `telenotify eval` until then.
 
 This profile covers the whole product: the bot and its command line (`telenotify`, `deploy/install.sh`,
 `deploy/build-tdlib.sh`), the messages it sends, and the terminal screen (`telenotify-tui`). The older project
@@ -69,7 +72,7 @@ Proposed; the agent's draft until the owner confirms it.
 | Tuning keywords | Safe: see the effect before saving, undo by not saving | GNOME Settings' lists |
 | The command line | Plain, scriptable, honest | `gh` (clig.dev) |
 | Messages to the user | Rare and worth reading | Signal's system notices |
-| What the channel's readers get | Only real matches, the original post untouched | a curated job-alert channel |
+| What the channel's readers get | Only real matches, the original post untouched (today a short fallback text when forwarding is blocked, #80) | a curated job-alert channel |
 
 Tie-breakers for UI choices this profile doesn't settle (1.3), **(owner)**, proposed: the reference product named
 above for that part; then Textual's widgets for the screen and clig.dev for the command line. Until the owner
@@ -104,8 +107,8 @@ The intent orders in the screen table, the main-task targets and the budgets are
 - **Other installers** (assumption: none known yet): people who follow the README to run it for their own job hunt.
   They know Linux and a terminal, but not this code. They fear a long build, a Telegram ban, and breaking their
   account. This is why FIELD1 and T11 apply.
-- **Recipients** (never run it): the readers of the owner's public channel, job seekers in Basra. They see only the
-  forwarded original posts. They fear wrong, stale or duplicate posts, and noise. Evidence: assumption.
+- **Recipients** (never run it): the readers of the owner's public channel, job seekers in Basra. They see the
+  forwarded original posts, and the bot's short fallback text when forwarding is blocked (#80). They fear wrong, stale or duplicate posts, and noise. Evidence: assumption.
 - **Others affected:** the authors and admins of the watched chats, whose posts are republished (T13). Evidence:
   assumption.
 - **Where and how:** at a desk, in a terminal beside the running service, a few minutes at a time, often interrupted;
@@ -120,9 +123,9 @@ The intent orders in the screen table, the main-task targets and the budgets are
   - One hand: every main-task key is a single key or has a button; chords are the gap (A22).
   - Cognitive: plain words (A24), one decision per dialog, nothing to remember (the footer shows the keys).
   - Photosensitivity: nothing flashes (A10 passed). The Dashboard refreshes every few seconds by itself; it must be
-    possible to pause it (A11).
+    possible to pause it (A11; not possible today, #82).
   - Deafness: the product makes no sound.
-  - **Blindness: the non-visual path is incomplete (tracked; severity 2).** The screen draws in a terminal grid that
+  - **Blindness: the non-visual path is incomplete (tracked in #70; the fix's reviewer rates it, at least severity 1 for "find why", 9.5).** The screen draws in a terminal grid that
     Kitty doesn't expose to screen readers. The command line is the non-visual path where it exists:
 
     | Main task | Non-visual path today |
@@ -133,10 +136,16 @@ The intent orders in the screen table, the main-task targets and the budgets are
     | Read the numbers for a period | partly: `telenotify stats --days:N` |
     | Edit keywords, watch chats | editing `config.json` in a text editor (chats by ID only) |
     | Start, stop, restart | `systemctl --user` (outside the product) |
+    | Undo a review decision | none |
+    | Match, don't send (`k`) | none |
+    | Remove duplicate keywords, revert | editing `config.json` |
+    | Switch dry run and real, the target chat, publish-when-unsure | editing `config.json` and restarting with `systemctl --user` |
+    | Test settings on the corpus | partly: `telenotify eval` (no before / after) |
+    | Remove a wrong post from the channel | none (not built, #69) |
     | Install, log in, update | the README steps and command output |
 
     The gaps are tracked in #70; none is recorded as N/A. "Find why a post got its verdict" has no path at all, so
-    that gap shuts a blind user out of a main task (severity 1 by 9.5; the reviewer of the fix rates it). Orca
+    that gap shuts a blind user out of a main task (severity 1 by 9.5). Orca
     reading the screen itself in GNOME Terminal (VTE exposes its text) is an owner-check item below.
 - **Age:** adults only; no children use it.
 - **Languages:** the UI is English. Content (posts, chat titles, keywords) is Arabic, English and mixed, with emoji,
@@ -146,8 +155,9 @@ The intent orders in the screen table, the main-task targets and the budgets are
 
 - **OS:** Linux with a systemd user session. Nothing else is supported.
 - **Typical device:** the owner's laptop (Ubuntu GNOME, 37.5 GiB RAM, a 1920 × 1080 class screen).
-- **Oldest and smallest supported device (owner):** proposed: a 2-core machine with 4 GB of RAM (what the TDLib
-  build needs), simulated by running the benchmark walk under a 2-CPU, 4 GB memjob limit.
+- **Oldest and smallest supported device (owner):** proposed: a 2-core machine with 4 GB of RAM, simulated by
+  running the benchmark walk under a 2-CPU, 4 GB memjob limit. On it, TDLib builds with `JOBS=1` (about 4 GB per
+  parallel job, `deploy/build-tdlib.sh`), which takes about an hour.
 - **Terminals:** Kitty 0.47 (main); Ptyxis and GNOME Terminal (VTE); Zed's terminal; inside `tmux` and over `ssh`.
   All truecolour.
 - **Sizes:** 80 × 24 smallest (80 × 23 inside `tmux` with its status line, also checked); 120 × 40 typical; 200 × 50 largest checked.
@@ -170,7 +180,7 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 |---|---|---|---|---|
 | Matching jobs reach my channel on their own | owner, recipients | continuous | each match is forwarded once | ALERT1 latency below; ALERT2 score |
 | See whether the bot is fine | owner | daily | service state, connection, dry run or real, pending reviews and alerts read on the Dashboard | 0 actions (screen just opened); first useful screen within 2 s warm on the 1M-post state file |
-| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K: no keys exist today, so Tab presses count (#57) |
+| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K: no keys exist today (#83), so Tab presses count |
 | Review an unsure post (sends to the public channel) | owner | daily | the post is sent, discarded or kept, labelled, with undo offered | K/M 1 per post (Review open, post read); from Dashboard +1 |
 | Undo a review decision | owner | weekly | any decision the bot hasn't acted on is back in the queue, its label removed | K/M 1 for the last one; K/M 3 for an older one from History (today only the last of this run, #76) |
 | Find why a post got its verdict | owner | weekly | the post's verdict and reasons are on screen | K: `3` + the words + 1; M: 1 + the words + 1 (Dashboard open) |
@@ -185,9 +195,9 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 | Test settings on the corpus before saving | owner | monthly | the corpus result is shown next to the saved settings' result | 1 action |
 | Remove a wrong post from the channel (MSG6) | owner | rare | the post is gone from the channel | not built yet (#69) |
 | Report a problem (FIELD1) | other installers | rare | a report with diagnostics, private data removed, reaches the owner | not built yet (#72) |
-| Change how long post text is kept (`keep_text_days`, deletes data) | owner | rare | the setting is saved; the screen says what will be cleared | not in Settings yet (config only) |
+| Change how long post text is kept (`keep_text_days`, deletes data) | owner | rare | the setting is saved; the screen says what will be cleared | not in Settings yet (config only, #84) |
 | Open the screen the first time (no state file, no chat list yet) | owner, other installers | once | the screen says what's missing and the next step | 0 actions; within 60 s to the first main task |
-| Install, log in and start the service (first setup) | owner, other installers | once | the bot runs from `~/.local/bin`, logged in, as a user service | README steps only, each warning explained beforehand; TDLib build time measured and stated in the README (20–60 min today); the rest within 10 min |
+| Install, log in and start the service (first setup) | owner, other installers | once | the bot runs from `~/.local/bin`, logged in, as a user service | README steps only, each warning explained beforehand; TDLib build time measured and stated in the README (about an hour on one core today); the rest within 10 min |
 | Update after `git pull` (live system) | owner, other installers | monthly | `deploy/install.sh` rebuilt and restarted it, or said why not | 1 command; PASS/FAIL and rollback (#64) |
 | Log in again after Telegram logs the account out (recovering access) | owner | rare | `telenotify login` works and the service restarts | the screen says what to run (#65); within 3 min |
 | Log out and uninstall (leaving) | owner, other installers | rare | the session, service, programs and data are gone, or kept where the README says | not documented yet (#72) |
@@ -218,7 +228,7 @@ table adds the intent order and the rest of the product. One row per layout; gro
 | Dates form (`RangeScreen`, custom period) | type a range | both fields, the error, the buttons | Show | enter / click | 1 the fields; 2 the error; 3 the buttons |
 | Filter-read view (`CheckModal`, review `r`) | show what the filter read from links | the text and Close | Close | `esc` / click Close | 1 the text; 2 Close |
 | Corpus test view (`EvalModal`, settings `t`) | before / after numbers on the corpus | the before / after table and Close | Close | `esc` / click Close | 1 the changed counts; 2 Close |
-| Command palette (Textual's, `ctrl+p`) | switch the theme, run commands | the search field and the matches | the chosen command | `ctrl+p` / not reachable by mouse | 1 the field; 2 the matches |
+| Command palette (Textual's, `ctrl+p`) | switch the theme, run commands | the search field and the matches | the chosen command | `ctrl+p` / click the header's icon | 1 the field; 2 the matches |
 | Toasts (`app.notify`: save, error and restart results) | say what happened | the whole message while shown | none | n/a | 1 the result |
 | Command line: `check`, `eval`, `stats`, `compare`, `run` output, usage and errors | as its help says | readable at 80 columns | n/a | keyboard | 1 the result or error; 2 the next step |
 | Command line: `telenotify review` (sends to the public channel) | decide unsure posts | the post, its reasons, the prompt | n/a | keyboard | 1 the post; 2 the reasons; 3 the prompt and what each key does |
@@ -322,7 +332,8 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
 
 Not N/A, so they apply: A20 (copying needs a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
 Dashboard's alert count, #79), A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
-targets: terminal cells, and a destructive button spaced from others), A22, T2 and T4 (a Telegram session; the bot
+targets: terminal cells, and a destructive button spaced from others; Delete sits beside Edit and Add, and Discard
+beside Send: checked in the first full audit), A22, T2 and T4 (a Telegram session; the bot
 fetches job pages and runs OCR on images), ST3 (Telegram outages and catch-up), ST5 (the screen, `telenotify review`
 and the bot edit the same state and config).
 
@@ -337,7 +348,11 @@ each release (8.5) unless agent evidence covers them:
 - Orca reading the screen itself in GNOME Terminal (about 10 min).
 
 Proposed reasons, each a severity-2 tracked item due by the next release, expiring 2027-05-19:
-- a real Telegram ban or log-out of the account (needs the live account; covered with fakes in tests).
+- a real Telegram ban or log-out of the account (needs the live account; covered with fakes in tests; #85);
+- ALERT1, alert latency, until #74 records each post's Telegram date, and its last leg to the phone (#86).
+
+Where the project policy (`docs/UI-UX-POLICY.md` 3.3) accepts "how it looks in Kitty or VTE" as Not checked, this
+profile is stricter and wins: those are owner-check items (policy 1.6).
 
 ## Third-party surfaces
 
@@ -371,6 +386,9 @@ None.
 5. The Not-checked reasons above, and your own access needs.
 6. The T0 checklist.
 7. The public channel's description (MSG6): the agent drafts it, the owner changes it.
+8. The tie-breakers, every screen's intent order, the main-task targets, the budgets (start-up, ALERT1's 60 s,
+   memory), the minimum device and the review guard's limit: all proposals until confirmed.
+9. Remove the two synthetic test labels (ids `-2:7` and `-1:11`) from `~/.local/share/tele-notify-corpus/review-labels.jsonl`.
 
 ## Mapping of the project policy (TN-R) to this policy
 
