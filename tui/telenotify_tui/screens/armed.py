@@ -56,12 +56,21 @@ class Armed:
     def _too_soon(self, button: Button) -> bool:
         """For a mouse press on the action: confirm only if the app saw a click on it made
         after the delay (the newest; the button's record is then cleared). A press with no
-        click on record is refused: fail closed."""
+        click on record is refused (fail closed), except headless (see below)."""
         clicks = getattr(self.app, "press_made_at", {}).pop(button, None)  # type: ignore[attr-defined]
         if self.ARM_DELAY <= 0:
             return False
-        if clicks and clicks[-1] >= self._armed_at:
+        if clicks:
+            made = clicks[-1]
+        elif getattr(self.app, "is_headless", False):  # type: ignore[attr-defined]
+            # Textual's test pilot (tests, the audit harness) hands clicks straight to the
+            # screen, past the app; headless there's no terminal and no stall, so now is when
+            made = time.monotonic()
+        else:
+            made = float("-inf")
+        if made >= self._armed_at:
             return False
+        button.remove_class("-active")   # Textual ignores a press while it shows the last one
         self._wait_note()
         return True
 

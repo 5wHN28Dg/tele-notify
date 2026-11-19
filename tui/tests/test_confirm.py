@@ -365,3 +365,41 @@ async def test_an_early_double_click_doesnt_make_the_next_click_too_quick(paths,
         app.post_message(_up(yes, now))
         await settle(app, pilot)
         assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+async def test_a_pilot_click_after_the_delay_confirms(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    # Textual's pilot (tests, the audit harness) hands clicks straight to the screen: headless, they count
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.5)
+        await pilot.click("#confirm-yes")
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    import time
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        screen = app.screen
+        yes = screen.query_one("#confirm-yes", Button)
+        while time.monotonic() < screen._armed_at - 0.05:
+            await pilot.pause(0.02)
+        now = time.monotonic()
+        app.post_message(_down(yes, now))                       # refused: just too early
+        app.post_message(_up(yes, now))
+        await pilot.pause()
+        while time.monotonic() < screen._armed_at + 0.05:      # well within Textual's 0.2 s press effect
+            await pilot.pause(0.02)
+        now = time.monotonic()
+        app.post_message(_down(yes, now))
+        app.post_message(_up(yes, now))
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]

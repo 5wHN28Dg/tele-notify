@@ -49,8 +49,11 @@ class TeleNotifyApp(App):
             if isinstance(event, events.MouseDown):
                 self._down = (widget, event.time) if widget is not None else None
             else:
-                if self._down is not None and self._down[0] is widget:
-                    self.press_made_at.setdefault(widget, deque()).append(self._down[1])
+                if widget is not None:
+                    # a release with no press on the same widget still makes a Click in
+                    # Textual; it's recorded as made at the dawn of time, so it's refused
+                    made = self._down[1] if self._down is not None and self._down[0] is widget else float("-inf")
+                    self.press_made_at.setdefault(widget, deque()).append(made)
                 self._down = None
         await super().on_event(event)
 
