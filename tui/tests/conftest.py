@@ -130,6 +130,17 @@ def no_decide_delay(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_arm_delay(monkeypatch):
+    """Tests answer confirmation dialogs right away; the delay that stops a
+    carried-over press is tested on its own (test_confirm.py sets it back)."""
+    from telenotify_tui.screens.dashboard import ConfirmScreen
+    from telenotify_tui.screens.settings import ConfirmModal
+
+    monkeypatch.setattr(ConfirmModal, "ARM_DELAY", 0.0)
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def no_systemctl(monkeypatch):
     """Tests never talk to the real systemd: the services look stopped and
     actions are refused (tests that need other answers patch these again)."""
