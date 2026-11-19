@@ -10,6 +10,10 @@ current settings what they would say now.
   check`, links not followed); `J` follows links too and shows the text the
   filter read. Then and now are shown side by side.
 * `p` opens a box to paste any post and judge it, for trying things out.
+
+Searching never blocks the screen: the state file is read in a thread
+("searching…" shows meanwhile), a newer search replaces one still running,
+and nothing is read until the tab is first shown.
 """
 
 from __future__ import annotations
@@ -18,12 +22,13 @@ from datetime import datetime
 from typing import ClassVar
 
 from rich.text import Text
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
+from textual.worker import get_current_worker
 
 from .. import bot
 from ..clean import clean
@@ -137,7 +142,9 @@ class SearchPane(Vertical):
         self._rows: dict[str, Judged] = {}
         self._selected: Judged | None = None
         self._debounce: Timer | None = None
-        self._loaded = False
+        self._loaded = False     # shown at least once: until then nothing is searched
+        self._generation = 0     # the newest search started; older results are dropped
+        self._pending: tuple | None = None   # (filters, with chats) of the search still reading
 
     # ------------------------------------------------------------ layout
 
@@ -206,17 +213,14 @@ class SearchPane(Vertical):
 
     def reload(self) -> None:
         """Refresh the chat list and re-run the current search."""
-        self._refresh_chats()
-        self.run_search()
+        self._loaded = True
+        if self._pending == (self._filters(), True):
+            return   # the same read just started (showing a tab asks twice)
+        self.run_search(chats=True)
 
-    def _refresh_chats(self) -> None:
+    def _apply_chats(self, chats: list[tuple[int, str]]) -> None:
         sel = self.query_one("#chat", Select)
         current = sel.value
-        try:
-            with self.app.store() as s:
-                chats = search_data.judged_chats(s) if s.exists else []
-        except Exception:  # noqa: BLE001 - a locked or odd state file shouldn't crash the screen
-            chats = []
         options = [("all chats", "all")] + [(Text(visual(short(title, 24))), cid) for cid, title in chats]
         if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])]:
             self._chat_options = options
@@ -224,16 +228,41 @@ class SearchPane(Vertical):
                 sel.set_options(options)
                 sel.value = current if any(o[1] == current for o in options) else "all"
 
-    def run_search(self) -> None:
+    def run_search(self, chats: bool = False, focus_results: bool = False) -> None:
+        """Search with the current filters (and with `chats`, refresh the chat list
+        first). The state file is read in a thread: on a big file a query takes
+        seconds, and the screen must keep answering meanwhile (issue #56). A
+        newer search replaces one still running; its results are dropped."""
         if self._debounce is not None:
             self._debounce.stop()
             self._debounce = None
-        query, verdict, chat_id = self._filters()
-        count = self.query_one("#count", Static)
+        self._generation += 1
+        filters = self._filters()
+        self._pending = (filters, chats)
+        self.query_one("#count", Static).update(Text("searching…", style="dim"))
+        self._search_worker(self._generation, *filters, chats, focus_results)
+
+    @work(thread=True, exclusive=True, group="search-state")
+    def _search_worker(self, generation: int, query: str, verdict: str | None, chat_id: int | None,
+                       chats: bool, focus_results: bool) -> None:
+        worker = get_current_worker()
+        found: list[tuple[int, str]] | None = None
         rows: list[Judged] = []
         problem = ""
         try:
             with self.app.store() as s:
+                if s.db is not None:
+                    # a replaced search stops at once instead of finishing a long scan
+                    s.db.set_progress_handler(lambda: worker.is_cancelled, 10_000)
+                if chats:
+                    try:
+                        found = search_data.judged_chats(s) if s.exists else []
+                    except Exception:  # noqa: BLE001 - a locked or odd state file shouldn't crash the screen
+                        if worker.is_cancelled:
+                            return
+                        found = []
+                    if chat_id is not None and chat_id not in {cid for cid, _ in found}:
+                        chat_id = None   # the chosen chat is gone: the filter goes back to all chats
                 if not s.exists:
                     problem = f"no state file yet ({self.app.paths.state})"
                 elif not s.has_table("processed"):
@@ -242,12 +271,29 @@ class SearchPane(Vertical):
                     rows = search_data.search(s, query, verdict, chat_id, limit=LIMIT)
         except Exception as e:  # noqa: BLE001
             problem = f"couldn't read the state: {e}"
+        if worker.is_cancelled:
+            return
+        try:
+            self.app.call_from_thread(self._apply, generation, found, rows, problem, focus_results)
+        except RuntimeError:   # the app closed while we read
+            pass
+
+    def _apply(self, generation: int, chats: list[tuple[int, str]] | None, rows: list[Judged], problem: str,
+               focus_results: bool) -> None:
+        if generation != self._generation or not self.is_mounted:
+            return   # a newer search is on its way
+        self._pending = None
+        if chats is not None:
+            self._apply_chats(chats)
         self._fill(rows)
+        count = self.query_one("#count", Static)
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:
             n = len(rows)
             count.update(f"{n}{'+' if n >= LIMIT else ''} result{'s' if n != 1 else ''}")
+        if focus_results and self._rows and self.query_one("#q", Input).has_focus:
+            self.query_one("#results", DataTable).focus()
 
     def _fill(self, rows: list[Judged]) -> None:
         table = self.query_one("#results", DataTable)
@@ -279,14 +325,15 @@ class SearchPane(Vertical):
 
     @on(Input.Submitted, "#q")
     def _submitted(self) -> None:
-        self.run_search()
-        if self._rows:
-            self.query_one("#results", DataTable).focus()
+        self.run_search(focus_results=True)   # Enter moves to the results once they are in
 
     @on(Select.Changed, "#verdict")
     @on(Select.Changed, "#chat")
     def _filter_changed(self) -> None:
-        self.run_search()
+        # The filters announce their first value when they are mounted: that must
+        # not search a tab nobody has opened yet (it held up the first tab, #56).
+        if self._loaded:
+            self.run_search()
 
     @on(DataTable.RowHighlighted, "#results")
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
