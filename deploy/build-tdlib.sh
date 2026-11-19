@@ -4,7 +4,8 @@
 #
 # This is shell, not Nim, on purpose: it only drives cmake/make for a C++
 # library. TDLib is big; compiling needs about 4 GB of RAM per parallel
-# job and takes 20-40 minutes. Lower JOBS if memory is tight.
+# job: JOBS=2 (8 GB) takes about 20-40 minutes, JOBS=1 (4 GB, the smallest
+# supported machine) about an hour. Lower JOBS if memory is tight.
 #
 #   JOBS=2 deploy/build-tdlib.sh            # default JOBS=2
 #   TD_REF=<commit> deploy/build-tdlib.sh   # another TDLib commit
