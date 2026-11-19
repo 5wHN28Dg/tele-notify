@@ -1,8 +1,10 @@
 import asyncio
 import dataclasses
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 from typing import Self
 
 from conftest import BAD, GOOD
@@ -12,7 +14,7 @@ from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.postview import PostView
 from telenotify_tui.screens import search_data
-from telenotify_tui.screens.search import SearchPane
+from telenotify_tui.screens.search import SearchPane, row_key
 from telenotify_tui.store import Store
 
 
@@ -329,7 +331,7 @@ async def test_a_newer_search_wins_over_a_slower_older_one(paths, monkeypatch):
         box.focus()
         await pilot.press(*"location", "enter")    # slow
         box.value = ""
-        box.focus()                                # (Enter moves to the results once they are in)
+        box.focus()                                # (Enter moved focus to the results table)
         await pilot.press(*"Iraq", "enter")        # fast, typed while the slow one runs
         await settle(app, pilot)
         await pilot.pause(SLOW_QUERY)
@@ -392,7 +394,8 @@ async def test_keys_typed_after_enter_act_on_the_new_results(paths, monkeypatch)
 
 
 async def test_rejudge_typed_after_enter_judges_the_new_result(paths, tmp_path, monkeypatch):
-    """Enter then j before a slow search is back: j re-judges the first new result, not typed into the box."""
+    """Enter then j before a slow search is back: j re-judges the selected post among the new results,
+    and isn't typed into the box."""
     calls = []
 
     async def fake_check(binary, config, text, scrape=False, show_text=False):
@@ -420,3 +423,164 @@ async def test_enter_with_no_results_leaves_focus_in_the_box(paths, monkeypatch)
         await settle(app, pilot)
         assert "0 results" in text_of(app, "#count")
         assert app.focused is app.query_one("#q", Input)
+
+
+def row_ids(app) -> list[int]:
+    t = app.query_one("#results", DataTable)
+    pane = app.query_one(SearchPane)
+    return [pane._rows[str(t.coordinate_to_cell_key((i, 0)).row_key.value)].msg_id for i in range(t.row_count)]
+
+
+def shown_matches_cursor(app) -> bool:
+    t = app.query_one("#results", DataTable)
+    sel = app.query_one(SearchPane)._selected
+    key = t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
+    return sel is not None and row_key(sel) == key
+
+
+async def test_a_post_clicked_after_enter_stays_selected(paths, monkeypatch):
+    """Rows 5, 11, 10, 6; "Basra", Enter, click post 11 while it runs; new rows 11, 10: 11 stays selected (P4)."""
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_search(app, pilot)
+        assert row_ids(app) == [5, 11, 10, 6]
+        app.query_one("#q", Input).focus()
+        await pilot.press(*"Basra", "enter")
+        await pilot.click("#results", offset=(5, 2))   # the second row (row 0 on screen is the header)
+        await pilot.pause(0.05)
+        assert app.query_one(SearchPane)._selected.msg_id == 11
+        await pilot.pause(SLOW_QUERY + 0.4)
+        await settle(app, pilot)
+        assert row_ids(app) == [11, 10]
+        assert app.query_one(SearchPane)._selected.msg_id == 11 and shown_matches_cursor(app)
+
+
+async def test_enter_keeps_the_selected_post_and_its_rejudge(paths, tmp_path, monkeypatch):
+    """Select post 10, re-judge it, back to the box, Enter on the same query: 10 and its result stay (U7)."""
+    async def fake_check(binary, config, text, scrape=False, show_text=False):
+        return bot.Verdict("publish", ["fake"])
+
+    monkeypatch.setattr(bot, "check", fake_check)
+    app = TeleNotifyApp(fake_binary(paths, tmp_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_search(app, pilot)
+        app.query_one("#results", DataTable).focus()
+        await pilot.press("down", "down", "j")
+        await settle(app, pilot)
+        pane = app.query_one(SearchPane)
+        assert pane._selected.msg_id == 10 and "now: publish" in text_of(app, "#judge-result")
+        app.query_one("#q", Input).focus()
+        await pilot.press("enter")
+        await pilot.pause(0.05)
+        assert pane._selected.msg_id == 10   # no jump to the old first row while it runs
+        await settle(app, pilot)
+        assert pane._selected.msg_id == 10 and shown_matches_cursor(app)
+        assert "now: publish" in text_of(app, "#judge-result")
+
+
+async def test_keys_after_enter_with_an_empty_table_stay_in_the_box(paths, monkeypatch):
+    """No results shown, then a new search, Enter and more letters: they go into the box, not the table (U3)."""
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_search(app, pilot)
+        box = app.query_one("#q", Input)
+        box.focus()
+        await pilot.press(*"zzz", "enter")
+        await settle(app, pilot)
+        await pilot.pause(SLOW_QUERY + 0.2)
+        await settle(app, pilot)
+        await pilot.press(*"zz", "enter", *"yp")
+        await pilot.pause(SLOW_QUERY + 0.4)
+        await settle(app, pilot)
+        assert not app.query_one(SearchPane).has_class("pasting")
+        assert box.value.endswith("yp") and app.focused is box   # (focusing the box selects its text)
+
+
+async def test_enter_with_an_empty_table_moves_to_results_when_they_arrive(paths, monkeypatch):
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_search(app, pilot)
+        box = app.query_one("#q", Input)
+        box.focus()
+        await pilot.press(*"zzz", "enter")
+        await pilot.pause(SLOW_QUERY + 0.2)
+        await settle(app, pilot)
+        box.value = ""
+        await pilot.press(*"Iraq", "enter")
+        await pilot.pause(0.05)
+        assert app.focused is box
+        await pilot.pause(SLOW_QUERY + 0.4)
+        await settle(app, pilot)
+        assert app.focused is app.query_one("#results", DataTable) and row_ids(app) == [5, 6]
+
+
+async def test_a_deferred_rejudge_never_judges_the_paste_box(paths, tmp_path, monkeypatch):
+    """"Iraq", Enter, j, then p and typing before the results: nothing is judged (I3)."""
+    calls = []
+
+    async def fake_check(binary, config, text, scrape=False, show_text=False):
+        calls.append(text)
+        return bot.Verdict("publish", ["fake"])
+
+    monkeypatch.setattr(bot, "check", fake_check)
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(fake_binary(paths, tmp_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_search(app, pilot)
+        await pilot.pause(SLOW_QUERY * 2 + 0.2)
+        await settle(app, pilot)
+        app.query_one("#q", Input).focus()
+        await pilot.press(*"Iraq", "enter", "j", "p")
+        await pilot.press(*"half typed")
+        await pilot.pause(SLOW_QUERY + 0.4)
+        await settle(app, pilot)
+        assert calls == []
+        assert text_of(app, "#paste-result").strip() == ""
+
+
+async def test_chat_list_arriving_while_the_dropdown_is_open_waits_until_it_closes(paths, monkeypatch):
+    """Open the chat filter during the first read: it says the chats are loading, and the list
+    isn't swapped under the pointer; it is there once the drop-down closes (P4, ST1)."""
+    slow_queries(monkeypatch, 1.0)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause(0.2)
+        sel = app.query_one("#chat", Select)
+        sel.focus()
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert sel.expanded
+        labels = [str(p) for p, _ in sel._options]
+        assert labels == ["loading chats…"], labels
+        await pilot.pause(2.2)
+        await settle(app, pilot)
+        assert sel.expanded and [v for _, v in sel._options] == ["all"]
+        await pilot.press("escape")
+        await settle(app, pilot)
+        values = [v for _, v in sel._options]
+        assert -1 in values and -2 in values and str(sel._options[0][0]) == "all chats"
+
+
+async def test_quitting_mid_search_on_a_locked_file_ends_at_once(paths):
+    """The bot holds an exclusive lock; quitting must not wait out SQLite's busy timeout (I6)."""
+    holder = sqlite3.connect(paths.state, timeout=0, isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        app = TeleNotifyApp(paths, refresh_seconds=0)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("3")
+            await pilot.pause(0.5)
+            assert "searching" in text_of(app, "#count")
+            await pilot.press("ctrl+q")
+        await asyncio.sleep(1.0)
+        # the exit waits for every thread: none may still be inside the search's read
+        stuck = [t for t, frame in sys._current_frames().items()
+                 if t != threading.get_ident() and any(f.f_code.co_filename.endswith("screens/search.py")
+                                                    for f, _ in traceback.walk_stack(frame))]
+        assert stuck == [], "a search thread still waits for the lock"
+    finally:
+        holder.close()
