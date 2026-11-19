@@ -101,6 +101,19 @@ def paths(config: Path, state: Path, tmp_path: Path) -> Paths:
 
 
 @pytest.fixture(autouse=True)
+def private_home(tmp_path_factory, monkeypatch):
+    """Every test gets its own HOME and no path variables, so nothing can reach
+    the owner's real corpus (review labels), state or config. Tests that need
+    a labels file or corpus point TELENOTIFY_LABELS / TELENOTIFY_CORPUS at their
+    own temporary files after this."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    for var in ("TELENOTIFY_LABELS", "TELENOTIFY_CORPUS", "TELENOTIFY_CONFIG", "TELENOTIFY_BIN",
+                "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_decide_delay(monkeypatch):
     """Tests press s / d right after a post appears; the double-tap guard is
     tested on its own (test_review.py sets the delay back)."""
