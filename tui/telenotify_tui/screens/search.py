@@ -144,7 +144,8 @@ class SearchPane(Vertical):
         self._debounce: Timer | None = None
         self._loaded = False     # shown at least once: until then nothing is searched
         self._generation = 0     # the newest search started; older results are dropped
-        self._pending: tuple | None = None   # (filters, with chats) of the search still reading
+        self._pending: tuple | None = None   # (filters, with chats, after Enter) of the search still reading
+        self._deferred_judge: bool | None = None   # j / J pressed while Enter's search ran
 
     # ------------------------------------------------------------ layout
 
@@ -214,7 +215,7 @@ class SearchPane(Vertical):
     def reload(self) -> None:
         """Refresh the chat list and re-run the current search."""
         self._loaded = True
-        if self._pending == (self._filters(), True):
+        if self._pending is not None and self._pending[:2] == (self._filters(), True):
             return   # the same read just started (showing a tab asks twice)
         self.run_search(chats=True)
 
@@ -232,14 +233,19 @@ class SearchPane(Vertical):
         """Search with the current filters (and with `chats`, refresh the chat list
         first). The state file is read in a thread: on a big file a query takes
         seconds, and the screen must keep answering meanwhile (issue #56). A
-        newer search replaces one still running; its results are dropped."""
+        newer search replaces one still running; its results are dropped, but
+        what it still had to do (the chat list, Enter's move to the results)
+        carries over to the newer one."""
         if self._debounce is not None:
             self._debounce.stop()
             self._debounce = None
+        if self._pending is not None:
+            chats = chats or self._pending[1]
+            focus_results = focus_results or self._pending[2]
         self._generation += 1
         filters = self._filters()
-        self._pending = (filters, chats)
-        self.query_one("#count", Static).update(Text("searching…", style="dim"))
+        self._pending = (filters, chats, focus_results)
+        self.query_one("#count", Static).update("searching…")   # #count's own muted colour (contrast)
         self._search_worker(self._generation, *filters, chats, focus_results)
 
     @work(thread=True, exclusive=True, group="search-state")
@@ -285,17 +291,25 @@ class SearchPane(Vertical):
         self._pending = None
         if chats is not None:
             self._apply_chats(chats)
-        self._fill(rows)
+        table = self.query_one("#results", DataTable)
+        # After Enter the results table has focus already; a key pressed there while
+        # the search ran (Down, say) moved its cursor, and that move is kept.
+        self._fill(rows, cursor=(table.cursor_row if self.app.focused is table else 0) if focus_results else None)
         count = self.query_one("#count", Static)
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:
             n = len(rows)
             count.update(f"{n}{'+' if n >= LIMIT else ''} result{'s' if n != 1 else ''}")
-        if focus_results and self._rows and self.query_one("#q", Input).has_focus:
-            self.query_one("#results", DataTable).focus()
+        if focus_results and not self._rows and self.app.focused is table:
+            self.query_one("#q", Input).focus()   # nothing found: back to the box, as before
+        judge, self._deferred_judge = self._deferred_judge, None
+        if judge is not None and self._rows:
+            self.action_rejudge(judge)
 
-    def _fill(self, rows: list[Judged]) -> None:
+    def _fill(self, rows: list[Judged], cursor: int | None = None) -> None:
+        """Show `rows`. The selected post stays selected if it is among them; with
+        `cursor`, that row is selected instead (the last one if there are fewer)."""
         table = self.query_one("#results", DataTable)
         keep = row_key(self._selected) if self._selected else None
         table.clear()
@@ -308,7 +322,11 @@ class SearchPane(Vertical):
             table.add_row(when(j.at, "%m-%d %H:%M"), Text(visual(short(j.chat_title, 14))), verdict_text(j.verdict),
                           Text(visual(short(j.role, 14))), Text(visual(short(search_data.main_reason(j.reasons), 32))),
                           key=k)
-        if keep in self._rows:
+        if cursor is not None and self._rows:
+            row = min(max(cursor, 0), table.row_count - 1)
+            table.move_cursor(row=row)
+            self._show_detail(self._rows[str(table.coordinate_to_cell_key((row, 0)).row_key.value)])
+        elif keep in self._rows:
             table.move_cursor(row=table.get_row_index(keep))
             self._show_detail(self._rows[keep], keep_result=True)
         elif rows:
@@ -325,7 +343,13 @@ class SearchPane(Vertical):
 
     @on(Input.Submitted, "#q")
     def _submitted(self) -> None:
-        self.run_search(focus_results=True)   # Enter moves to the results once they are in
+        # Enter moves to the results at once, so keys typed while the search runs
+        # (Down, j) reach the table, not the box; they act on the new results.
+        table = self.query_one("#results", DataTable)
+        if table.row_count:
+            table.move_cursor(row=0)
+        table.focus()
+        self.run_search(focus_results=True)
 
     @on(Select.Changed, "#verdict")
     @on(Select.Changed, "#chat")
@@ -389,6 +413,9 @@ class SearchPane(Vertical):
     def action_rejudge(self, follow_links: bool = False) -> None:
         if self.has_class("pasting"):
             self._judge_paste(follow_links)
+            return
+        if self._pending is not None and self._pending[2]:
+            self._deferred_judge = follow_links   # pressed after Enter: judge the new first result
             return
         j = self._selected
         out = self.query_one("#judge-result", Static)

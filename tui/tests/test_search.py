@@ -257,19 +257,19 @@ class LoopWatch:
             self._task.cancel()
 
 
-def slow_queries(monkeypatch) -> list[str]:
+def slow_queries(monkeypatch, secs: float = SLOW_QUERY) -> list[str]:
     """Make the search screen's two queries slow, and record the thread each ran on."""
     threads: list[str] = []
     search, chats = search_data.search, search_data.judged_chats
 
     def slow_search(*a, **k):
         threads.append(threading.current_thread().name)
-        time.sleep(SLOW_QUERY)
+        time.sleep(secs)
         return search(*a, **k)
 
     def slow_chats(*a, **k):
         threads.append(threading.current_thread().name)
-        time.sleep(SLOW_QUERY)
+        time.sleep(secs)
         return chats(*a, **k)
 
     monkeypatch.setattr(search_data, "search", slow_search)
@@ -336,3 +336,87 @@ async def test_a_newer_search_wins_over_a_slower_older_one(paths, monkeypatch):
         await settle(app, pilot)
         assert app.query_one("#results", DataTable).row_count == 2
         assert "2 results" in text_of(app, "#count")
+
+
+async def test_searching_note_is_readable(paths, monkeypatch):
+    """The loading note keeps #count's own muted colour: dim on top of it fails contrast (A1)."""
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause(0.1)
+        note = app.query_one("#count", Static).render()
+        assert "searching" in str(note)
+        styles = [span.style for span in note.spans]   # the Content the Static draws
+        assert not any("dim" in str(st) for st in styles), styles
+        await settle(app, pilot)
+
+
+async def test_typing_while_the_first_read_runs_still_loads_the_chat_list(paths, monkeypatch):
+    """Typing right after opening Search replaces the first read; the chat list it was loading must still come."""
+    slow_queries(monkeypatch, 1.0)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("3")
+        await pilot.pause(0.1)
+        app.query_one("#q", Input).focus()
+        await pilot.press(*"Iraq", "enter")
+        await pilot.pause(2.5)
+        await settle(app, pilot)
+        values = [v for _, v in app.query_one("#chat", Select)._options]
+        assert -1 in values and -2 in values, values
+        assert "2 results" in text_of(app, "#count")
+
+
+async def typed_ahead(app, pilot, *keys: str) -> None:
+    """Open Search, let the first read finish, then type a search, Enter and `keys` without waiting."""
+    await open_search(app, pilot)
+    await pilot.pause(SLOW_QUERY * 2 + 0.2)
+    await settle(app, pilot)
+    app.query_one("#q", Input).focus()
+    await pilot.press(*"Iraq", "enter", *keys)
+    await pilot.pause(SLOW_QUERY + 0.4)
+    await settle(app, pilot)
+
+
+async def test_keys_typed_after_enter_act_on_the_new_results(paths, monkeypatch):
+    """Enter then Down before a slow search is back: the cursor ends on the second new result (U3)."""
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await typed_ahead(app, pilot, "down")
+        table = app.query_one("#results", DataTable)
+        assert table.row_count == 2 and app.focused is table
+        assert table.cursor_row == 1
+        assert app.query_one(SearchPane)._selected.msg_id == 6   # Iraq Jobs: msg 5 (newer), then 6
+
+
+async def test_rejudge_typed_after_enter_judges_the_new_result(paths, tmp_path, monkeypatch):
+    """Enter then j before a slow search is back: j re-judges the first new result, not typed into the box."""
+    calls = []
+
+    async def fake_check(binary, config, text, scrape=False, show_text=False):
+        calls.append(text)
+        return bot.Verdict("reject", ["no matching role"])
+
+    monkeypatch.setattr(bot, "check", fake_check)
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(fake_binary(paths, tmp_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await typed_ahead(app, pilot, "j")
+        assert app.query_one("#q", Input).value == "Iraq"
+        assert calls == [BAD]
+        assert "then: reject" in text_of(app, "#judge-result")
+
+
+async def test_enter_with_no_results_leaves_focus_in_the_box(paths, monkeypatch):
+    slow_queries(monkeypatch)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_search(app, pilot)
+        app.query_one("#q", Input).focus()
+        await pilot.press(*"zzz-nothing", "enter")
+        await pilot.pause(SLOW_QUERY + 0.4)
+        await settle(app, pilot)
+        assert "0 results" in text_of(app, "#count")
+        assert app.focused is app.query_one("#q", Input)
