@@ -218,10 +218,10 @@ async def test_svg_cells_have_the_drawn_text_and_colours():
 
 def test_the_leak_scan_finds_the_login_name_and_home(tmp_path: Path):
     (tmp_path / "ok.txt").write_text("/tmp/tn-audit/r/config.json", encoding="utf-8")
-    assert evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone") == []
+    assert evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone", names=[]) == []
     (tmp_path / "bad.svg").write_text("<text>/home/someone/x</text>", encoding="utf-8")
     (tmp_path / "someone.txt").write_text("", encoding="utf-8")
-    hits = evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone")
+    hits = evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone", names=[])
     assert {h["what"] for h in hits} == {"real home path", "login name", "login name in the file name"}
     assert evidence.redact("at /home/someone/x", Path("/home/someone")) == "at ~/x"
 
@@ -321,3 +321,74 @@ def test_hostile_text_run(out: Path):
     assert rec["steps"] and "payload_sequences_found" in rec
     seen = {m for s in rec["steps"] for m in s["markers_seen"]}
     assert any(m.startswith("ZqPO") for m in seen) and any(m.startswith("ZqKW") for m in seen)
+
+
+def test_an_out_that_holds_protected_places_is_refused(fake_home: Path, tmp_path: Path):
+    # the leak scan reads everything under --out: never the home or a folder above a protected place
+    for out in (fake_home, fake_home / ".local", fake_home / ".local" / "share", fake_home / ".config"):
+        (fake_home / ".config" / "tele-notify").mkdir(parents=True, exist_ok=True)
+        with pytest.raises(guard.Refused):
+            sbx.check(sbx.plan(out, real_home=fake_home))
+    base = tmp_path / "base"
+    base.mkdir()
+    sneaky = tmp_path / "sneaky"
+    sneaky.symlink_to(base)
+    with pytest.raises(guard.Refused):                       # a symlink into the run folders
+        sbx.check(sbx.plan(sneaky / "x", base=base, real_home=fake_home))
+
+
+def test_the_leak_scan_follows_no_symlinks_and_reads_nothing_protected(fake_home: Path, tmp_path: Path,
+                                                                     monkeypatch):
+    corpus = fake_home / ".local" / "share" / "tele-notify-corpus" / "eval.jsonl"
+    corpus.write_text("private", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "link").symlink_to(corpus)
+    (out / "dirlink").symlink_to(corpus.parent)
+    read = []
+    real_read = Path.read_bytes
+
+    def spy(self):
+        read.append(self)
+        return real_read(self)
+    monkeypatch.setattr(Path, "read_bytes", spy)
+    hits = evidence.leaks(out, home=fake_home, login="someone", names=[])
+    assert read == []
+    assert {h["file"] for h in hits if h["what"] == "symlink (not followed)"} == {"link", "dirlink"}
+
+
+def test_the_leak_scan_finds_the_real_name(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("by Zainab Example on box1", encoding="utf-8")
+    hits = evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone", names=["Zainab", "box1"])
+    assert {h["what"] for h in hits} == {"real name or host name"}
+
+
+def test_contrast_isnt_rounded_up_to_the_minimum():
+    assert svg.contrast("#777777", "#070707") == 4.5                 # shown rounded
+    from textual.app import App
+    from textual.widgets import Static
+
+    class Edge(App):
+        CSS = "Static { color: #777777; background: #070707; }"
+
+        def compose(self):
+            yield Static("edge")
+    import asyncio
+
+    async def shot():
+        app = Edge()
+        async with app.run_test(size=(10, 1)):
+            return app.export_screenshot()
+    g = svg.parse(asyncio.run(shot()), 10, 1)
+    [pair] = svg.pairs(g, (0, 0, 4, 1))
+    assert pair["below_minimum"]                                        # 4.498 is below 4.5
+
+
+def test_the_app_folder_cant_be_a_protected_place(fake_home: Path, monkeypatch):
+    from audit import appsrc
+    installed = fake_home / ".local" / "lib" / "tele-notify" / "tui-venv" / "site-packages"
+    (installed / "telenotify_tui").mkdir(parents=True)
+    (installed / "telenotify_tui" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(guard, "real_home", lambda: fake_home)
+    with pytest.raises(SystemExit, match="refusing"):
+        appsrc.use(installed)

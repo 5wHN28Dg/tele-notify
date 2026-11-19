@@ -21,6 +21,10 @@ HERE = Path(__file__).resolve().parents[1]
 def use(app_dir: str | os.PathLike[str] | None) -> Path:
     """Import telenotify_tui from `app_dir` (a tui/ folder). Call before importing it."""
     d = Path(app_dir or HERE).resolve()
+    from . import guard
+    why = guard.why_forbidden(d, guard.real_home())
+    if why:
+        raise SystemExit(f"refusing to run: --app {why}")
     if not (d / "telenotify_tui" / "__init__.py").is_file():
         raise SystemExit(f"{d} has no telenotify_tui package (give a checkout's tui/ folder)")
     if "telenotify_tui" in sys.modules and Path(sys.modules["telenotify_tui"].__file__ or "").parent.parent != d:

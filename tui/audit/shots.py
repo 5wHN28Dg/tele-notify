@@ -263,7 +263,9 @@ def colours(sb: Sandbox, themes: list[str]) -> dict:
             pairs = r.get("pairs", [])
             text = [p["contrast"] for p in pairs if p["kind"] == "text"]
             border = [p["contrast"] for p in pairs if p["kind"] == "border"]
-            summary.append({"theme": theme, "state": r.get("state"), "error": "error" in r,
+            summary.append({"theme": theme, "state": r.get("state"),
+                            # no pairs means the SVG wasn't read (a format change), not a pass
+                            "error": "error" in r or not text,
                             "lowest_text": min(text, default=None), "lowest_border": min(border, default=None),
                             "pairs_below_minimum": sum(1 for p in pairs if p["below_minimum"])})
     lines = ["| theme | state | lowest text contrast (4.5) | lowest border contrast (3.0) | pairs below |",

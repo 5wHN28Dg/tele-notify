@@ -27,27 +27,52 @@ def write_text(path: Path, s: str) -> None:
     path.write_text(redact(s), encoding="utf-8")
 
 
-def leaks(out: Path, home: Path | None = None, login: str | None = None) -> list[dict]:
-    """Every file under `out` (names and contents) holding the login name or the real home path."""
+def leaks(out: Path, home: Path | None = None, login: str | None = None,
+          names: list[str] | None = None) -> list[dict]:
+    """Every file under `out` (names and contents) holding the login name, the real name
+    (from the password database), the host name or the real home path. Symlinks are
+    reported, never followed, and nothing in a protected place is read."""
     home = guard.real_home() if home is None else home
     login = guard.login_name() if login is None else login
     needles = {str(home).encode(), os.path.realpath(home).encode()}
-    name = login.encode().lower()
+    words = {login.lower(): "login name"}
+    if names is None:
+        names = _real_names()
+    for n in names:
+        words.setdefault(n.lower(), "real name or host name")
+    words = {w.encode(): what for w, what in words.items() if len(w) > 2}
     hits = []
-    for f in sorted(out.rglob("*")):
-        rel = f.relative_to(out)
-        if name in str(rel).encode().lower():
-            hits.append({"file": str(rel), "what": "login name in the file name"})
-        if not f.is_file() or f.name == "leaks.json":
-            continue
-        raw = f.read_bytes()
-        low = raw.lower()
-        for n in needles:
-            if n in raw:
-                hits.append({"file": str(rel), "what": "real home path", "at": raw.index(n)})
-        if name in low:
-            hits.append({"file": str(rel), "what": "login name", "at": low.index(name)})
+    for root, dirs, files in os.walk(out, followlinks=False):
+        for d in sorted(dirs):
+            if os.path.islink(os.path.join(root, d)):
+                hits.append({"file": str(Path(root, d).relative_to(out)), "what": "symlink (not followed)"})
+        for fname in sorted(files):
+            f = Path(root, fname)
+            rel = f.relative_to(out)
+            for w, what in words.items():
+                if w in str(rel).encode().lower():
+                    hits.append({"file": str(rel), "what": what + " in the file name"})
+            if f.is_symlink():
+                hits.append({"file": str(rel), "what": "symlink (not followed)"})
+                continue
+            if fname == "leaks.json" or guard.why_forbidden(f, home):
+                continue
+            raw = f.read_bytes()
+            low = raw.lower()
+            for n in needles:
+                if n in raw:
+                    hits.append({"file": str(rel), "what": "real home path", "at": raw.index(n)})
+            for w, what in words.items():
+                if w in low:
+                    hits.append({"file": str(rel), "what": what, "at": low.index(w)})
     return hits
+
+
+def _real_names() -> list[str]:
+    import pwd
+    import socket
+    gecos = pwd.getpwuid(os.getuid()).pw_gecos.split(",")[0]
+    return [*gecos.split(), socket.gethostname().split(".")[0]]
 
 
 def scan(out: Path) -> bool:

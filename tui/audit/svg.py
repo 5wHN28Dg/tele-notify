@@ -93,10 +93,15 @@ def _lum(hex_colour: str) -> float:
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
 
 
-def contrast(fg: str, bg: str) -> float:
+def contrast_exact(fg: str, bg: str) -> float:
     """The WCAG 2 contrast ratio of two colours (parsed with Textual's Color)."""
     a, b = sorted((_lum(fg), _lum(bg)), reverse=True)
-    return round((a + 0.05) / (b + 0.05), 2)
+    return (a + 0.05) / (b + 0.05)
+
+
+def contrast(fg: str, bg: str) -> float:
+    """The ratio rounded for display; never use it for pass or fail (4.495 isn't 4.5)."""
+    return round(contrast_exact(fg, bg), 2)
 
 
 def pairs(grid: Grid, region: tuple[int, int, int, int]) -> list[dict]:
@@ -122,7 +127,7 @@ def pairs(grid: Grid, region: tuple[int, int, int, int]) -> list[dict]:
                 e["sample"] += c.ch
     for e in seen.values():
         e["minimum"] = 3.0 if e["kind"] == "border" else 4.5
-        e["below_minimum"] = e["contrast"] < e["minimum"]
+        e["below_minimum"] = contrast_exact(e["fg"], e["bg"]) < e["minimum"]
     return sorted(seen.values(), key=lambda e: (e["contrast"], -e["cells"]))
 
 

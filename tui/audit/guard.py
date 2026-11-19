@@ -69,6 +69,20 @@ def why_forbidden(path: str | os.PathLike[str], home: Path | None = None) -> str
     return None
 
 
+def holds_protected(path: str | os.PathLike[str], home: Path | None = None) -> str | None:
+    """A reason when `path` (as written, or resolved) is the real home or a folder that
+    contains a protected place, so walking it would reach them; else None."""
+    home = real_home() if home is None else home
+    share, roots = protected(home)
+    for p in {Path(os.path.abspath(path)), _real(Path(os.path.abspath(path)))}:
+        if p in (home, _real(home)):
+            return f"{p} is the home folder"
+        for root in [*roots, share, _real(share)]:
+            if root != p and p in root.parents:
+                return f"{p} contains {root}"
+    return None
+
+
 def check(paths: list[str | os.PathLike[str]], home: Path | None = None) -> None:
     """Raise Refused when any of `paths` is protected."""
     home = real_home() if home is None else home

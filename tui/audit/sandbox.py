@@ -126,7 +126,12 @@ def plan(out: Path, *, base: Path = BASE, job: str = "run", dry_run: bool = True
 def check(sb: Sandbox) -> None:
     """The guard, on every path the run will use. Raises guard.Refused."""
     guard.check(sb.all_paths(), sb.real_home)
-    if sb.out == sb.base or sb.base in sb.out.parents:
+    held = guard.holds_protected(sb.out, sb.real_home)
+    if held:
+        raise guard.Refused(f"refusing to run: --out {held} (the leak scan reads everything under --out)")
+    real_out, real_base = Path(os.path.realpath(sb.out)), Path(os.path.realpath(sb.base))
+    if (sb.out == sb.base or sb.base in sb.out.parents
+            or real_out == real_base or real_base in real_out.parents):
         raise guard.Refused(f"--out must be outside {sb.base}: run folders are deleted")
     if sb.use_repo_bin and not sb.telenotify.is_file():
         raise guard.Refused(f"--bin repo: {sb.telenotify} isn't built (nimble build -d:release)")

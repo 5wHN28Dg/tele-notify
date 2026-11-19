@@ -126,6 +126,8 @@ def collect(sb: Sandbox, runs: int, kinds: list[str], posts: int, compare: Path 
     out = sb.out / "timing"
     apps = {"A": os.environ.get(appsrc.ENV, str(appsrc.HERE))}
     if compare is not None:
+        from . import guard
+        guard.check([compare], guard.real_home())
         apps["B"] = str(Path(compare).resolve())
     info = {k: appsrc.describe(Path(v)) for k, v in apps.items()}
     results: dict[tuple[str, str], list[dict]] = {}

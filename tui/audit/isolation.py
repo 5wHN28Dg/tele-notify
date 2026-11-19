@@ -51,6 +51,10 @@ def collect(sb: Sandbox) -> dict:
         "corpus": home / ".local" / "share" / "tele-notify-corpus" / "eval.jsonl",
         "deployed binary": home / "tele-notify" / "telenotify",
         "production config": home / "Projects" / "bqtechjobs" / "config.json",
+        "installed config": home / ".config" / "tele-notify" / "config.json",
+        "installed TDLib": home / ".local" / "lib" / "tele-notify" / "libtdjson.so",
+        "installed program": home / ".local" / "bin" / "telenotify",
+        "installed screen": home / ".local" / "bin" / "telenotify-tui",
     }
     refused = {k: guard.why_forbidden(p, home) is not None for k, p in probes.items()}
     which = {n: shutil.which(n) for n in ("systemctl", "xdg-open", "gio", "telenotify", "firefox", "lynx")}
