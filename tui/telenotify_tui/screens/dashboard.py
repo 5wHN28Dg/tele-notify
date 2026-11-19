@@ -230,7 +230,11 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
 # --------------------------------------------------------------- modal
 
 class ConfirmScreen(ModalScreen[bool]):
-    """Yes / no question; Escape or "No" answers no."""
+    """A question with a button that names its action and Cancel; Escape, `n` or
+    Cancel answers no. Cancel has the focus; presses in the first ARM_DELAY
+    seconds are ignored (a click where the opening button was, a held key)."""
+
+    ARM_DELAY = 0.5
 
     DEFAULT_CSS = """
     ConfirmScreen { align: center middle; }
@@ -245,26 +249,36 @@ class ConfirmScreen(ModalScreen[bool]):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "answer(False)", "Cancel"), Binding("y", "answer(True)", "Yes", show=False),
                 Binding("n", "answer(False)", "No", show=False)]
 
-    def __init__(self, question: str):
+    def __init__(self, question: str, action: str = "Yes", destructive: bool = False):
         super().__init__()
-        self.question = question
+        self.question, self.action = question, action
+        self.variant = "error" if destructive else "warning"
+        self._armed_at = 0.0
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self.question, id="confirm-question")
             with Horizontal():
-                yield Button("Yes", id="confirm-yes", variant="warning")
-                yield Button("No", id="confirm-no", variant="primary")
+                yield Button(f"{self.action} (y)", id="confirm-yes", variant=self.variant)
+                yield Button("Cancel (n)", id="confirm-no")
 
     def on_mount(self) -> None:
+        self._armed_at = time.monotonic() + self.ARM_DELAY
         self.query_one("#confirm-no", Button).focus()
 
+    def _armed(self) -> bool:
+        return time.monotonic() >= self._armed_at
+
     def action_answer(self, yes: bool) -> None:
+        if yes and not self._armed():
+            return
         self.dismiss(yes)
 
     @on(Button.Pressed)
     def _pressed(self, event: Button.Pressed) -> None:
         event.stop()
+        if event.button.id == "confirm-yes" and not self._armed():
+            return
         self.dismiss(event.button.id == "confirm-yes")
 
 
@@ -812,7 +826,13 @@ class DashboardPane(Vertical):
             else:
                 self.query_one("#svc-result", Static).update(Text(f"{action} cancelled", style="dim"))
 
-        self.app.push_screen(ConfirmScreen(f"{action.capitalize()} {name} ({self.mode})?"), answered)
+        what = {"start": "It starts reading the watched chats and forwarding matches.",
+                "stop": "It stops reading chats and forwarding matches until you start it again.",
+                "restart": "It reconnects; posts that arrive meanwhile are handled when it's back."}.get(action, "")
+        label = {"start": "Start the bot", "stop": "Stop the bot", "restart": "Restart the bot"}.get(
+            action, action.capitalize())
+        self.app.push_screen(ConfirmScreen(f"{action.capitalize()} {name} ({self.mode})? {what}".strip(),
+                                           label, destructive=action == "stop"), answered)
 
     @work(exclusive=True, group="dash-action")
     async def _run_service(self, action: str) -> None:
