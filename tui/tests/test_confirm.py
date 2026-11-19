@@ -229,6 +229,14 @@ STALLS = {
     # the later press on the same button is dragged off: it isn't a click, so it can't lend its time
     "early click, then a late press dragged off": lambda yes, no, early, late: [
         _down(yes, early), _up(yes, early), _down(yes, late), _up_at(1, 1, late)],
+    # a late key that presses nothing (space: Textual buttons answer enter only)
+    "early click, then a late space on the action": lambda yes, no, early, late: [
+        _down(yes, early), _up(yes, early), _key("space", " ", late)],
+    "a late space, then an early click": lambda yes, no, early, late: [
+        _key("space", " ", late), _down(yes, early), _up(yes, early)],
+    # Textual makes a Click on any later release over the same widget, with no new press
+    "early click, then a lone late release": lambda yes, no, early, late: [
+        _down(yes, early), _up(yes, early), _up(yes, late)],
 }
 
 
@@ -261,7 +269,7 @@ async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_
         screen = app.screen
         assert isinstance(screen, ConfirmScreen)
         yes, no = screen.query_one("#confirm-yes", Button), screen.query_one("#confirm-no", Button)
-        if "enter" in case:
+        if "enter" in case or "space" in case:
             yes.focus()
             await pilot.pause()
         early, late = screen._armed_at - 0.1, screen._armed_at + 0.05
@@ -330,5 +338,30 @@ async def test_a_press_dragged_off_doesnt_make_a_later_key_too_quick(paths, fake
         while time.monotonic() < screen._armed_at + 0.05:
             await pilot.pause(0.05)
         app.post_message(_key("enter", "\r", time.monotonic()))
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
+
+
+async def test_an_early_double_click_doesnt_make_the_next_click_too_quick(paths, fake_systemctl, monkeypatch):  # noqa: F811
+    import time
+    monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#svc-stop")
+        await pilot.pause(0.05)
+        screen = app.screen
+        yes = screen.query_one("#confirm-yes", Button)
+        for _ in range(2):                                    # carried over from the opening button
+            now = time.monotonic()
+            app.post_message(_down(yes, now))
+            app.post_message(_up(yes, now))
+        await settle(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        while time.monotonic() < screen._armed_at + 0.3:
+            await pilot.pause(0.05)
+        now = time.monotonic()                                # one deliberate click confirms
+        app.post_message(_down(yes, now))
+        app.post_message(_up(yes, now))
         await settle(app, pilot)
         assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
