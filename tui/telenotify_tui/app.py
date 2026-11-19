@@ -17,6 +17,7 @@ from textual.binding import Binding, BindingType
 from textual.errors import NoWidget
 from textual.widget import Widget
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
+from textual.widgets._footer import FooterKey
 
 from .paths import Paths
 from .rtl import visual
@@ -41,9 +42,19 @@ class TeleNotifyApp(App):
         """A click on a footer key: Textual makes the key when the click is *handled*; stamp it
         with when the click was made, so a slow machine can't turn an early click into a late one."""
         event = events.Key(key, None)
-        if self.down_made_at is not None:
-            event.time = self.down_made_at
+        made = self._footer_press(key)
+        if made is not None:
+            event.time = made
         self.post_message(event)
+
+    def _footer_press(self, key: str) -> float | None:
+        """When the oldest unused press on the footer key for `key` was made (each footer key's
+        presses in order, so a later press elsewhere can't lend this one its time). None: no
+        record (Textual's test pilot, or not a footer click), so the key keeps its own time."""
+        for widget, times in list(self.footer_downs.items()):
+            if getattr(widget, "key", None) == key and times:
+                return times.popleft()
+        return None
 
     async def on_event(self, event: events.Event) -> None:
         # the driver's own events (not the forwarded copies, which have later times): a
@@ -55,7 +66,8 @@ class TeleNotifyApp(App):
             except (NoWidget, ScreenStackError):   # outside every widget, or no screen yet
                 widget = None
             if isinstance(event, events.MouseDown):
-                self.down_made_at = event.time   # the newest real press (a footer key acts on it)
+                if isinstance(widget, FooterKey):   # a footer key acts on the press itself
+                    self.footer_downs.setdefault(widget, deque()).append(event.time)
                 if widget is not None:
                     self._down[event.button] = (widget, event.time)
                 else:
@@ -82,7 +94,7 @@ class TeleNotifyApp(App):
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
-        self.down_made_at: float | None = None
+        self.footer_downs: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
         self.press_made_at: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
