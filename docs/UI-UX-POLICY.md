@@ -3,6 +3,11 @@
 Status: adopted 2026-11-18 by the owner, after a blind and an adversarial review. Revised 2026-11-18 in PR #50
 (owner's critique: owner sign-off, tab table, R13, R14, scope and loophole fixes), approved by the owner.
 
+**Since 2026-11-19 the owner's general UI and UX policy (v4.13) applies to the whole product**, with this project's
+profile in [`ux-profile.md`](ux-profile.md). This file's rules stay in force as TN-R1 … TN-R14. Where they are
+stricter, they win. Where they are looser, they stay until the next full audit or 2027-05-18, whichever comes first.
+The profile maps each one to the general policy's rules.
+
 This policy says what the terminal screen (`tui/`, the Textual app `telenotify-tui`) must do, and how a change to it is
 checked. It is modelled on the owner's kks-explorer policy, cut down to a one-person terminal app: the method
 (checkable rules, evidence, two audit passes, a results table, merge blockers) is the same; touch, phones, several
