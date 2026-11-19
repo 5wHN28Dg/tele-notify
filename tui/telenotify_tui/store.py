@@ -111,6 +111,15 @@ _ALBUM_ID = re.compile(r"-?[0-9]+")
 _DIGITS = re.compile(r"[0-9]+")
 
 
+# One wording for "another program has the state file locked", on every tab.
+BUSY_NOTE = "The state file is busy (another program has it locked); retrying…"
+
+
+def is_busy(e: BaseException) -> bool:
+    """The read failed because another program holds a lock on the file: it passes by itself."""
+    return isinstance(e, sqlite3.OperationalError) and ("locked" in str(e) or "busy" in str(e))
+
+
 class Store:
     """One connection to the bot's state file. Open it, use it, close it."""
 

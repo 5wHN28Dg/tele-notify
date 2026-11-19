@@ -16,7 +16,7 @@ from telenotify_tui.screens import dashboard_data as dd
 from telenotify_tui.screens import review as review_mod
 from telenotify_tui.screens.review import CheckModal, ReviewPane
 from telenotify_tui.screens.review_data import labels_path, write_label
-from telenotify_tui.store import Review, Store
+from telenotify_tui.store import BUSY_NOTE, Review, Store
 
 
 @pytest.fixture(autouse=True)
@@ -271,7 +271,7 @@ async def test_locked_state_file_is_a_note_not_a_crash(paths, state, labels, mon
             assert "NOT recorded" in note(app) and "locked" in note(app)
             app.query_one(ReviewPane).reload()                   # nor can the queue be read
             await pilot.pause()
-            assert "can't read the state file" in note(app)
+            assert BUSY_NOTE in note(app)   # the Dashboard's wording for a lock
             assert app.is_running
         finally:
             db.execute("ROLLBACK")
@@ -619,3 +619,25 @@ async def test_buttons_fit_an_80_column_terminal(paths, state, now):
         assert app.query_one("#btn-undo", Button).display
         assert app.query_one("#btn-keep", Button).region.width > 0
         assert app.query_one("#btn-undo", Button).region.right <= 80
+
+
+async def test_a_locked_state_file_is_worded_as_on_the_dashboard(paths, state, monkeypatch):
+    # one wording for one state on every tab (policy C2, W1)
+    from telenotify_tui.store import BUSY_NOTE
+    monkeypatch.setattr(review_mod, "UI_TIMEOUT", 0.1)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        db = sqlite3.connect(state, isolation_level=None)
+        db.execute("BEGIN EXCLUSIVE")
+        try:
+            await pilot.press("2")
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if BUSY_NOTE[:20] in note(app) or BUSY_NOTE[:20] in str(app.query_one("#review-empty", Static).render()):
+                    break
+            shown = note(app) + str(app.query_one("#review-empty", Static).render())
+            assert BUSY_NOTE in shown
+            assert "database is locked" not in shown
+        finally:
+            db.execute("ROLLBACK")
+            db.close()

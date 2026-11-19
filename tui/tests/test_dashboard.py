@@ -231,8 +231,13 @@ async def test_locked_state_file_arrow_keys_dont_crash_and_it_recovers(paths, st
             await settle(app, pilot)
             assert app.is_running and app._exception is None
             busy = "The state file is busy (another program has it locked); retrying"
-            assert busy in text(app, "#feed-detail")
-            assert busy in text(app, "#status")
+            assert busy in text(app, "#status")                  # said once, in the Bot box
+            assert busy not in text(app, "#feed-detail")         # the other boxes point to it
+            assert "see Bot" in text(app, "#feed-detail")
+            status = app.query_one("#status", Static).render()
+            spans = [str(sp.style) for sp in status.spans
+                     if status.plain[sp.start:sp.end].startswith("The state file is busy")]
+            assert spans == ["bold"]                             # no literal colour: theme text, both themes
             assert "Nothing judged yet" not in text(app, "#feed-detail")
         finally:
             db.execute("ROLLBACK")
@@ -371,3 +376,11 @@ async def test_number_keys_leave_dashboard_with_focus_inside(paths):
         await pilot.press("4")
         await settle(app, pilot)
         assert tabs.active == "settings"
+
+
+def test_an_unreadable_file_doesnt_promise_a_retry():
+    from telenotify_tui.screens import dashboard as dash
+    snap = dash.Snapshot(exists=True)
+    snap.error, snap.busy = "DatabaseError: file is not a database", False
+    note = dash.problem_note(snap)
+    assert "retry" not in note and "see Bot" in note

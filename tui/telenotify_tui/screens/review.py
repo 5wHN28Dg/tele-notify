@@ -39,7 +39,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import Review
+from ..store import BUSY_NOTE, Review, is_busy
 from .review_data import history, remove_label, write_label
 
 DECISION_KEYS = ("send", "keep", "discard", "next", "open_link", "check")
@@ -275,9 +275,11 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 past = history(st) if self._history_mode else []
         except (sqlite3.Error, OSError, ValueError) as e:   # a lock, a broken file, a value that isn't a number
             self._read_error = True
-            self.note(f"can't read the state file: {e}", "warn")
+            busy = is_busy(e)
+            self.note(BUSY_NOTE if busy else f"can't read the state file: {e}", "warn")
             if self._history_mode or not self._items:
-                self.query_one("#review-empty", Static).update(Content(clean(f"Can't read the state file: {e}")))
+                said = BUSY_NOTE if busy else f"Can't read the state file: {e}"
+                self.query_one("#review-empty", Static).update(Content(clean(said)))
                 self._show_only("#review-empty")
             self._sync_controls()
             return

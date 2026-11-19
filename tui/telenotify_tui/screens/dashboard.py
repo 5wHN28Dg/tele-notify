@@ -47,7 +47,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import Alert, ChatStats, Judged, Store
+from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy
 from . import dashboard_data as dd
 from . import search_data
 
@@ -64,8 +64,9 @@ CUSTOM_SHOWN = "custom-shown"   # the picker entry naming the custom range shown
 VERDICT_STYLE = {"publish": "green", "review": "yellow", "reject": "dim"}
 STAT_COLUMNS = ("chat", "total", "publish", "review", "reject", "forwarded")
 # A failed read is retried on the next refresh tick; these say so where the numbers would be.
-BUSY_NOTE = "The state file is busy (another program has it locked); retrying…"
-UNREADABLE_NOTE = "Can't read the state file (see above); retrying…"
+# Said once, in the Bot box; the other boxes only point to it.
+BUSY_ELSEWHERE = "Not shown while the state file is busy (see Bot)."
+UNREADABLE_NOTE = "Not shown: the state file can't be read (see Bot)."
 
 
 # ------------------------------------------------------------- helpers
@@ -228,7 +229,7 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
             snap.problems = dd.chat_problems(s, now)
     except (sqlite3.Error, OSError, ValueError, OverflowError) as e:  # a locked or half-written file: say so, try again next tick
         snap.error = clean(f"{type(e).__name__}: {e}")
-        snap.busy = isinstance(e, sqlite3.OperationalError) and ("locked" in str(e) or "busy" in str(e))
+        snap.busy = is_busy(e)
     return snap
 
 
@@ -236,7 +237,7 @@ def problem_note(snap: Snapshot) -> str:
     """What to show in place of data the last read couldn't get ("" when it could)."""
     if not snap.error:
         return ""
-    return BUSY_NOTE if snap.busy else UNREADABLE_NOTE
+    return BUSY_ELSEWHERE if snap.busy else UNREADABLE_NOTE
 
 
 # --------------------------------------------------------------- modal
@@ -578,7 +579,7 @@ class DashboardPane(Vertical):
         if snap is None:
             out.append("reading the state file…", style="dim")
         elif snap.busy:
-            out.append(BUSY_NOTE, style="yellow")
+            out.append(BUSY_NOTE, style="bold")   # words, theme colours: readable in both themes
         elif snap.error:
             out.append(f"can't read the state file: {snap.error}", style="red")
         elif not snap.exists:
