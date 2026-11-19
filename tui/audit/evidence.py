@@ -77,6 +77,7 @@ def leaks(out: Path, home: Path | None = None, login: str | None = None,
             except OSError as e:
                 hits.append({"file": str(rel), "what": f"can't be read: {e.strerror}"})
                 continue
+            raw = png_text(raw) if raw.startswith(PNG_SIGNATURE) else raw
             text = raw.decode("utf-8", "replace").casefold()
             for n in needles:
                 if n in raw:
@@ -90,6 +91,46 @@ def leaks(out: Path, home: Path | None = None, login: str | None = None,
 
 
 MAX_SCAN = 64 * 1024 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def png_text(raw: bytes) -> bytes:
+    """What of a PNG can hold words: every chunk but the compressed pixels (IDAT), with
+    zTXt / iTXt / iCCP payloads decompressed. Compressed pixels are noise to a byte search
+    (a false hit now and then, and text drawn as pixels isn't bytes anyway). A file that
+    doesn't parse as a PNG to its end is returned whole, so nothing is skipped by a fake
+    signature."""
+    import zlib
+
+    pos, parts = len(PNG_SIGNATURE), []
+    try:
+        while pos < len(raw):
+            if pos + 12 > len(raw):
+                return raw
+            n = int.from_bytes(raw[pos:pos + 4], "big")
+            kind = raw[pos + 4:pos + 8]
+            body = raw[pos + 8:pos + 8 + n]
+            if len(body) != n or zlib.crc32(raw[pos + 4:pos + 8 + n]) != int.from_bytes(raw[pos + 8 + n:pos + 12 + n], "big"):
+                return raw
+            pos += 12 + n
+            if kind == b"IDAT":
+                continue
+            parts.append(kind + b" " + body)
+            if kind in (b"zTXt", b"iCCP"):         # keyword NUL method data
+                _key, _, rest = body.partition(b"\0")
+                parts.append(zlib.decompress(rest[1:]))
+            elif kind == b"iTXt":                  # keyword NUL flag method lang NUL tkey NUL text
+                _key, _, rest = body.partition(b"\0")
+                flag, rest = rest[:1], rest[2:]
+                _lang, _, rest = rest.partition(b"\0")
+                _tkey, _, txt = rest.partition(b"\0")
+                if flag == b"\1":
+                    parts.append(zlib.decompress(txt))
+            if kind == b"IEND":
+                return b"\n".join(parts) if pos == len(raw) else raw
+    except (zlib.error, ValueError):
+        return raw
+    return raw
 SHORT_COMMON = {"bin", "abu", "usr", "var", "tmp", "lib", "dev", "run", "opt", "etc", "src", "app", "box", "pc"}
 
 

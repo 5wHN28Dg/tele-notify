@@ -469,3 +469,163 @@ def test_the_repo_binary_runs_without_scraping(tmp_path: Path, monkeypatch):
         assert "--no-scrape" in wrapper and sb.telenotify.parent == sb.bin
     finally:
         sbx.remove(sb)
+
+
+# ------------------------------------------------------- the real-terminal job
+
+def _png(*chunks: tuple[bytes, bytes], tail: bytes = b"") -> bytes:
+    import zlib
+    out = evidence.PNG_SIGNATURE
+    for kind, body in chunks:
+        out += len(body).to_bytes(4, "big") + kind + body + zlib.crc32(kind + body).to_bytes(4, "big")
+    return out + tail
+
+
+def _ihdr() -> tuple[bytes, bytes]:
+    return b"IHDR", (4).to_bytes(4, "big") + (1).to_bytes(4, "big") + b"\x08\x02\x00\x00\x00"
+
+
+def test_the_leak_scan_reads_a_pngs_text_not_its_pixels(tmp_path: Path):
+    import zlib
+    home, login = Path("/home/someone"), "someone"
+    # compressed pixels that happen to hold the login name's bytes: noise, not a leak
+    pixels = zlib.compress(b"\x00" + b"someone" + b"\x00" * 4, 0)
+    assert b"someone" in pixels
+    (tmp_path / "pixels.png").write_bytes(_png(_ihdr(), (b"IDAT", pixels), (b"IEND", b"")))
+    assert evidence.leaks(tmp_path, home=home, login=login, names=[]) == []
+    # words in text chunks are read, compressed or not
+    (tmp_path / "text.png").write_bytes(_png(_ihdr(), (b"tEXt", b"Comment\x00/home/someone/x"), (b"IEND", b"")))
+    (tmp_path / "ztext.png").write_bytes(_png(_ihdr(), (b"zTXt", b"Title\x00\x00" + zlib.compress(b"by someone")),
+                                              (b"IEND", b"")))
+    (tmp_path / "itext.png").write_bytes(_png(_ihdr(), (b"iTXt", b"T\x00\x01\x00en\x00\x00" +
+                                                         zlib.compress(b"someone")), (b"IEND", b"")))
+    # a file that only starts like a PNG, or has bytes after its end, is read whole
+    (tmp_path / "fake.png").write_bytes(evidence.PNG_SIGNATURE + b"someone")
+    (tmp_path / "tail.png").write_bytes(_png(_ihdr(), (b"IDAT", pixels), (b"IEND", b""), tail=b"someone"))
+    (tmp_path / "badcrc.png").write_bytes(_png(_ihdr())[:-1] + b"\x00" + b"someone")
+    hits = {h["file"] for h in evidence.leaks(tmp_path, home=home, login=login, names=[])}
+    assert hits == {"text.png", "ztext.png", "itext.png", "fake.png", "tail.png", "badcrc.png"}
+
+
+def test_the_terminal_shots_are_planned_per_terminal_mode_theme_bidi_and_size():
+    from audit import terminal
+    shots = terminal.plan_shots(["kitty", "ptyxis"], ["80x24", "200x50"], ["dark", "light"], ["dry-run", "real"],
+                                None, {"1-", "keys"})
+    assert len(shots) == 2 * 2 * 2 * 2 * 2
+    assert {s.scene for s in shots} == {"1-dashboard", "keys-panel"}
+    # without --bidi each terminal gets what the screen's auto mode picks there
+    assert {s.bidi for s in shots if s.terminal == "kitty"} == {"words"}
+    assert {s.bidi for s in shots if s.terminal == "ptyxis"} == {"full"}
+    assert shots[0].file == "terminal/kitty/dry-run/dark/bidi-words/80x24/1-dashboard.png"
+    assert terminal.plan_shots(["ptyxis"], ["80x24"], ["dark"], ["real"], ["words", "full"])[0].bidi == "words"
+    for bad in ((["xterm"], ["80x24"], ["dark"], ["real"], None), (["kitty"], ["80"], ["dark"], ["real"], None),
+                (["kitty"], ["80x24"], ["blue"], ["real"], None), (["kitty"], ["80x24"], ["dark"], ["live"], None),
+                (["kitty"], ["80x24"], ["dark"], ["real"], ["rtl"])):
+        with pytest.raises(ValueError):
+            terminal.plan_shots(*bad)
+    with pytest.raises(ValueError, match="no scene"):
+        terminal.plan_shots(["kitty"], ["80x24"], ["dark"], ["real"], None, {"9-nothing"})
+
+
+def test_the_terminals_are_started_sized_in_cells_and_isolated(tmp_path: Path):
+    from audit import terminal
+    cmd = terminal.screen_cmd("/py", Path("/x/tui"), Path("/tmp/tn-audit/r-term/shots/0/spec.json"))
+    assert cmd[:2] == ["/py", "-c"] and cmd[-2:] == ["terminal", "/tmp/tn-audit/r-term/shots/0/spec.json"]
+    k = terminal.kitty_argv(Path("/k/kitty"), 120, 40, "t", cmd, None)
+    assert k[1:3] == ["--config", "NONE"] and "initial_window_width=120c" in k and "initial_window_height=40c" in k
+    assert "linux_display_server=x11" in k and f"font_size={terminal.FONT_SIZE}" in k
+    assert k[k.index("--title") + 2:] == cmd                     # the command comes last, whole
+    mine = terminal.kitty_argv(Path("/k/kitty"), 80, 24, "t", cmd, Path("/c/kitty.conf"))
+    assert mine[1:3] == ["--config", "/c/kitty.conf"] and not any(a.startswith("font_size") for a in mine)
+    p = terminal.ptyxis_argv(Path("/usr/bin/ptyxis"), "t", cmd)
+    assert "-s" in p and p[p.index("--") + 1:] == cmd
+    kf = terminal.ptyxis_keyfile(200, 50, "light")
+    assert "default-columns=uint32 200" in kf and "default-rows=uint32 50" in kf
+    assert "restore-window-size=false" in kf and "interface-style='light'" in kf
+    sess = terminal.Session(tmp_path / "r-term", ["/k"])
+    env = sess.base_env()
+    assert not {"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"} & set(env)
+    assert env["XDG_RUNTIME_DIR"] == str(tmp_path / "r-term" / "run") and env["HOME"].startswith(str(tmp_path))
+    assert env["GSETTINGS_BACKEND"] == "keyfile"
+    assert env["PATH"].startswith(f"{tmp_path / 'r-term' / 'bin'}:/k:")      # the systemd-run stand-in first
+    assert env["GVFS_DISABLE_FUSE"] == "1" and env["GTK_USE_PORTAL"] == "0"
+    sess.display, sess.bus, sess.xauth = ":7", "unix:path=/x", "/a"
+    assert sess.env()["DISPLAY"] == ":7" and "WAYLAND_DISPLAY" not in sess.env()
+    assert terminal.session_folder(sbx.plan(tmp_path / "o", base=tmp_path / "b")).parent == tmp_path / "b"
+
+
+def test_the_systemd_run_stand_in_runs_the_command_without_a_scope(tmp_path: Path):
+    from audit import terminal
+    stand_in = tmp_path / "systemd-run"
+    stand_in.write_text(terminal.SYSTEMD_RUN, encoding="utf-8")
+    stand_in.chmod(0o700)
+    log = tmp_path / "calls.log"
+    for argv in (["--user", "--scope", "--collect", "--quiet", "--", "echo", "hi", "--x"],
+                 ["--user", "--scope", "--unit", "u1", "-p", "Delegate=yes", "--same-dir", "echo", "hi", "--x"],
+                 ["--user", "--scope", "--unit=u2", "echo", "hi", "--x"]):
+        r = subprocess.run([str(stand_in), *argv], capture_output=True, text=True, timeout=10, check=False,
+                           env={"PATH": "/usr/bin:/bin", "TN_AUDIT_SCOPE_LOG": str(log)})
+        assert (r.returncode, r.stdout) == (0, "hi --x\n"), argv
+    # a "--" inside the command stays the command's
+    r = subprocess.run([str(stand_in), "--user", "--scope", "echo", "a", "--", "b"], capture_output=True, text=True,
+                       timeout=10, check=False, env={"PATH": "/usr/bin:/bin", "TN_AUDIT_SCOPE_LOG": str(log)})
+    assert r.stdout == "a -- b\n"
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 4
+
+
+def test_mounts_inside_the_session_folder_are_found():
+    from audit import terminal
+    mounts = ("proc /proc proc rw 0 0\n"
+              "gvfsd-fuse /tmp/tn-audit/r-term/run/gvfs fuse.gvfsd-fuse rw 0 0\n"
+              "x /tmp/tn-audit/r-term-other/run x rw 0 0\n"
+              "y /tmp/tn-audit/r-term/run/doc\\040x fuse rw 0 0\n")
+    assert terminal.mounts_under(Path("/tmp/tn-audit/r-term"), mounts) == [
+        "/tmp/tn-audit/r-term/run/doc x", "/tmp/tn-audit/r-term/run/gvfs"]
+
+
+def test_a_row_reading_is_background_against_the_next_colour():
+    from audit import terminal
+    r = terminal.row_reading([{"colour": "#000000", "share": 0.8}, {"colour": "#ffffff", "share": 0.1}])
+    assert (r["background"], r["text"], r["contrast"]) == ("#000000", "#ffffff", 21.0)
+    assert terminal.row_reading([{"colour": "#000000", "share": 1.0}])["contrast"] is None
+
+
+def test_the_terminal_summary_names_errors_and_sizes():
+    from audit import terminal
+    s = terminal.Shot("kitty", "80x24", "dark", "real", "words", "1-dashboard")
+    rows = [{**terminal._row(s, {"kitty": "kitty 0.47.0"}), "cells_seen": "80x23",
+             "rows_read": {"footer": {"contrast": 9.1}}},
+            {**terminal._row(s, {}), "error": "the screen didn't get ready"}]
+    md = terminal.summary(rows, {"compositor": "mutter 50", "monitor": "1x1", "font": "f", "kitty_config": "NONE"},
+                          "mutter died")
+    assert "stopped early:** mutter died" in md and "80x24 (80x23)" in md and "9.1" in md
+    assert "ERROR: the screen didn't get ready" in md and "1 shot(s) where the terminal gave" in md
+
+
+def test_the_terminal_job_refuses_a_protected_kitty_config_and_bad_sizes(out: Path):
+    conf = guard.real_home() / ".config" / "tele-notify" / "kitty.conf"
+    r = audit("terminal", "--kitty-config", str(conf), "--out", str(out / "t"))
+    assert r.returncode == 2 and "refusing" in r.stderr and not (out / "t").exists()
+    r = audit("terminal", "--sizes", "80by24", "--out", str(out / "t"))
+    assert r.returncode == 2 and "COLUMNSxROWS" in r.stderr and not (out / "t").exists()
+
+
+def _live() -> bool:
+    from audit import terminal
+    return os.environ.get("TN_AUDIT_LIVE") == "1" and "kitty" in terminal.available(guard.real_home())
+
+
+@pytest.mark.skipif(not _live(), reason="live: needs mutter, Xwayland, xdotool, ImageMagick, kitty and TN_AUDIT_LIVE=1")
+def test_the_terminal_job_captures_a_real_kitty_window(out: Path):
+    r = audit("terminal", "--terminals", "kitty", "--sizes", "80x24", "--modes", "dry-run", "--only", "1-dash",
+              "--out", str(out), timeout=300)
+    assert r.returncode == 0, r.stderr + r.stdout
+    [row] = json.loads((out / "terminal" / "index.json").read_text(encoding="utf-8"))
+    assert {"terminal", "version", "size", "theme", "mode", "bidi", "file"} <= set(row) and "error" not in row
+    assert row["cells_seen"] == "80x24" and row["bidi"] == "words" and row["term_env"]["TERM"] == "xterm-kitty"
+    png = out / row["file"]
+    assert png.read_bytes().startswith(evidence.PNG_SIGNATURE) and row["image_px"][0] > 300
+    footer = row["rows_read"]["footer"]
+    assert footer["cells"] == [0, 23, 80, 1] and footer["contrast"] > 3     # the footer's keys are readable
+    assert json.loads((out / "leaks.json").read_text())["clean"]
+    assert not any(Path("/tmp/tn-audit").glob("terminal-*"))     # run and session folders are gone
