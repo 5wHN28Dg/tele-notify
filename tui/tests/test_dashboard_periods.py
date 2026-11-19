@@ -479,10 +479,13 @@ async def test_the_totals_header_names_each_series_mark(paths):
             assert f"{dash.SERIES_MARK[series]}{series}" in header
 
 
-@pytest.mark.parametrize("series,style", [("publish", "green"), ("review", "yellow"), ("reject", "grey50")])
-def test_a_sliver_has_the_colour_of_its_series(series, style):
-    # one post among hundreds still shows, in its own series' colour
-    bars = [dd.DayCount("2026-11-01", publish=500), dd.DayCount("2026-11-02", **{series: 1})]
+@pytest.mark.parametrize("small,style", [({"publish": 1}, "green"), ({"review": 1}, "yellow"),
+                                         ({"reject": 1}, "grey50"),
+                                         ({"publish": 10, "reject": 1}, "green"),   # mixed, one eighth tall
+                                         ({"review": 6, "reject": 5}, "yellow")])
+def test_a_sliver_has_the_colour_of_its_biggest_series(small, style):
+    # a bar within one partial cell, next to a tall one, shows in its biggest series' colour
+    bars = [dd.DayCount("2026-11-01", publish=480), dd.DayCount("2026-11-02", **small)]
     chart = render_chart(bars, "day", height=3)
     bottom = chart.plain.splitlines()[2]
     start = bottom.index("▁")

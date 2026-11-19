@@ -144,11 +144,12 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
         p = round(d.publish * units / top)
         r = round((d.publish + d.review) * units / top)
         t = round(d.total * units / top)
-        if d.total and t == 0:
-            # any activity shows at least a sliver, in the colour of the series that has most
+        if d.total and t < 8:
+            # a bar within one partial cell (any activity shows at least a sliver): one series fits,
+            # so it takes the colour of the series that has most
             biggest = max(("publish", d.publish), ("review", d.review), ("reject", d.reject), key=lambda x: x[1])[0]
-            t = 1
-            p, r = (1, 1) if biggest == "publish" else (0, 1) if biggest == "review" else (0, 0)
+            t = max(t, 1)
+            p, r = (t, t) if biggest == "publish" else (0, t) if biggest == "review" else (0, 0)
         scaled.append((p, max(r, p), max(t, r, p)))
     for row in range(height - 1, -1, -1):
         lo = row * 8
