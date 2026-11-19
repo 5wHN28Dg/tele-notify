@@ -542,16 +542,41 @@ def test_the_terminals_are_started_sized_in_cells_and_isolated(tmp_path: Path):
     kf = terminal.ptyxis_keyfile(200, 50, "light")
     assert "default-columns=uint32 200" in kf and "default-rows=uint32 50" in kf
     assert "restore-window-size=false" in kf and "interface-style='light'" in kf
-    sess = terminal.Session(tmp_path / "r-term", ["/k"])
+    sess = terminal.Session(tmp_path / "r-term")
     env = sess.base_env()
     assert not {"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"} & set(env)
     assert env["XDG_RUNTIME_DIR"] == str(tmp_path / "r-term" / "run") and env["HOME"].startswith(str(tmp_path))
     assert env["GSETTINGS_BACKEND"] == "keyfile"
-    assert env["PATH"].startswith(f"{tmp_path / 'r-term' / 'bin'}:/k:")      # the systemd-run stand-in first
+    # the systemd-run stand-in first, then the system's folders only (terminals are started by absolute path)
+    assert env["PATH"] == f"{tmp_path / 'r-term' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
     assert env["GVFS_DISABLE_FUSE"] == "1" and env["GTK_USE_PORTAL"] == "0"
+    assert env["FONTCONFIG_FILE"] == str(tmp_path / "r-term" / "fonts.conf")
     sess.display, sess.bus, sess.xauth = ":7", "unix:path=/x", "/a"
     assert sess.env()["DISPLAY"] == ":7" and "WAYLAND_DISPLAY" not in sess.env()
     assert terminal.session_folder(sbx.plan(tmp_path / "o", base=tmp_path / "b")).parent == tmp_path / "b"
+
+
+def test_the_sessions_path_holds_no_protected_place(fake_home: Path):
+    from audit import terminal
+    # the real home: no folder on the session's PATH is, or holds, a protected place
+    assert terminal.path_problems(terminal.Session(Path("/tmp/tn-audit/x-term")).base_env()["PATH"],
+                                  guard.real_home()) == []
+    # ~/.local/bin holds the installed telenotify: never on the PATH (kitty's folder used to be put there)
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    bad = terminal.path_problems(f"/usr/bin:{fake_home / '.local' / 'bin'}", fake_home)
+    assert len(bad) == 1 and "telenotify" in bad[0]
+    sess = terminal.Session(fake_home / "s-term")
+    sess.base_env = lambda: {"PATH": str(fake_home / ".local" / "bin")}      # as if it were on the PATH
+    with pytest.raises(RuntimeError, match="refusing the session's PATH"):
+        sess.start(home=fake_home)
+    assert not (fake_home / "s-term").exists()                                 # refused before anything is made
+
+
+def test_the_private_fonts_conf_adds_the_font_folder_without_linking_it(tmp_path: Path):
+    from audit import terminal
+    conf = terminal.FONTS_CONF.format(dirs=f"  <dir>{tmp_path / 'fonts'}</dir>\n", cache=tmp_path / "cache")
+    assert "<include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include>" in conf
+    assert f"<dir>{tmp_path / 'fonts'}</dir>" in conf and f"<cachedir>{tmp_path / 'cache'}</cachedir>" in conf
 
 
 def _stand_in(tmp_path: Path) -> Path:
@@ -603,13 +628,40 @@ def test_processes_are_found_by_their_mark_and_ended(tmp_path: Path):
     # a real one, started in a session of its own like the screen child
     p = subprocess.Popen(["sleep", "30"], env={"PATH": "/usr/bin:/bin", terminal.SHOT_MARK: str(tmp_path)},
                          start_new_session=True)
+    unmarked = subprocess.Popen(["sleep", "30"], env={"PATH": "/usr/bin:/bin"})
     try:
         assert terminal.marked_pids(terminal.SHOT_MARK, str(tmp_path)) == [p.pid]
-        terminal.end_pids([p.pid])
+        # a PID without the mark (as if reused by another process) is never signalled
+        assert terminal.end_marked(terminal.SHOT_MARK, str(tmp_path), only=[unmarked.pid]) == 0
+        assert unmarked.poll() is None
+        terminal.end_marked(terminal.SHOT_MARK, str(tmp_path))
         assert p.wait(5) is not None and terminal.marked_pids(terminal.SHOT_MARK, str(tmp_path)) == []
     finally:
-        p.kill()
-        p.wait()
+        for q in (p, unmarked):
+            q.kill()
+            q.wait()
+
+
+def test_a_reaped_groups_id_is_never_signalled(monkeypatch):
+    from audit import terminal
+    p = subprocess.Popen(["true"], start_new_session=True)
+    p.wait()                                                # reaped: its group ID may be someone else's now
+    sent = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: sent.append((pgid, sig)))
+    terminal._kill_group(p)
+    assert sent == []
+    q = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    monkeypatch.undo()
+    terminal._kill_group(q, grace=2)                         # unreaped until the group is signalled
+    assert q.returncode is not None
+
+
+def test_both_of_mutters_displays_are_read_from_its_log():
+    from audit import terminal
+    log = ("libmutter-Message: Using public X11 display :2, (using unix:/tmp/.X11-unix/X3 for managed "
+           "services)\nother line\n")
+    assert terminal.x_displays(log) == [":2", ":3"]
+    assert terminal.x_displays("nothing here") == []
 
 
 def test_a_dead_displays_lock_and_socket_are_removed_only_if_ours_and_dead(tmp_path: Path):
@@ -621,23 +673,33 @@ def test_a_dead_displays_lock_and_socket_are_removed_only_if_ours_and_dead(tmp_p
     (tmp_path / ".X11-unix" / "X7").write_text("", encoding="ascii")
     (tmp_path / ".X8-lock").write_text(f"{os.getpid():>10}\n", encoding="ascii")     # still in use
     (tmp_path / ".X11-unix" / "X8").write_text("", encoding="ascii")
+    (tmp_path / ".X11-unix" / "X9").write_text("", encoding="ascii")                # a socket with no lock
     assert len(terminal.clear_x_display(":7", str(tmp_path))) == 2
     assert not (tmp_path / ".X7-lock").exists() and not (tmp_path / ".X11-unix" / "X7").exists()
     assert terminal.clear_x_display(":8", str(tmp_path)) == [] and (tmp_path / ".X8-lock").exists()
+    assert terminal.clear_x_display(":9", str(tmp_path)) == [] and (tmp_path / ".X11-unix" / "X9").exists()
     assert terminal.clear_x_display("", str(tmp_path)) == []
 
 
 def test_stale_session_folders_are_swept_but_not_live_ones(tmp_path: Path):
     from audit import terminal
-    dead = subprocess.Popen(["true"])
-    dead.wait()
-    stale = tmp_path / f"terminal-20261119-200000-{dead.pid}-term"
-    live = tmp_path / f"terminal-20261119-200000-{os.getpid()}-term"
-    other = tmp_path / f"screenshots-20261119-200000-{dead.pid}"
-    for d in (stale / "run", live / "run", other):
+    stale = tmp_path / "terminal-20261119-200000-11-term"          # its lock file isn't held
+    live = tmp_path / "terminal-20261119-200000-12-term"           # held, as a running run holds it
+    young = tmp_path / "terminal-20261119-200000-13-term"          # no lock yet: just being made
+    old = tmp_path / "terminal-20261119-200000-14-term"            # no lock, long ago: a killed old run
+    other = tmp_path / "screenshots-20261119-200000-11"
+    for d in (stale / "run", live / "run", young / "run", old / "run", other):
         d.mkdir(parents=True)
-    assert terminal.sweep_stale(tmp_path) == [stale.name]
-    assert not stale.exists() and live.exists() and other.exists()
+    (stale / "lock").write_text("", encoding="ascii")
+    (stale / "displays").write_text(":7\n:8", encoding="ascii")
+    os.utime(old, (0, 0))
+    held = terminal.hold_folder(live)
+    try:
+        assert terminal.sweep_stale(tmp_path) == [stale.name, old.name]
+    finally:
+        os.close(held)
+    assert not stale.exists() and not old.exists()
+    assert live.exists() and young.exists() and other.exists()
 
 
 def _cells(*cells: tuple[tuple[int, int, int], tuple[int, int, int] | None, int]) -> bytes:
@@ -659,22 +721,29 @@ def test_the_footer_reading_finds_each_run_and_the_lowest_contrast():
     from audit import terminal
     grey, black, white, blue = (208, 208, 208), (31, 31, 31), (255, 255, 255), (1, 120, 212)
     mid, light_u, dim, divider = (163, 163, 163), (100, 100, 100), (126, 126, 126), (172, 172, 172)
-    pix = _cells((grey, blue, 3), (grey, black, 3), (grey, mid, 2), (grey, light_u, 3), (grey, black, 3),
-                 (grey, None, 0), (grey, dim, 3), (grey, dim, 3), (grey, divider, 3), (black, white, 2))
-    cells = terminal.cell_colours(pix, 10 * 4, 4, 2, 10)
+    blank = (grey, None, 0)
+    pix = _cells((grey, blue, 3), (grey, black, 3), (grey, mid, 2), (grey, light_u, 3), (grey, black, 3), blank,
+                 (grey, dim, 3), (grey, dim, 3), blank, (grey, divider, 3), (black, white, 2), blank,
+                 (grey, black, 3), (grey, mid, 3))
+    cells = terminal.cell_colours(pix, 14 * 4, 4, 2, 14)
     assert cells[0] == ("#d0d0d0", "#0178d4", True) and cells[2] == ("#d0d0d0", "#a3a3a3", False)
     assert cells[5] == ("#d0d0d0", None, False)
-    found = terminal.runs(cells, "kQ/ui Un▏.", 10)
+    found = terminal.runs(cells, "kQ/ui Un ▏. ab", 10)
     assert [(r["cells"], r["text"], r["ink"], r["thin"], r["graphic"]) for r in found] == [
         ([10, 10], "k", "#0178d4", False, False),
         ([11, 14], "Q/ui", "#1f1f1f", False, False),      # lighter glyphs inside a word join it
         ([16, 17], "Un", "#7e7e7e", False, False),        # a word in a dimmer ink keeps its own run
-        ([18, 18], "▏", "#acacac", False, True),          # a divider: lines and blocks, read apart from text
-        ([19, 19], ".", "#ffffff", True, False)]          # thin only: never reaches its colour
+        ([19, 19], "▏", "#acacac", False, True),          # a divider: lines and blocks, read apart from text
+        ([20, 20], ".", "#ffffff", False, False),         # a word of its own is never thin
+        ([22, 22], "a", "#1f1f1f", False, False),
+        ([23, 23], "b", "#a3a3a3", True, False)]          # lighter than its word's ink: thin
     assert found[0]["contrast"] == 2.93                   # the key letter (2.937, rounded down)
     low = terminal.lowest(found)
     assert low["min_contrast"] == 2.63 and low["lowest"]["text"] == "Un"
     assert low["min_graphic_contrast"] == 1.47
+    assert [t["text"] for t in low["thin_below_4_5"]] == ["b"]                # left out, but listed
+    shown = terminal._lowest(low)
+    assert shown.startswith("2.63 (`Un`") and "lines 1.47" in shown and "left out (thin): `b`" in shown
 
 
 def test_a_shot_in_another_state_than_asked_is_an_error():
@@ -754,5 +823,6 @@ def test_the_terminal_job_captures_a_real_kitty_window(out: Path):
     folder = Path("/tmp/tn-audit") / session["folder"]
     assert not folder.exists() and terminal.mounts_under(folder) == []
     assert terminal.marked_pids(terminal.SESSION_MARK, str(folder)) == []
-    n = session["display"].lstrip(":")
-    assert not Path(f"/tmp/.X{n}-lock").exists() and not Path(f"/tmp/.X11-unix/X{n}").exists()
+    assert session["display"] in session["displays"] and len(session["displays"]) == 2   # public + services
+    for n in (d.lstrip(":") for d in session["displays"]):
+        assert not Path(f"/tmp/.X{n}-lock").exists() and not Path(f"/tmp/.X11-unix/X{n}").exists()

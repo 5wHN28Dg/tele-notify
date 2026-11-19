@@ -254,40 +254,82 @@ def alive(pid: int) -> bool:
     return True
 
 
-def end_pids(pids: list[int], grace: float = 3) -> None:
-    """SIGTERM, then SIGKILL what is left after `grace` seconds."""
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        for p in pids:
-            try:
-                os.kill(p, sig)
-            except (ProcessLookupError, PermissionError):
-                pass
-        deadline = time.monotonic() + grace
-        while time.monotonic() < deadline and any(alive(p) for p in pids):
-            time.sleep(0.05)
-        pids = [p for p in pids if alive(p)]
-        if not pids:
-            return
+def _has_mark(pid: int, key: str, value: str, proc: str = "/proc") -> bool:
+    try:
+        with open(f"{proc}/{pid}/environ", "rb") as f:
+            return f"{key}={value}".encode() in f.read().split(b"\0")
+    except OSError:
+        return False
+
+
+def end_marked(key: str, value: str, grace: float = 3, only: list[int] | None = None) -> int:
+    """End this user's processes carrying `key=value` (or those of `only` that carry it): SIGTERM,
+    then SIGKILL what is left after `grace` seconds. Each is held by a pidfd opened before its
+    mark is checked again, so a PID reused by another process is never signalled. How many."""
+    fds = []
+    for pid in marked_pids(key, value) if only is None else only:
+        try:
+            fd = os.pidfd_open(pid)
+        except OSError:
+            continue
+        if _has_mark(pid, key, value):        # checked after the pidfd holds this very process
+            fds.append(fd)
+        else:
+            os.close(fd)
+    try:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for fd in fds:
+                with contextlib.suppress(ProcessLookupError):
+                    signal.pidfd_send_signal(fd, sig)
+            deadline = time.monotonic() + grace
+            while fds and time.monotonic() < deadline:
+                fds = _running(fds)
+                if fds:
+                    time.sleep(0.05)
+            if not fds:
+                break
+            grace = 5
+    finally:
+        for fd in fds:
+            os.close(fd)
+    return len(fds)
+
+
+def _running(fds: list[int]) -> list[int]:
+    """The pidfds whose process hasn't ended (an ended one's pidfd reads as ready); ended ones closed."""
+    import select
+
+    done = set(select.select(fds, [], [], 0)[0])
+    for fd in done:
+        os.close(fd)
+    return [fd for fd in fds if fd not in done]
+
+
+def x_displays(log: str) -> list[str]:
+    """The X displays mutter took, from its log: the public one and the one for its own services
+    ("Using public X11 display :2, (using unix:/tmp/.X11-unix/X3 for managed services)")."""
+    found = re.findall(r"Using public X11 display (:\d+)", log)
+    found += [f":{n}" for n in re.findall(r"unix:/tmp/\.X11-unix/X(\d+) for managed services", log)]
+    return list(dict.fromkeys(found))
 
 
 def clear_x_display(display: str, tmp: str = "/tmp") -> list[str]:
-    """After the session: its X display's lock file and socket, if they are this user's and the
-    lock's process is gone (Xwayland killed before it could remove them). What was removed."""
+    """After the session: an X display's lock file and socket, only when the lock is this user's
+    and its process is gone (Xwayland killed before it could remove them); a socket without such
+    a lock is left alone. What was removed."""
     m = re.fullmatch(r":(\d+)", display or "")
     if not m:
         return []
     lock, sock = Path(tmp) / f".X{m[1]}-lock", Path(tmp) / ".X11-unix" / f"X{m[1]}"
-    removed = []
     try:
         st = os.lstat(lock)
         owner = int(lock.read_text(encoding="ascii", errors="replace").strip() or "0")
     except (OSError, ValueError):
-        st, owner = None, 0
-    if st is not None:
-        if st.st_uid != os.getuid() or (owner and alive(owner)):
-            return []                      # someone else's, or still in use
-        lock.unlink()
-        removed.append(str(lock))
+        return []
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or not owner or alive(owner):
+        return []                          # someone else's, or still in use
+    lock.unlink()
+    removed = [str(lock)]
     try:
         if os.lstat(sock).st_uid == os.getuid():
             sock.unlink()
@@ -308,17 +350,50 @@ def no_signals():
         signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
 
-class Session:
-    """A headless mutter with Xwayland and its own D-Bus session, home and runtime folder."""
+def hold_folder(folder: Path) -> int:
+    """An exclusive lock on the session folder's lock file, held for the run (the sweep of a later
+    run takes only folders whose lock it can get). The file descriptor."""
+    import fcntl
 
-    def __init__(self, folder: Path, extra_path: list[str]):
+    fd = os.open(folder / "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fd
+
+
+# fonts: the system's, plus (when given) the owner's own font folder, read by fontconfig only
+FONTS_CONF = """<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+{dirs}  <cachedir>{cache}</cachedir>
+</fontconfig>
+"""
+
+
+def path_problems(path: str, home: Path) -> list[str]:
+    """Folders on `path` that are, or hold, a protected place (an installed telenotify there, or
+    anything named like a system tool, would be run instead of the real one)."""
+    bad = []
+    for d in path.split(":"):
+        why = d and (guard.why_forbidden(d, home) or guard.holds_protected(d, home))
+        if why:
+            bad.append(why)
+    return bad
+
+
+class Session:
+    """A headless mutter with Xwayland and its own D-Bus session, home and runtime folder. The
+    terminals are started by absolute path: the session's PATH is its stand-in folder and the
+    system's folders only."""
+
+    def __init__(self, folder: Path):
         self.folder = folder
         self.runtime = folder / "run"
         self.home = folder / "home"
         self.log = folder / "mutter.log"
-        self.extra_path = extra_path
         self.proc: subprocess.Popen | None = None
         self.display = ""
+        self.displays: list[str] = []
         self.bus = ""
         self.xauth = ""
         self.name = f"tn-audit-{os.getpid()}"
@@ -327,11 +402,12 @@ class Session:
     def base_env(self) -> dict[str, str]:
         """Built from scratch: nothing of the caller's desktop."""
         h = str(self.home)
-        path = ":".join([str(self.bin), *self.extra_path, "/usr/local/bin", "/usr/bin", "/bin"])
+        path = ":".join([str(self.bin), "/usr/local/bin", "/usr/bin", "/bin"])
         return {"HOME": h, "PATH": path, "LANG": "C.UTF-8", "XDG_RUNTIME_DIR": str(self.runtime),
                 "XDG_CONFIG_HOME": f"{h}/.config", "XDG_DATA_HOME": f"{h}/.local/share",
                 "XDG_CACHE_HOME": f"{h}/.cache", "XDG_STATE_HOME": f"{h}/.local/state",
                 "GSETTINGS_BACKEND": "keyfile", "NO_AT_BRIDGE": "1", "TMPDIR": str(self.folder / "tmp"),
+                "FONTCONFIG_FILE": str(self.folder / "fonts.conf"),
                 # GTK and GIO ask for no portal and no gvfs (the bus starts none anyway: BUS_CONFIG)
                 "GIO_USE_VFS": "local", "GVFS_DISABLE_FUSE": "1", "GTK_USE_PORTAL": "0",
                 "TN_AUDIT_SCOPE_LOG": str(self.folder / "systemd-run.log"), SESSION_MARK: str(self.folder)}
@@ -345,7 +421,10 @@ class Session:
         return {**self.base_env(), "DISPLAY": self.display, "XAUTHORITY": self.xauth,
                 "DBUS_SESSION_BUS_ADDRESS": self.bus, "GDK_BACKEND": "x11"}
 
-    def start(self, fonts: Path | None = None) -> None:
+    def start(self, fonts: Path | None = None, home: Path | None = None) -> None:
+        bad = path_problems(self.base_env()["PATH"], guard.real_home() if home is None else home)
+        if bad:
+            raise RuntimeError("refusing the session's PATH: " + "; ".join(bad))
         for d in (self.runtime, self.home, self.bin, self.folder / "tmp",
                   self.home / ".config" / "glib-2.0" / "settings"):
             d.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -353,10 +432,12 @@ class Session:
         stand_in = self.bin / "systemd-run"
         stand_in.write_text(SYSTEMD_RUN, encoding="utf-8")
         stand_in.chmod(0o700)
-        if fonts is not None and fonts.is_dir():
-            # the owner's own fonts (read only), so a kitty.conf's font_family is found
-            (self.home / ".local" / "share").mkdir(parents=True, exist_ok=True)
-            (self.home / ".local" / "share" / "fonts").symlink_to(fonts)
+        import html
+
+        dirs = f"  <dir>{html.escape(str(fonts))}</dir>\n" if fonts is not None and fonts.is_dir() else ""
+        (self.folder / "fonts.conf").write_text(
+            FONTS_CONF.format(dirs=dirs, cache=html.escape(str(self.home / ".cache" / "fontconfig"))),
+            encoding="utf-8")
         bus_file = self.folder / "bus"
         services = self.folder / "no-services"
         services.mkdir(mode=0o700, exist_ok=True)
@@ -381,6 +462,7 @@ class Session:
             if self.proc.poll() is not None:
                 break
             time.sleep(0.2)
+        self._note_displays()
         if not self.display:
             raise RuntimeError("mutter didn't start Xwayland: " + _tail(self.log))
         deadline = time.monotonic() + 10
@@ -391,21 +473,44 @@ class Session:
         if not self.xauth:
             raise RuntimeError("no Xwayland authority file in the session's runtime folder")
 
+    def _note_displays(self) -> None:
+        """Both X displays, also written down for a later run's sweep."""
+        try:
+            self.displays = x_displays(self.log.read_text(errors="replace"))
+        except OSError:
+            return
+        (self.folder / "displays").write_text("\n".join(self.displays), encoding="ascii")
+
     def stop(self) -> None:
-        """mutter alone first (so it ends Xwayland, which removes its lock and socket), then the
+        """mutter alone first (so it ends Xwayland, which removes its locks and sockets), then the
         rest of the group, then anything else the session started, then a lock or socket left."""
         if self.proc is None:
             return
-        try:
-            mutter = int((self.folder / "mutter.pid").read_text(encoding="ascii").strip())
-        except (OSError, ValueError):
-            mutter = 0
-        if mutter and mutter in marked_pids(SESSION_MARK, str(self.folder)):
-            end_pids([mutter], grace=10)
+        self._note_displays()
+        stop_folder(self.folder, self.displays)
         _kill_group(self.proc)
-        end_pids(marked_pids(SESSION_MARK, str(self.folder)))
+        end_marked(SESSION_MARK, str(self.folder))
         self.proc = None
-        self.cleared = clear_x_display(self.display)
+        self.cleared = [f for d in self.displays for f in clear_x_display(d)]
+
+
+def stop_folder(folder: Path, displays: list[str] | None = None) -> list[str]:
+    """Stop what a session folder's run started: its mutter alone first (10 s to end Xwayland),
+    then every process carrying its mark; then its displays' stale locks and sockets. What was
+    removed of those."""
+    try:
+        mutter = int((folder / "mutter.pid").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        mutter = 0
+    if mutter:
+        end_marked(SESSION_MARK, str(folder), grace=10, only=[mutter])
+    end_marked(SESSION_MARK, str(folder))
+    if displays is None:
+        try:
+            displays = (folder / "displays").read_text(encoding="ascii").split()
+        except OSError:
+            displays = []
+    return [f for d in displays for f in clear_x_display(d)]
 
 
 def sh(p: Path) -> str:
@@ -420,21 +525,31 @@ def _tail(p: Path, n: int = 15) -> str:
         return ""
 
 
+def _ended(proc: subprocess.Popen, timeout: float) -> bool:
+    """Wait up to `timeout` for a child to end WITHOUT reaping it: while it is unreaped its process
+    and group IDs can't be reused, so signalling them stays safe."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+                return True
+        except ChildProcessError:
+            return True                      # already reaped
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
 def _kill_group(proc: subprocess.Popen, grace: float = 5) -> None:
-    """End a process started with start_new_session, and everything it started."""
-    try:
+    """End a process started with start_new_session, and its group. Never after the leader is
+    reaped (its group ID could then belong to someone else): what outlived it is found by mark."""
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        proc.wait(grace)
-    except subprocess.TimeoutExpired:
-        pass
-    # whatever is left of the group (the leader, or children that outlived it)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _ended(proc, grace)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)  # the leader is unreaped: the group is still this one
     try:
         proc.wait(5)
     except subprocess.TimeoutExpired:
@@ -483,13 +598,15 @@ def collect(sb: Sandbox, terminals: list[str], sizes: list[str], themes: list[st
         folder = session_folder(sb)
         guard.check([folder], sb.real_home)
         folder.mkdir(mode=0o700)
+        held = hold_folder(folder)                     # this run's: a later run's sweep leaves it alone
         session["folder"] = folder.name
         keep = sb.dry_run
-        sess = Session(folder, sorted({str(e.parent) for e in exes.values() if e}))
+        sess = Session(folder)
         try:
             fonts = sb.real_home / ".local" / "share" / "fonts"
-            sess.start(fonts if fonts.is_dir() and not guard.why_forbidden(fonts, sb.real_home) else None)
-            session["display"] = sess.display
+            sess.start(fonts if fonts.is_dir() and not guard.why_forbidden(fonts, sb.real_home) else None,
+                       home=sb.real_home)
+            session["display"], session["displays"] = sess.display, sess.displays
             for i, s in enumerate(shots):
                 exe = exes[s.terminal]
                 if exe is None:
@@ -508,6 +625,7 @@ def collect(sb: Sandbox, terminals: list[str], sizes: list[str], themes: list[st
                     _remove(folder)
                 except (RuntimeError, OSError) as e:
                     problem = (problem + "; " if problem else "") + evidence.redact(str(e))
+                os.close(held)
     evidence.write_json(sb.out / "terminal" / "index.json", index)
     evidence.write_text(sb.out / "terminal" / "summary.md", summary(index, session, problem))
     errors = sum(1 for r in index if "error" in r) + (1 if problem else 0)
@@ -522,25 +640,49 @@ def session_folder(sb: Sandbox) -> Path:
     return sb.base / f"{sb.run}-term"
 
 
-def sweep_stale(base: Path) -> list[str]:
-    """Session folders of earlier terminal runs whose process is gone (killed before it could clean
-    up): what they still run is ended, what is mounted in them unmounted, then they are deleted.
-    A folder of a run still going, or not this user's, is left alone. The names swept."""
+def sweep_stale(base: Path, young: float = 120) -> list[str]:
+    """Session folders of earlier terminal runs that ended without cleaning up (killed): their
+    mutter is stopped first, then what else they still run, their X displays' stale locks and
+    sockets are removed, what is mounted in them unmounted, then they are deleted. A run still
+    going holds its folder's lock (also across PID namespaces sharing /tmp), so only folders whose
+    lock this run can take are swept; a folder without a lock file only once it is `young`
+    seconds old (it may be a run between making it and locking it). Not this user's: left alone.
+    The names swept."""
+    import fcntl
+
     swept = []
     for d in sorted(base.glob("terminal-*-term")):
-        m = re.fullmatch(r"terminal-\d{8}-\d{6}-(\d+)-term", d.name)
         try:
             st = os.lstat(d)
         except OSError:
             continue
-        if not m or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or alive(int(m[1])):
+        if (not re.fullmatch(r"terminal-\d{8}-\d{6}-\d+-term", d.name) or not stat.S_ISDIR(st.st_mode)
+                or st.st_uid != os.getuid()):
             continue
-        end_pids(marked_pids(SESSION_MARK, str(d)))
         try:
-            _remove(d)
-        except (RuntimeError, OSError):
+            fd = os.open(d / "lock", os.O_RDWR | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            if time.time() - st.st_mtime < young:
+                continue
+            fd = None
+        except OSError:
             continue
-        swept.append(d.name)
+        try:
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue                   # a run still going
+            with no_signals():
+                stop_folder(d)
+                try:
+                    _remove(d)
+                except (RuntimeError, OSError):
+                    continue
+            swept.append(d.name)
+        finally:
+            if fd is not None:
+                os.close(fd)
     return swept
 
 
@@ -665,16 +807,10 @@ def take(sb: Sandbox, sess: Session, s: Shot, n: int, exe: Path, versions: dict[
     finally:
         with no_signals():
             quit_.touch()
-            try:
-                proc.wait(5)
-            except subprocess.TimeoutExpired:
-                pass
+            _ended(proc, 5)                  # the terminal closes when the screen quits (not reaped yet)
             _kill_group(proc, grace=2)
             # the terminal's helpers and the screen run in sessions of their own: found by the shot's mark
-            left = set(marked_pids(SHOT_MARK, str(shot_dir)))
-            if isinstance(seen.get("pid"), int) and alive(seen["pid"]):
-                left.add(seen["pid"])
-            end_pids(sorted(left))
+            end_marked(SHOT_MARK, str(shot_dir))
 
 
 def mismatches(s: Shot, seen: dict) -> list[str]:
@@ -758,8 +894,10 @@ def runs(cells: list[tuple[str, str | None, bool]], text: str = "", x0: int = 0)
     `/`, `u`), when a later glyph of the same word (no blank cell between) is in the run's ink
     again. A word drawn in a dimmer ink keeps its own run. Each run: its cells, the text drawn
     there, the colours and their contrast (rounded down, so a reading is never shown above what
-    was drawn); `thin` when no cell of it reached its ink in whole pixels (the contrast is then
-    lower than drawn), `graphic` when its text is only lines and blocks."""
+    was drawn); `thin` when it is only a lighter rendering inside words that reach a farther ink
+    elsewhere (its own reading understates what is drawn; a word on its own, even of short
+    lowercase letters or a lone `.`, is never thin), `graphic` when its text is only lines and
+    blocks."""
     def word_returns_to(i: int, bg: str, ink: str) -> bool:
         """A later glyph of the word holding cell i is in `ink` (lighter blends between are skipped)."""
         for b, k, _solid in cells[i + 1:]:
@@ -797,11 +935,28 @@ def runs(cells: list[tuple[str, str | None, bool]], text: str = "", x0: int = 0)
                 continue
         cur = {"start": i, "end": i, "background": bg, "ink": ink, "solid": solid}
         out.append(cur)
+    # words: inked cells with no blank cell or change of background between them; a word's ink is
+    # the farthest from its background any of its cells reached
+    word_of, word_ink, w = [], {}, -1
+    for i, (bg, ink, _solid) in enumerate(cells):
+        prev = cells[i - 1] if i else None
+        if ink is None or prev is None or prev[1] is None or prev[0] != bg:
+            w += 1
+        word_of.append(w)
+        if ink is not None:
+            best = word_ink.get(w)
+            if best is None or svg.contrast_exact(ink, bg) > svg.contrast_exact(best, bg):
+                word_ink[w] = ink
     for r in out:
-        r["cells"] = [x0 + r.pop("start"), x0 + r.pop("end")]
-        r["text"] = text[r["cells"][0] - x0:r["cells"][1] - x0 + 1].strip() if text else ""
+        start, end = r.pop("start"), r.pop("end")
+        r.pop("solid")
+        inks = {word_ink[word_of[i]] for i in range(start, end + 1) if cells[i][1] is not None}
+        # thin: a lighter rendering inside words that reach a farther ink elsewhere (strokes
+        # between pixels); its own ink understates what is drawn
+        r["thin"] = bool(inks) and all(k != r["ink"] and _blend(r["ink"], r["background"], k) for k in inks)
+        r["cells"] = [x0 + start, x0 + end]
+        r["text"] = text[start:end + 1].strip() if text else ""
         r["contrast"] = math.floor(svg.contrast_exact(r["ink"], r["background"]) * 100) / 100
-        r["thin"] = not r.pop("solid")
         r["graphic"] = bool(r["text"]) and GRAPHIC.fullmatch(r["text"]) is not None
     return out
 
@@ -838,12 +993,15 @@ def read_rows(env: dict[str, str], png: Path, cols: int, rows: int, regions: dic
 
 
 def lowest(found: list[dict]) -> dict:
-    """The lowest text run (not thin-only, not lines and blocks) and the lowest lines-and-blocks run."""
+    """The lowest text run (not thin, not lines and blocks), the lowest lines-and-blocks run, and
+    the thin runs left out that read below 4.5 (so nothing low is hidden)."""
     text = [r for r in found if not r["thin"] and not r["graphic"]]
     graphic = [r for r in found if r["graphic"]]
     low = min(text, key=lambda r: r["contrast"]) if text else None
     return {"min_contrast": low["contrast"] if low else None, "lowest": low,
-            "min_graphic_contrast": min(r["contrast"] for r in graphic) if graphic else None}
+            "min_graphic_contrast": min(r["contrast"] for r in graphic) if graphic else None,
+            "thin_below_4_5": [{"text": r["text"], "contrast": r["contrast"]} for r in found
+                               if r["thin"] and not r["graphic"] and r["contrast"] < 4.5]}
 
 
 def _lowest(reading: dict | None) -> str:
@@ -851,7 +1009,13 @@ def _lowest(reading: dict | None) -> str:
         return ""
     low, graphic = reading.get("lowest"), reading.get("min_graphic_contrast")
     shown = f"{reading['min_contrast']} (`{low['text']}` {low['ink']} on {low['background']})" if low else ""
-    return shown + (f"; lines {graphic}" if graphic is not None else "")
+    if graphic is not None:
+        shown += f"; lines {graphic}"
+    thin = reading.get("thin_below_4_5") or []
+    if thin:
+        shown += "; left out (thin): " + ", ".join(f"`{t['text']}` {t['contrast']}" for t in thin[:4])
+        shown += f" and {len(thin) - 4} more" if len(thin) > 4 else ""
+    return shown
 
 
 def summary(index: list[dict], session: dict, problem: str | None = None) -> str:
@@ -874,10 +1038,11 @@ def summary(index: list[dict], session: dict, problem: str | None = None) -> str
                      f"{_lowest(read.get('header'))} | {_lowest(read.get('footer'))} |")
     lines += ["", ("Lowest contrast: the header's and footer's cells as drawn, cell by cell, each run of text's ink "
                    "against its background, rounded down; the lowest text run is named, and \"lines\" gives the "
-                   "lowest for box-drawing lines and blocks (dividers, bars). Runs of thin glyphs only (`/`, `·`) "
-                   "are left out: anti-aliasing keeps them from reaching their colour. All runs are in index.json, "
-                   "`rows_read`. Kitty with its defaults only, where the cell grid's place in the image is known. "
-                   "It is a reading, not the R6 measure: R6 uses the `colours` job's per-state pairs."), ""]
+                   "lowest for box-drawing lines and blocks (dividers, bars). A run that is only a lighter rendering "
+                   "inside a word reaching a darker ink elsewhere (strokes falling between pixels) is thin: left "
+                   "out of the lowest, and listed when it reads below 4.5. All runs are in index.json, `rows_read`. "
+                   "Kitty with its defaults only, where the cell grid's place in the image is known. It is a "
+                   "reading, not the R6 measure: R6 uses the `colours` job's per-state pairs."), ""]
     return "\n".join(lines)
 
 
