@@ -292,7 +292,9 @@ async def test_after_the_delay_a_press_confirms(paths, fake_systemctl, monkeypat
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        app.post_message(_key("y", "y", time.monotonic()))     # too early: says so
+        while screen._armed_at == float("inf"):               # drawn: the delay is set
+            await pilot.pause(0.01)
+        app.post_message(_key("y", "y", screen._armed_at - 0.1))   # made too early: says so
         await pilot.pause()
         assert "Too quick" in str(screen.query_one("#confirm-wait").render())
         while time.monotonic() < screen._armed_at + 0.05:
