@@ -400,13 +400,19 @@ def test_out_must_be_new_or_empty_and_leaks_json_isnt_written_through_a_link(tmp
     out = tmp_path / "out"
     out.mkdir()
     (out / "leaks.json").symlink_to(decoy)
-    with pytest.raises(guard.Refused, match="isn't empty"):
+    with pytest.raises(guard.Refused, match="a link"):
         sbx.fresh_out(out)
+    (out / "earlier.svg").write_text("x", encoding="utf-8")
+    (out / "leaks.json").unlink()
+    sbx.fresh_out(out)                                           # earlier plain evidence is fine
+    (out / "leaks.json").symlink_to(decoy)
     with pytest.raises(OSError):
         evidence.scan(out)                                       # the leaks job on an existing folder
     assert decoy.read_text(encoding="utf-8") == "keep me"
     (out / "leaks.json").unlink()
     os.link(decoy, out / "leaks.json")                           # a hard link is refused too
+    with pytest.raises(guard.Refused, match="a link"):
+        sbx.fresh_out(out)
     with pytest.raises(OSError):
         evidence.scan(out)
     assert decoy.read_text(encoding="utf-8") == "keep me"

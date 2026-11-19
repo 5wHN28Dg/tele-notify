@@ -156,15 +156,21 @@ def _own_dir(p: Path) -> None:
 
 
 def fresh_out(out: Path) -> None:
-    """--out is new, or an empty real folder of this user's: nothing in it can be a link
-    that evidence would be written through (a symlink or a hard link into a protected
-    file). Made 0700."""
+    """--out is new, or a real folder of this user's holding only real folders and plain
+    files (earlier evidence): nothing in it can be a link that evidence would be written
+    through (a symlink, or a hard link into a protected file). Made 0700."""
     if os.path.lexists(out):
         st = os.lstat(out)
         if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
             raise guard.Refused(f"--out {out} isn't a folder of this user's (a symlink, a file or someone else's)")
-        if any(os.scandir(out)):
-            raise guard.Refused(f"--out {out} isn't empty: give a new folder for each run")
+        for root, dirs, files in os.walk(out, followlinks=False):
+            for name in dirs + files:
+                p = os.path.join(root, name)
+                e = os.lstat(p)
+                plain = stat.S_ISDIR(e.st_mode) or (stat.S_ISREG(e.st_mode) and e.st_nlink == 1)
+                if not plain or e.st_uid != os.getuid():
+                    raise guard.Refused(f"--out holds {p}, a link or special file (or someone else's): "
+                                        "evidence could be written through it; give a new folder")
     else:
         out.mkdir(mode=0o700, parents=True)
     os.chmod(out, 0o700)
