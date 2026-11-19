@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 
 from . import guard
@@ -40,7 +41,8 @@ def leaks(out: Path, home: Path | None = None, login: str | None = None,
         names = _real_names()
     for n in names:
         words.setdefault(n.lower(), "real name or host name")
-    words = {w.encode(): what for w, what in words.items() if len(w) > 2}
+    words = {w.casefold(): what for w, what in words.items()
+             if len(w) > 3 or (len(w) > 2 and w.casefold() not in SHORT_COMMON)}
     hits = []
     for root, dirs, files in os.walk(out, followlinks=False):
         for d in sorted(dirs):
@@ -50,22 +52,51 @@ def leaks(out: Path, home: Path | None = None, login: str | None = None,
             f = Path(root, fname)
             rel = f.relative_to(out)
             for w, what in words.items():
-                if w in str(rel).encode().lower():
+                if w in str(rel).casefold():
                     hits.append({"file": str(rel), "what": what + " in the file name"})
-            if f.is_symlink():
+            try:
+                st = os.lstat(f)
+            except OSError as e:
+                hits.append({"file": str(rel), "what": f"can't be checked: {e.strerror}"})
+                continue
+            if stat.S_ISLNK(st.st_mode):
                 hits.append({"file": str(rel), "what": "symlink (not followed)"})
+                continue
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+                hits.append({"file": str(rel), "what": "not a plain file (a FIFO, socket, device or hard link): not read"})
                 continue
             if fname == "leaks.json" or guard.why_forbidden(f, home):
                 continue
-            raw = f.read_bytes()
-            low = raw.lower()
+            if st.st_size > MAX_SCAN:
+                hits.append({"file": str(rel), "what": f"larger than {MAX_SCAN} bytes: not read"})
+                continue
+            try:
+                fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as fh:
+                    raw = fh.read()
+            except OSError as e:
+                hits.append({"file": str(rel), "what": f"can't be read: {e.strerror}"})
+                continue
+            text = raw.decode("utf-8", "replace").casefold()
             for n in needles:
                 if n in raw:
                     hits.append({"file": str(rel), "what": "real home path", "at": raw.index(n)})
             for w, what in words.items():
-                if w in low:
-                    hits.append({"file": str(rel), "what": what, "at": low.index(w)})
+                for form in _forms(w):
+                    if form in text:
+                        hits.append({"file": str(rel), "what": what, "at": text.index(form)})
+                        break
     return hits
+
+
+MAX_SCAN = 64 * 1024 * 1024
+SHORT_COMMON = {"bin", "abu", "usr", "var", "tmp", "lib", "dev", "run", "opt", "etc", "src", "app", "box", "pc"}
+
+
+def _forms(w: str) -> set[str]:
+    """`w` as written, JSON-escaped and HTML-escaped (all casefolded)."""
+    import html
+    return {w, json.dumps(w)[1:-1].casefold(), html.escape(w).casefold()}
 
 
 def _real_names() -> list[str]:
@@ -78,8 +109,17 @@ def _real_names() -> list[str]:
 def scan(out: Path) -> bool:
     """Write out/leaks.json; True when nothing leaked. The file itself names neither."""
     hits = leaks(out)
-    (out / "leaks.json").write_text(json.dumps({"clean": not hits, "hits": hits}, indent=2) + "\n",
-                                    encoding="utf-8")
+    data = (json.dumps({"clean": not hits, "hits": hits}, indent=2) + "\n").encode()
+    # never through a link: O_NOFOLLOW refuses a symlink, and a hard link is refused below
+    fd = os.open(out / "leaks.json", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            raise OSError(f"{out / 'leaks.json'} is a link or not a file: not written")
+        os.ftruncate(fd, 0)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
     return not hits
 
 

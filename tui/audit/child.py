@@ -19,6 +19,8 @@ def main(argv: list[str]) -> int:
     if argv[:1] == ["app"]:
         from telenotify_tui.__main__ import main as app_main
 
+        appsrc.verify_loaded()
+
         app_main(argv[1:])
         return 0
     if argv[:1] == ["timing"]:

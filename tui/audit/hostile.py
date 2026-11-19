@@ -220,7 +220,10 @@ def one(sb: Sandbox, bidi: str) -> dict:
         alive = os.waitpid(pid, os.WNOHANG) == (0, 0)
     finally:
         try:
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.killpg(pid, signal.SIGKILL)       # the pty child leads its own session: its children too
+            except ProcessLookupError:
+                os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
         except (ProcessLookupError, ChildProcessError):
             pass

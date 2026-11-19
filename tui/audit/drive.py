@@ -44,6 +44,14 @@ async def settle(app, pilot, timeout: float = 10) -> bool:
     return True
 
 
+async def confirm_wait(app, pilot) -> None:
+    """Wait as a person would before answering a confirmation dialog: screens that ignore
+    presses made right after they open (ARM_DELAY) would drop an instant answer."""
+    delay = getattr(type(app.screen), "ARM_DELAY", 0) or 0
+    if delay:
+        await pilot.pause(delay + 0.1)
+
+
 def describe(w: Widget | None) -> str:
     if w is None:
         return "(nothing)"

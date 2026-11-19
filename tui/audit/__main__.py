@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -80,10 +81,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"built_now": built, **man}))
         return 0
     try:
+        if a.job != "interactive":
+            sbx.fresh_out(sb.out)
         sbx.create(sb)
     except (guard.Refused, OSError) as e:
         print(e, file=sys.stderr)
         return 2
+    # a closed terminal or a kill still cleans up the run folder (finally below)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _exit_on_signal)
     try:
         if a.job == "interactive":
             from . import interactive
@@ -99,7 +105,11 @@ def main(argv: list[str] | None = None) -> int:
         sb.out.mkdir(parents=True, exist_ok=True)
         sbx.prepare(sb)
         sbx.apply(sb)
+        import telenotify_tui  # noqa: F401  (after apply; verify_loaded checks where it came from)
+        appsrc.verify_loaded()
         result = run_job(a, sb)
+        if sb.use_repo_bin:
+            info["telenotify"] = "the repository's build, run with --no-scrape"
         evidence.write_json(sb.out / f"run-{a.job}.json", {**info, "result": result})
         print(json.dumps(result, ensure_ascii=False))
     finally:
@@ -107,7 +117,15 @@ def main(argv: list[str] | None = None) -> int:
     clean = evidence.scan(sb.out)
     if not clean:
         print(f"LEAKS: see {sb.out / 'leaks.json'}", file=sys.stderr)
-    return 0 if clean else 3
+        return 3
+    if isinstance(result, dict) and result.get("errors"):
+        print(f"{result['errors']} state(s) couldn't be measured: see the summary", file=sys.stderr)
+        return 4
+    return 0
+
+
+def _exit_on_signal(signum, _frame) -> None:
+    raise SystemExit(128 + signum)
 
 
 def run_job(a: argparse.Namespace, sb) -> dict:

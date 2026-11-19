@@ -44,6 +44,11 @@ class Counter:
             await self.pilot.pause()
         await self.settle()
 
+    async def confirm_wait(self) -> None:
+        """A dialog's arming delay: a wait, not an action (not counted)."""
+        self.log.append("wait for the dialog")
+        await drive.confirm_wait(self.app, self.pilot)
+
     async def type(self, text: str) -> None:
         """Typed text: one key, whatever its length."""
         self.keys += 1

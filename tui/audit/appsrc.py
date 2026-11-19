@@ -22,9 +22,12 @@ def use(app_dir: str | os.PathLike[str] | None) -> Path:
     """Import telenotify_tui from `app_dir` (a tui/ folder). Call before importing it."""
     d = Path(app_dir or HERE).resolve()
     from . import guard
-    why = guard.why_forbidden(d, guard.real_home())
-    if why:
-        raise SystemExit(f"refusing to run: --app {why}")
+    home = guard.real_home()
+    pkg = d / "telenotify_tui"
+    for p in (d, pkg, pkg / "__init__.py"):
+        why = guard.why_forbidden(p, home)          # follows symlinks: a linked package counts too
+        if why:
+            raise SystemExit(f"refusing to run: --app {why}")
     if not (d / "telenotify_tui" / "__init__.py").is_file():
         raise SystemExit(f"{d} has no telenotify_tui package (give a checkout's tui/ folder)")
     if "telenotify_tui" in sys.modules and Path(sys.modules["telenotify_tui"].__file__ or "").parent.parent != d:
@@ -34,6 +37,18 @@ def use(app_dir: str | os.PathLike[str] | None) -> Path:
     sys.path.insert(0, str(d))
     os.environ[ENV] = str(d)
     return d
+
+
+def verify_loaded() -> None:
+    """After import: every telenotify_tui module came from an allowed place."""
+    from . import guard
+    home = guard.real_home()
+    for name, mod in list(sys.modules.items()):
+        if name == "telenotify_tui" or name.startswith("telenotify_tui."):
+            f = getattr(mod, "__file__", None)
+            why = f and guard.why_forbidden(f, home)
+            if why:
+                raise SystemExit(f"refusing to run: {name} was loaded from a protected place ({why})")
 
 
 def describe(d: Path) -> dict:

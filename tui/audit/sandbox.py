@@ -90,11 +90,17 @@ class Sandbox:
 
     @property
     def telenotify(self) -> Path:
-        return REPO / "telenotify" if self.use_repo_bin else self.bin / "telenotify"
+        """The program the screen runs: always in the run's bin/. With --bin repo it's a
+        wrapper that runs the repository's build with --no-scrape, so nothing is fetched."""
+        return self.bin / "telenotify"
+
+    @property
+    def repo_telenotify(self) -> Path:
+        return REPO / "telenotify"
 
     def all_paths(self) -> list[Path]:
         return [self.root, self.home, self.config, self.data_dir, self.state, self.labels, self.corpus,
-                self.bin, self.tmp, self.cache, self.scratch, self.telenotify, self.out]
+                self.bin, self.tmp, self.cache, self.scratch, self.telenotify, self.repo_telenotify, self.out]
 
     # ------------------------------------------------------- environment
 
@@ -133,8 +139,8 @@ def check(sb: Sandbox) -> None:
     if (sb.out == sb.base or sb.base in sb.out.parents
             or real_out == real_base or real_base in real_out.parents):
         raise guard.Refused(f"--out must be outside {sb.base}: run folders are deleted")
-    if sb.use_repo_bin and not sb.telenotify.is_file():
-        raise guard.Refused(f"--bin repo: {sb.telenotify} isn't built (nimble build -d:release)")
+    if sb.use_repo_bin and not sb.repo_telenotify.is_file():
+        raise guard.Refused(f"--bin repo: {sb.repo_telenotify} isn't built (nimble build -d:release)")
 
 
 def _own_dir(p: Path) -> None:
@@ -149,6 +155,21 @@ def _own_dir(p: Path) -> None:
     os.chmod(p, 0o700)
 
 
+def fresh_out(out: Path) -> None:
+    """--out is new, or an empty real folder of this user's: nothing in it can be a link
+    that evidence would be written through (a symlink or a hard link into a protected
+    file). Made 0700."""
+    if os.path.lexists(out):
+        st = os.lstat(out)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            raise guard.Refused(f"--out {out} isn't a folder of this user's (a symlink, a file or someone else's)")
+        if any(os.scandir(out)):
+            raise guard.Refused(f"--out {out} isn't empty: give a new folder for each run")
+    else:
+        out.mkdir(mode=0o700, parents=True)
+    os.chmod(out, 0o700)
+
+
 def create(sb: Sandbox) -> None:
     """The run's own folder, new (a run never reuses or shares one)."""
     _own_dir(sb.base)
@@ -158,8 +179,9 @@ def create(sb: Sandbox) -> None:
 def remove(sb: Sandbox) -> None:
     """Keep the fakes' call logs as evidence, then delete the run folder and its scratch copy."""
     logs = sb.root / "log"
-    if logs.is_dir() and sb.out.is_dir():
-        shutil.copytree(logs, sb.out / "fake-calls", dirs_exist_ok=True)
+    dest = sb.out / "fake-calls"
+    if logs.is_dir() and sb.out.is_dir() and not os.path.lexists(dest):
+        shutil.copytree(logs, dest, symlinks=True)
     for d in (sb.root, sb.scratch):
         if d.is_dir() and not d.is_symlink():
             shutil.rmtree(d)
@@ -194,6 +216,12 @@ def prepare(sb: Sandbox, *, services: dict | None = None, state: bool = True) ->
     for d in (sb.home, sb.data_dir, sb.labels.parent, sb.tmp, sb.root / "log"):
         d.mkdir(parents=True, exist_ok=True)
     fakes.install(sb.root, sb.bin)
+    if sb.use_repo_bin:
+        wrapper = sb.bin / "telenotify"
+        wrapper.unlink(missing_ok=True)
+        # the real filter, never following links over the network
+        wrapper.write_text(f'#!/bin/sh\nexec "{sb.repo_telenotify}" "$@" --no-scrape\n', encoding="utf-8")
+        wrapper.chmod(0o700)
     mine, other = "active", "inactive"   # the service of the shown mode runs
     fakes.set_services(sb.root, services or (fakes.services(dry_run=mine, real=other) if sb.dry_run
                                              else fakes.services(dry_run=other, real=mine)))

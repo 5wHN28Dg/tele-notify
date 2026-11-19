@@ -34,6 +34,7 @@ async def _drive(sb: Sandbox) -> list[str]:
         for button in ("#svc-stop", "#svc-start"):
             await pilot.click(button)
             await drive.settle(app, pilot)
+            await drive.confirm_wait(app, pilot)
             await pilot.press("y")
             await drive.settle(app, pilot)
             done.append(f"dashboard: {button[5:]} + y")

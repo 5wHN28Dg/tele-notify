@@ -174,6 +174,7 @@ async def revert_kb(c: Counter) -> None:
     await _into_list_kb(c)
     await c.key("x")
     await c.key("ctrl+r")
+    await c.confirm_wait()
     await c.key("y")
 
 
@@ -182,6 +183,7 @@ async def revert_mouse(c: Counter) -> None:
     await c.click("#editor-roles #kw-items", offset=(2, 0), what="the first keyword")
     await c.click("#editor-roles #kw-delete", what="Delete")
     await c.click("#revert", what="Revert")
+    await c.confirm_wait()
     await c.click("#yes", what="the confirm button")
 
 

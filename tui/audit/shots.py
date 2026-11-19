@@ -276,4 +276,5 @@ def colours(sb: Sandbox, themes: list[str]) -> dict:
                         "exempt (disabled or dimmed controls, placeholders, unfocused decorative borders, stock "
                         "Textual styles): see states.json for the cells and the auditor decides.\n")
     evidence.write_json(sb.out / "colours" / "summary.json", summary)
-    return {"states": len(summary), "below": sum(s["pairs_below_minimum"] for s in summary)}
+    return {"states": len(summary), "below": sum(s["pairs_below_minimum"] for s in summary),
+            "errors": sum(1 for s in summary if s["error"])}

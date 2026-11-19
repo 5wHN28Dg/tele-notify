@@ -392,3 +392,74 @@ def test_the_app_folder_cant_be_a_protected_place(fake_home: Path, monkeypatch):
     monkeypatch.setattr(guard, "real_home", lambda: fake_home)
     with pytest.raises(SystemExit, match="refusing"):
         appsrc.use(installed)
+
+
+def test_out_must_be_new_or_empty_and_leaks_json_isnt_written_through_a_link(tmp_path: Path):
+    decoy = tmp_path / "decoy"
+    decoy.write_text("keep me", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "leaks.json").symlink_to(decoy)
+    with pytest.raises(guard.Refused, match="isn't empty"):
+        sbx.fresh_out(out)
+    with pytest.raises(OSError):
+        evidence.scan(out)                                       # the leaks job on an existing folder
+    assert decoy.read_text(encoding="utf-8") == "keep me"
+    (out / "leaks.json").unlink()
+    os.link(decoy, out / "leaks.json")                           # a hard link is refused too
+    with pytest.raises(OSError):
+        evidence.scan(out)
+    assert decoy.read_text(encoding="utf-8") == "keep me"
+    new = tmp_path / "new" / "out"
+    sbx.fresh_out(new)
+    assert new.is_dir() and (new.stat().st_mode & 0o777) == 0o700
+    link = tmp_path / "linked-out"
+    link.symlink_to(tmp_path / "new")
+    with pytest.raises(guard.Refused):
+        sbx.fresh_out(link)
+
+
+def test_the_leak_scan_reads_no_fifo_or_hard_link(fake_home: Path, tmp_path: Path):
+    state = fake_home / ".local" / "share" / "tele-notify" / "state.sqlite3"
+    state.write_text("someone's data", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    os.mkfifo(out / "pipe")                                      # would block a read forever
+    os.link(state, out / "hard")
+    hits = evidence.leaks(out, home=fake_home, login="someone", names=[])
+    whats = {h["file"]: h["what"] for h in hits}
+    assert "not read" in whats["pipe"] and "not read" in whats["hard"]
+
+
+def test_a_linked_package_counts_as_its_target(fake_home: Path, tmp_path: Path, monkeypatch):
+    from audit import appsrc
+    pkg = fake_home / ".local" / "lib" / "tele-notify" / "telenotify_tui"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "telenotify_tui").symlink_to(pkg)
+    monkeypatch.setattr(guard, "real_home", lambda: fake_home)
+    with pytest.raises(SystemExit, match="refusing"):
+        appsrc.use(app)
+
+
+def test_names_are_found_escaped_and_in_any_case(tmp_path: Path):
+    (tmp_path / "a.json").write_text('{"by": "Z\\u00e9na"}', encoding="utf-8")
+    (tmp_path / "b.txt").write_text("ZÉNA was here", encoding="utf-8")
+    (tmp_path / "c.txt").write_text("/usr/bin/env", encoding="utf-8")       # "bin" is too common to count
+    hits = evidence.leaks(tmp_path, home=Path("/home/someone"), login="someone", names=["Zéna", "bin"])
+    assert {h["file"] for h in hits} == {"a.json", "b.txt"}
+
+
+def test_the_repo_binary_runs_without_scraping(tmp_path: Path, monkeypatch):
+    sb = sbx.plan(tmp_path / "out", base=tmp_path / "base", use_repo_bin=True)
+    monkeypatch.setattr(sbx, "REPO", tmp_path)
+    (tmp_path / "telenotify").write_text("", encoding="utf-8")
+    sbx.create(sb)
+    try:
+        sbx.prepare(sb, state=False)
+        wrapper = sb.telenotify.read_text(encoding="utf-8")
+        assert "--no-scrape" in wrapper and sb.telenotify.parent == sb.bin
+    finally:
+        sbx.remove(sb)

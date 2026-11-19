@@ -65,6 +65,7 @@ def headless_check(sb: Sandbox, bidi: str | None) -> dict:
             for button in ("#svc-restart", "#svc-stop", "#svc-start"):
                 await pilot.click(button)
                 await drive.settle(app, pilot)
+                await drive.confirm_wait(app, pilot)
                 await pilot.press("y")
                 await drive.settle(app, pilot)
             return [str(app.sub_title)]
