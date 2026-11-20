@@ -1,5 +1,6 @@
-import std/[unittest, os, tables]
+import std/[unittest, os, tables, strutils]
 import telenotify/state
+import db_connector/db_sqlite
 
 let dir = getTempDir() / "tn-state-test"
 removeDir(dir)
@@ -117,6 +118,50 @@ suite "state":
     st.setMeta("last_alive", "123")
     check st.getMeta("last_alive") == "123"
     check st.getMeta("missing") == ""
+
+  test "the bot's reads of processed use an index, never a whole-table walk":
+    # the real queries: a full scan, or a walk over a whole index, grows
+    # with every post ever judged
+    let db = open(dir / "state.sqlite3", "", "", "")
+    defer: db.close()
+    proc plan(q: string, args: varargs[string]): seq[string] =
+      for r in db.fastRows(sql("EXPLAIN QUERY PLAN " & q), args): result.add r[^1]
+    let st7 = plan(statsSql, "0")
+    check "SEARCH p USING INDEX processed_at (at>?)" in st7
+    check "SEARCH q USING COVERING INDEX processed_chat_album (chat_id=? AND album_id=?)" in st7
+    for line in st7: check not line.startsWith("SCAN")   # nothing else walks a whole table
+    check plan(processedSinceSql, "0") == @["SEARCH processed USING INDEX processed_at (at>?)"]
+    check plan(albumHandledSql, "-100", "7") ==
+      @["SEARCH processed USING INDEX processed_chat_album (chat_id=? AND album_id=?)"]
+
+  test "stats: equal counts in chat order, each chat under its newest title":
+    let ts = openState(dir / "ties.sqlite3")
+    defer: ts.close()
+    ts.markProcessed(-100, 1, "Old name", "publish", "", "", "forwarded")
+    ts.ageProcessed(-100, 1)                       # judged yesterday, under its old name
+    ts.markProcessed(-100, 2, "New name", "publish", "", "", "forwarded")
+    ts.markProcessed(-300, 1, "C", "reject", "", "", "rejected")
+    ts.markProcessed(-300, 2, "C", "reject", "", "", "rejected")
+    ts.markProcessed(-200, 1, "B", "review", "", "", "queued for review")
+    ts.markProcessed(-200, 2, "B", "review", "", "", "queued for review")
+    var order: seq[string]
+    for r in ts.stats(7): order.add r.chat
+    check order == @["C", "B", "New name"]          # 2 each: by chat id, the same every time
+
+  test "an old state file gets the indexes when opened":
+    let old = dir / "old.sqlite3"
+    let raw = open(old, "", "", "")
+    raw.exec(sql"""CREATE TABLE processed (chat_id INTEGER, msg_id INTEGER, chat_title TEXT,
+      verdict TEXT, role TEXT, reasons TEXT, action TEXT, at INTEGER, PRIMARY KEY (chat_id, msg_id))""")
+    raw.close()
+    let st2 = openState(old)
+    st2.close()
+    let db = open(old, "", "", "")
+    defer: db.close()
+    var names: seq[string]
+    for r in db.fastRows(sql"SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'processed'"):
+      names.add r[0]
+    check "processed_at" in names and "processed_chat_at" in names and "processed_chat_album" in names
 
 st.close()
 removeDir(dir)

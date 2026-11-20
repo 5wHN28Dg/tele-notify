@@ -19,6 +19,9 @@ SCHEMA = """
 CREATE TABLE processed (chat_id INTEGER, msg_id INTEGER, chat_title TEXT, verdict TEXT, role TEXT,
   reasons TEXT, action TEXT, at INTEGER, text_hash TEXT, raw_text TEXT, album_id INTEGER,
   PRIMARY KEY (chat_id, msg_id));
+CREATE INDEX processed_at ON processed (at);
+CREATE INDEX processed_chat_at ON processed (chat_id, at);
+CREATE INDEX processed_chat_album ON processed (chat_id, album_id, msg_id);
 CREATE TABLE published (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, text TEXT, at INTEGER);
 CREATE TABLE reviews (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, chat_title TEXT, text TEXT,
   reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER, decided_at INTEGER,
