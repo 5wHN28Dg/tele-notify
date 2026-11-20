@@ -256,12 +256,33 @@ def first_judged(store: Store) -> tuple[date | None, bool]:
     return (_day_of(sane[0][0]) if sane and sane[0][0] is not None else None), False
 
 
+def _has_album_index(store: Store) -> bool:
+    """Has `processed` the bot's album index (#109): a full (not partial) index on
+    (chat_id, album_id, msg_id) with the default collation? Only that one lets
+    SQLite look an album's first row up without reading its whole chat."""
+    for idx in store._rows("PRAGMA index_list(processed)"):
+        if idx[4]:   # partial
+            continue
+        name = str(idx[1]).replace("'", "''")   # read from the file: quoted as a string
+        cols = [(r[2], r[4]) for r in store._rows(f"PRAGMA index_xinfo('{name}')") if r[5]]   # key columns
+        if cols[:3] == [("chat_id", "BINARY"), ("album_id", "BINARY"), ("msg_id", "BINARY")]:
+            return True
+    return False
+
+
 def _first_of_album(store: Store) -> tuple[str, str]:
     """(WITH clause, condition): an album is one post, however many pictures,
     so only its first row (lowest msg_id, as in `telenotify stats`) counts.
-    The first rows are found in one pass, not with one search per album row."""
+    With the bot's (chat_id, album_id, msg_id) index each album row of the period
+    looks its album's first row up, so a refresh reads the period, not every album
+    row ever judged (#110). Without it (a file the bot hasn't opened since #109)
+    such a lookup reads the album's whole chat each time, so the first rows are
+    found in one pass over the album rows instead."""
     if "album_id" not in store._columns("processed"):
         return "", ""
+    if _has_album_index(store):
+        return "", ("AND (COALESCE(album_id, 0) = 0 OR msg_id = (SELECT MIN(msg_id) FROM processed q "
+                    "WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))")
     # Grouping by album first (not chat_id, the key's first column) makes
     # SQLite scan the table once instead of walking it in key order.
     with_firsts = ("WITH firsts AS (SELECT chat_id, MIN(msg_id) AS msg_id FROM processed "
@@ -289,8 +310,8 @@ def period_stats(store: Store, period: Period, max_bars: int) -> PeriodStats:
     chats: dict[int, list] = {}   # chat id -> [title, newest at, publish, review, reject, forwarded]
     if store.has_table("processed"):
         with_firsts, first_of_album = _first_of_album(store)
-        # GROUP BY the day first, for the same reason as in _first_of_album: 0.03 s
-        # instead of 0.4 s for one day of a million-row file.
+        # GROUP BY the day first: SQLite then reads the period through the bot's
+        # processed_at index instead of walking the file in key order.
         sql = f"""{with_firsts}SELECT chat_id, chat_title, MAX(at), date(at, 'unixepoch', 'localtime') d,
                   SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
                   SUM(action = 'forwarded' OR action = 'linked' {_sent_review(store)})
