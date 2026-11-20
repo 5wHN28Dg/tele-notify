@@ -368,7 +368,7 @@ async def test_an_early_double_click_doesnt_make_the_next_click_too_quick(paths,
         await _armed(pilot, screen)
         # carried over from the opening button: made before the dialog was armed, whenever they're
         # handled (a slow runner can take longer than ARM_DELAY to get here: stamp, don't read the clock)
-        early = screen._armed_at - 0.2
+        early = screen._armed_at - ConfirmScreen.ARM_DELAY - 0.05   # just before the first paint
         for _ in range(2):
             app.post_message(_down(yes, early))
             app.post_message(_up(yes, early))
@@ -410,7 +410,9 @@ async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_syst
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        while time.monotonic() < await _armed(pilot, screen) - 0.05:
+        yes.active_effect_duration = 10.0   # Textual's own press effect can't clear -active for us on a slow runner
+        armed = await _armed(pilot, screen)
+        while time.monotonic() < armed - 0.05:
             await pilot.pause(0.02)
         just_early = screen._armed_at - 0.01                    # stamped: a slow runner may be past it by now
         app.post_message(_down(yes, just_early))                # refused: just too early
@@ -419,7 +421,7 @@ async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_syst
         assert isinstance(app.screen, ConfirmScreen)
         assert "Too quick" in str(screen.query_one("#confirm-wait").render())   # it was refused
         assert not yes.has_class("-active")   # not left looking pressed (Textual would ignore the next press)
-        while time.monotonic() < screen._armed_at + 0.05:      # well within Textual's 0.2 s press effect
+        while time.monotonic() < screen._armed_at + 0.05:      # well within the (lengthened) press effect
             await pilot.pause(0.02)
         now = time.monotonic()
         app.post_message(_down(yes, now))
@@ -440,7 +442,8 @@ async def test_a_late_two_button_click_in_a_stall_confirms(paths, fake_systemctl
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        while time.monotonic() < screen._armed_at + 0.05:
+        armed = await _armed(pilot, screen)
+        while time.monotonic() < armed + 0.05:
             await pilot.pause(0.05)
         now = time.monotonic()
         x, y = yes.region.x + 2, yes.region.y + 1
