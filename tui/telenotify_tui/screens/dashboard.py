@@ -57,10 +57,10 @@ FEED_ROWS = 50
 CHART_WIDTH = 46    # the activity panel's width (50) less its border and padding
 CHART_HEIGHT = 3
 # each series has its own fill as well as its colour (colour is never the only signal): solid,
-# quadrant checker, dark shade; the totals header above the chart names them. The owner's picks
-# (#95, #115, #102): ▓ and ▒ looked alike, ░ was too faint, and VTE draws ▒ as a 50 % tone that
-# can't reach 3:1 in the light theme; ▓ (75 %) in the text colour does
-SERIES_MARK = {"publish": "█", "review": "▚", "reject": "▓"}
+# quadrant checker, left half; the totals header above the chart names them. The owner's picks
+# (#95, #115, #102, #118): ▓ and ▒ looked alike and ░ was too faint, and VTE draws every shade
+# (░ ▒ ▓) as one flat tone, too faint (▒) or looking like a second solid █ (▓); ▌ keeps its shape
+SERIES_MARK = {"publish": "█", "review": "▚", "reject": "▌"}
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -136,7 +136,7 @@ SERIES_FALLBACK = {"publish": "green", "review": "yellow", "reject": "grey50"}
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT, colours: dict[str, str] | None = None) -> Text:
     """A small stacked bar chart: publish (green, █) at the bottom, then review (amber, ▚), then
-    reject (the text colour, ▓), in the theme's colours (`colours`). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+    reject (the text colour, ▌), in the theme's colours (`colours`). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
     shape, so the height stays exact, and is told apart by colour only (tracked in #117).
 
     Bars are two columns wide with a gap while they fit, then one column,
@@ -721,10 +721,8 @@ class DashboardPane(Vertical):
         m = SERIES_MARK
         t.append(f"{'judged':>8}{m['publish'] + 'publish':>9}{m['review'] + 'review':>8}"
                  f"{m['reject'] + 'reject':>8}{'forwarded':>11}\n", style="bold")
-        t.append(f"{tot.judged:>8}")
-        t.append(f"{tot.publish:>9}", style="green")
-        t.append(f"{tot.review:>8}", style="yellow")
-        t.append(f"{tot.reject:>8}", style="dim")
+        # the numbers in the text colour: the marks above name the series (#118)
+        t.append(f"{tot.judged:>8}{tot.publish:>9}{tot.review:>8}{tot.reject:>8}")
         t.append(f"{tot.forwarded:>11}", style="bold")
         totals.update(t)
         if tot.judged:

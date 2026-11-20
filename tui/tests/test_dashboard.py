@@ -180,8 +180,13 @@ async def test_totals(paths):
         lines = text(app, "#totals").splitlines()
         # judged, publish, review, reject, forwarded over the last 7 days (the default)
         # the owner's pick in Kitty (#95): ▓ and ▒ were too alike on a high-DPI screen
-        assert lines[0].split() == ["judged", "█publish", "▚review", "▓reject", "forwarded"]   # marks name the chart's fills
+        assert lines[0].split() == ["judged", "█publish", "▚review", "▌reject", "forwarded"]   # marks name the chart's fills
         assert lines[1].split() == ["4", "1", "1", "2", "1"]
+        # the numbers in the text colour: the marks name the series, and a fixed green or yellow
+        # was below 4.5:1 in the light theme and clashed with the chart's theme colours (#118)
+        totals = app.query_one("#totals", Static).content
+        numbers = len(totals.plain.splitlines()[0]) + 1
+        assert not [sp for sp in totals.spans if sp.start >= numbers and str(sp.style) not in ("", "bold")]
         assert "Last 7 days" in str(app.query_one("#dash-activity").border_subtitle)
 
 
@@ -488,7 +493,10 @@ async def test_chart_marks_reach_3_to_1_in_both_themes(paths):
 
     from telenotify_tui.screens.dashboard import SERIES_MARK
 
-    tone = {"█": 1.0, "▚": 1.0, "▓": 0.75}   # how much of the colour VTE gives each mark
+    # VTE draws a shade (░ ▒ ▓) as one flat tone, so it would look like a second solid █ there (#118):
+    # every mark has a shape of its own, drawn in its full colour
+    assert not set(SERIES_MARK.values()) & set("░▒▓")
+    tone = {"█": 1.0, "▚": 1.0, "▌": 1.0}
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(120, 40)) as pilot:
         await settle(app, pilot)
