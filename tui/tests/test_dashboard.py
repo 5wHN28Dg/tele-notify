@@ -487,31 +487,31 @@ def _contrast(a, b) -> float:
 
 
 async def test_chart_marks_reach_3_to_1_in_both_themes(paths):
-    """#102: the chart's marks are drawn in the theme's colours, at least 3:1 on its background in
-    both themes, also as VTE draws them (a shade as a flat tone: ▓ 75 %); redrawn on a theme switch."""
+    """#102, #118: the chart's marks are drawn in the theme's colours, at least 3:1 on its background
+    in both themes and redrawn on a theme switch. VTE draws a shade (░ ▒ ▓) as one flat tone, so every
+    mark has a shape of its own; and where one-column bars touch (24+ bars) the series are told apart
+    by colour too, 3:1 between each pair (reject a darker grey in a dark theme)."""
     from textual.color import Color
 
     from telenotify_tui.screens.dashboard import SERIES_MARK
 
-    # VTE draws a shade (░ ▒ ▓) as one flat tone, so it would look like a second solid █ there (#118):
-    # every mark has a shape of its own, drawn in its full colour
     assert not set(SERIES_MARK.values()) & set("░▒▓")
-    tone = {"█": 1.0, "▚": 1.0, "▌": 1.0}
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(120, 40)) as pilot:
         await settle(app, pilot)
         for theme in ("textual-dark", "textual-light"):
             app.theme = theme
             await settle(app, pilot)
-            v = app.theme_variables
-            bg = Color.parse(v["background"])
+            bg = Color.parse(app.theme_variables["background"])
             chart = app.query_one("#chart", Static).content
             seen = {}
             for span in chart.spans:
                 glyph = chart.plain[span.start]
-                if glyph in tone:
+                if glyph in SERIES_MARK.values():
                     seen[glyph] = Color.parse(str(span.style))
             assert set(seen) == set(SERIES_MARK.values()), (theme, seen)   # today has all three
             for glyph, colour in seen.items():
-                drawn = bg.blend(colour, tone[glyph])
-                assert _contrast(drawn, bg) >= 3, (theme, glyph, colour.hex, round(_contrast(drawn, bg), 2))
+                assert _contrast(colour, bg) >= 3, (theme, glyph, colour.hex, round(_contrast(colour, bg), 2))
+            publish, review, reject = (seen[SERIES_MARK[k]] for k in ("publish", "review", "reject"))
+            for a, b in ((publish, reject), (review, reject)):
+                assert _contrast(a, b) >= 3, (theme, a.hex, b.hex, round(_contrast(a, b), 2))

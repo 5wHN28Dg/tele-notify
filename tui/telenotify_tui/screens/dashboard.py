@@ -28,6 +28,7 @@ from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
+from textual.color import Color, ColorParseError
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -133,10 +134,25 @@ SERIES_THEME = {"publish": "text-success", "review": "text-warning", "reject": "
 SERIES_FALLBACK = {"publish": "green", "review": "yellow", "reject": "grey50"}
 
 
+def series_colours(theme: dict[str, str]) -> dict[str, str]:
+    """The chart's colours from the theme's variables. In a dark theme reject is a grey mixed from
+    the text and background colours (41 % text): the text colour itself is as light as publish and
+    review, so where one-column bars touch (24+ bars) a ▌ ran into a █ beside it (#118, the owner's
+    pick); this grey is 3:1 from the background and from both other series."""
+    colours = {k: theme.get(n, SERIES_FALLBACK[k]) for k, n in SERIES_THEME.items()}
+    try:
+        bg, fg = Color.parse(theme["background"]), Color.parse(theme["foreground"])
+    except (KeyError, ColorParseError):
+        return colours
+    if bg.brightness < 0.5:
+        colours["reject"] = bg.blend(fg, 0.41).hex
+    return colours
+
+
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT, colours: dict[str, str] | None = None) -> Text:
-    """A small stacked bar chart: publish (green, █) at the bottom, then review (amber, ▚), then
-    reject (the text colour, ▌), in the theme's colours (`colours`). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+    """A small stacked bar chart: publish (█) at the bottom, then review (▚), then
+    reject (▌), in the theme's colours (`colours`, see series_colours). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
     shape, so the height stays exact, and is told apart by colour only (tracked in #117).
 
     Bars are two columns wide with a gap while they fit, then one column,
@@ -726,8 +742,7 @@ class DashboardPane(Vertical):
         t.append(f"{tot.forwarded:>11}", style="bold")
         totals.update(t)
         if tot.judged:
-            v = self.app.theme_variables
-            chart.update(render_chart(ps.bars, ps.bucket, colours={k: v.get(n, SERIES_FALLBACK[k]) for k, n in SERIES_THEME.items()}))
+            chart.update(render_chart(ps.bars, ps.bucket, colours=series_colours(self.app.theme_variables)))
         else:
             chart.update(Text("nothing judged in this period", style="dim"))
 
