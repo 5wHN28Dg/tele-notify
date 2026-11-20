@@ -95,7 +95,7 @@ async def test_totals(paths):
         await settle(app, pilot)
         lines = text(app, "#totals").splitlines()
         # judged, publish, review, reject, forwarded over the last 7 days (the default)
-        assert lines[0].split() == ["judged", "publish", "review", "reject", "forwarded"]
+        assert lines[0].split() == ["judged", "█publish", "▓review", "▒reject", "forwarded"]   # marks name the chart's fills
         assert lines[1].split() == ["4", "1", "1", "2", "1"]
         assert "Last 7 days" in str(app.query_one("#dash-activity").border_subtitle)
 

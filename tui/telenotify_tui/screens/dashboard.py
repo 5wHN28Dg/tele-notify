@@ -50,11 +50,15 @@ from ..rtl import Block, visual
 from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy
 from . import dashboard_data as dd
 from . import search_data
+from .armed import Armed
 
 ALIVE_SECONDS = 120
 FEED_ROWS = 50
 CHART_WIDTH = 46    # the activity panel's width (50) less its border and padding
 CHART_HEIGHT = 3
+# each series has its own fill as well as its colour (colour is never the only signal): solid,
+# dark shade, light shade; the totals header above the chart names them
+SERIES_MARK = {"publish": "█", "review": "▓", "reject": "▒"}
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -123,7 +127,9 @@ def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
 
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT) -> Text:
-    """A small stacked bar chart: publish (green) at the bottom, then review (yellow), then reject (dim).
+    """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▓), then
+    reject (dim, ▒). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+    shape, so the height stays exact, and is told apart by colour only (tracked in #67).
 
     Bars are two columns wide with a gap while they fit, then one column,
     then without gaps. Up to 15 days each bar is labelled with its day of the
@@ -143,16 +149,22 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
         p = round(d.publish * units / top)
         r = round((d.publish + d.review) * units / top)
         t = round(d.total * units / top)
-        if d.total and t == 0:
-            t = 1  # any activity shows at least a sliver
+        if d.total and t < 8:
+            # a bar within one partial cell (any activity shows at least a sliver): one series fits,
+            # so it takes the colour of the series that has most
+            biggest = max(("publish", d.publish), ("review", d.review), ("reject", d.reject), key=lambda x: x[1])[0]
+            t = max(t, 1)
+            p, r = (t, t) if biggest == "publish" else (0, t) if biggest == "review" else (0, 0)
         scaled.append((p, max(r, p), max(t, r, p)))
     for row in range(height - 1, -1, -1):
         lo = row * 8
         for i, (p, r, t) in enumerate(scaled):
             fill = min(8, max(0, t - lo))
             mid = lo + max(fill, 1) / 2
-            style = "green" if mid < p else "yellow" if mid < r else "grey50"
-            out.append(eighths[fill] * bar_w, style=style)
+            series = "publish" if mid < p else "review" if mid < r else "reject"
+            style = {"publish": "green", "review": "yellow", "reject": "grey50"}[series]
+            glyph = SERIES_MARK[series] if fill == 8 else eighths[fill]
+            out.append(glyph * bar_w, style=style)
             if gap and i < n - 1:
                 out.append(" ")
         out.append("\n")
@@ -242,8 +254,12 @@ def problem_note(snap: Snapshot) -> str:
 
 # --------------------------------------------------------------- modal
 
-class ConfirmScreen(ModalScreen[bool]):
-    """Yes / no question; Escape or "No" answers no."""
+class ConfirmScreen(Armed, ModalScreen[bool]):
+    YES_ID = "confirm-yes"
+    """A question with a button that names its action and Cancel; Escape, `n` or
+    Cancel answers no. Cancel has the focus; presses in the first ARM_DELAY
+    seconds are ignored (a click where the opening button was, a held key)."""
+
 
     DEFAULT_CSS = """
     ConfirmScreen { align: center middle; }
@@ -254,31 +270,46 @@ class ConfirmScreen(ModalScreen[bool]):
     ConfirmScreen Label { width: 100%; margin-bottom: 1; }
     ConfirmScreen Horizontal { height: auto; align-horizontal: right; }
     ConfirmScreen Button { margin-left: 2; }
+    /* the stock -error button's text is 4.47:1; these pass 4.5:1 in both themes */
+    ConfirmScreen Button.-style-default.-error, ConfirmScreen Button.-style-default.-error:hover,
+    ConfirmScreen Button.-style-default.-error.-active, ConfirmScreen Button.-style-default.-error:focus {
+        background: $error-muted; color: $text-error; background-tint: $foreground 0%;
+    }
+    /* pressed: Textual tints by 30 %, which drops any variant under 4.5:1 */
+    ConfirmScreen Button.-style-default.-active { tint: $background 0%; }
+    ConfirmScreen #confirm-wait { color: $text-muted; height: 1; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "answer(False)", "Cancel"), Binding("y", "answer(True)", "Yes", show=False),
-                Binding("n", "answer(False)", "No", show=False)]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "answer(False)", "Cancel"), Binding("y", "answer(True)", "Confirm", show=False),
+                Binding("n", "answer(False)", "Cancel", show=False)]
 
-    def __init__(self, question: str):
+    def __init__(self, question: str, action: str = "Yes", destructive: bool = False):
         super().__init__()
-        self.question = question
+        self.question, self.action = question, action
+        self.variant = "error" if destructive else "warning"
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self.question, id="confirm-question")
+            yield Static("", id="confirm-wait")
             with Horizontal():
-                yield Button("Yes", id="confirm-yes", variant="warning")
-                yield Button("No", id="confirm-no", variant="primary")
+                yield Button(f"{self.action} (y)", id="confirm-yes", variant=self.variant)
+                yield Button("Cancel (n)", id="confirm-no")
 
     def on_mount(self) -> None:
+        self._arm()
         self.query_one("#confirm-no", Button).focus()
 
+
+
     def action_answer(self, yes: bool) -> None:
-        self.dismiss(yes)
+        self._answer(yes)                        # an early `y` was stopped in Armed.on_key
 
     @on(Button.Pressed)
     def _pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        self.dismiss(event.button.id == "confirm-yes")
+        if event.button.id == "confirm-yes" and self._too_soon(event.button):
+            return
+        self._answer(event.button.id == "confirm-yes")
 
 
 class RangeScreen(ModalScreen["tuple[date, date] | None"]):
@@ -636,7 +667,9 @@ class DashboardPane(Vertical):
         note.update(Text(f"{ps.period.describe()}{whole}   (p: change the period, d: pick dates)", style="dim"))
         tot = ps.totals
         t = Text()
-        t.append(f"{'judged':>8}{'publish':>9}{'review':>8}{'reject':>8}{'forwarded':>11}\n", style="bold")
+        m = SERIES_MARK
+        t.append(f"{'judged':>8}{m['publish'] + 'publish':>9}{m['review'] + 'review':>8}"
+                 f"{m['reject'] + 'reject':>8}{'forwarded':>11}\n", style="bold")
         t.append(f"{tot.judged:>8}")
         t.append(f"{tot.publish:>9}", style="green")
         t.append(f"{tot.review:>8}", style="yellow")
@@ -829,7 +862,19 @@ class DashboardPane(Vertical):
             else:
                 self.query_one("#svc-result", Static).update(Text(f"{action} cancelled", style="dim"))
 
-        self.app.push_screen(ConfirmScreen(f"{action.capitalize()} {name} ({self.mode})?"), answered)
+        if self.mode == "dry-run":
+            what = {"start": "It starts judging the watched chats' posts (a dry run forwards nothing).",
+                    "stop": "It stops judging posts until you start it again (a dry run forwards nothing).",
+                    "restart": "It reconnects; posts that arrive meanwhile are judged when it's back."}.get(action, "")
+        else:
+            what = {"start": "It starts reading the watched chats and forwarding matches.",
+                    "stop": "It stops reading chats and forwarding matches until you start it again.",
+                    "restart": "It reconnects; posts that arrive meanwhile are handled when it's back."}.get(
+                action, "")
+        label = {"start": "Start the bot", "stop": "Stop the bot", "restart": "Restart the bot"}.get(
+            action, action.capitalize())
+        self.app.push_screen(ConfirmScreen(f"{action.capitalize()} {name} ({self.mode})? {what}".strip(),
+                                           label, destructive=action == "stop"), answered)
 
     @work(exclusive=True, group="dash-action")
     async def _run_service(self, action: str) -> None:
