@@ -82,6 +82,14 @@ proc openState*(path: string): State =
       try: db.exec(sql("ALTER TABLE " & table & " ADD COLUMN " & column))
       except DbError as e:
         if "duplicate column" notin e.msg: raise
+  # Without these, reads grow with every post ever judged:
+  #   processed_at          the last N days (`stats`, `compare`, the terminal screen)
+  #   processed_chat_at     one chat's posts newest first (search), each chat's newest
+  #   processed_chat_album  the pictures of one album (every album picture that
+  #                         arrives, and counting an album once in `stats`)
+  db.exec(sql"CREATE INDEX IF NOT EXISTS processed_at ON processed (at)")
+  db.exec(sql"CREATE INDEX IF NOT EXISTS processed_chat_at ON processed (chat_id, at)")
+  db.exec(sql"CREATE INDEX IF NOT EXISTS processed_chat_album ON processed (chat_id, album_id, msg_id)")
 
 proc close*(s: State) = s.db.close()
 
@@ -95,11 +103,13 @@ proc markProcessed*(s: State, chat, msg: int64, title, verdict, role, reasons, a
     VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
     chat, msg, title, verdict, role, reasons, action, now(), textHash, rawText, albumId)
 
+const albumHandledSql* = """SELECT 1, action, COALESCE(text_hash, '') FROM processed
+                             WHERE chat_id = ? AND album_id = ? LIMIT 1"""
+
 proc albumHandled*(s: State, chat, albumId: int64): tuple[found: bool, action, textHash: string] =
   ## Was any picture of this album handled already?
   if albumId == 0: return
-  let row = s.db.getRow(sql"""SELECT 1, action, COALESCE(text_hash, '') FROM processed
-                              WHERE chat_id = ? AND album_id = ? LIMIT 1""", chat, albumId)
+  let row = s.db.getRow(sql(albumHandledSql), chat, albumId)
   (row[0] == "1", row[1], row[2])
 
 proc processedByMsgId*(s: State, msg: int64): seq[(int64, string)] =
@@ -179,18 +189,25 @@ type StatRow* = object
   verdicts*: array[3, int]   ## publish, review, reject
   forwarded*: int
 
+const statsSql* = """SELECT chat_title,
+      SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
+      SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
+        WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent')),
+      MAX(at)
+      FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
+        (SELECT MIN(msg_id) FROM processed q WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))
+      GROUP BY +chat_id ORDER BY COUNT(*) DESC, chat_id"""
+  # `+chat_id`: group after reading the last N days through processed_at; plain
+  # `chat_id` lets SQLite walk a whole chat_id index instead, every post ever judged.
+  # MAX(at): SQLite then takes chat_title from the newest row (a renamed chat).
+  # `, chat_id`: equal counts in the same order every time.
+
 proc stats*(s: State, days: int): seq[StatRow] =
   ## Per chat over the last `days` days: how many messages got each verdict
   ## and how many were actually forwarded (#12, #13, #15), including posts
   ## you approved in `telenotify review` once they've been sent.
   # An album is one post, however many pictures: count its first row only.
-  for r in s.db.fastRows(sql"""SELECT chat_title,
-      SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
-      SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
-        WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent'))
-      FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
-        (SELECT MIN(msg_id) FROM processed q WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))
-      GROUP BY chat_id ORDER BY COUNT(*) DESC""", now() - days * 86400):
+  for r in s.db.fastRows(sql(statsSql), now() - days * 86400):
     result.add StatRow(chat: r[0], verdicts: [parseInt(r[1]), parseInt(r[2]), parseInt(r[3])],
                        forwarded: parseInt(r[4]))
 
@@ -220,9 +237,11 @@ proc otherBotSince*(s: State, since: int64): seq[OtherBotPost] =
                             originMsg: parseBiggestInt(r[2]), text: r[3],
                             albumId: parseBiggestInt(r[4]))
 
+const processedSinceSql* = """SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons,
+                               action, COALESCE(raw_text, '') FROM processed WHERE at > ? ORDER BY at"""
+
 proc processedSince*(s: State, since: int64): seq[ProcessedRow] =
-  for r in s.db.fastRows(sql"""SELECT chat_id, msg_id, at, chat_title, verdict, role, reasons, action,
-                               COALESCE(raw_text, '') FROM processed WHERE at > ? ORDER BY at""", since):
+  for r in s.db.fastRows(sql(processedSinceSql), since):
     result.add ProcessedRow(chatId: parseBiggestInt(r[0]), msgId: parseBiggestInt(r[1]),
                             at: parseBiggestInt(r[2]), chatTitle: r[3], verdict: r[4], role: r[5],
                             reasons: r[6], action: r[7], rawText: r[8])

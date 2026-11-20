@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS processed (
   chat_id INTEGER, msg_id INTEGER, chat_title TEXT, verdict TEXT, role TEXT,
   reasons TEXT, action TEXT, at INTEGER, text_hash TEXT, raw_text TEXT, album_id INTEGER,
   PRIMARY KEY (chat_id, msg_id));
+CREATE INDEX IF NOT EXISTS processed_at ON processed (at);
+CREATE INDEX IF NOT EXISTS processed_chat_at ON processed (chat_id, at);
+CREATE INDEX IF NOT EXISTS processed_chat_album ON processed (chat_id, album_id, msg_id);
 CREATE TABLE IF NOT EXISTS published (
   id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, text TEXT, at INTEGER);
 CREATE TABLE IF NOT EXISTS reviews (

@@ -222,7 +222,9 @@ def test_album_counts_where_its_first_picture_is(tmp_path):
 
 def test_old_state_file_without_album_column(tmp_path):
     old = SCHEMA.replace(", album_id INTEGER,\n  PRIMARY KEY", ",\n  PRIMARY KEY")
-    assert "album_id INTEGER,\n  PRIMARY" not in old
+    # an old file has neither the column nor the bot's index on it (the bot adds both)
+    old = "".join(line + "\n" for line in old.splitlines() if "processed_chat_album" not in line)
+    assert "album_id" not in old.split("CREATE TABLE published")[0]
     path = tmp_path / "s.sqlite3"
     db = sqlite3.connect(path)
     db.executescript(old)
