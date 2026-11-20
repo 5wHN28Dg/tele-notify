@@ -82,6 +82,10 @@ proc openState*(path: string): State =
       try: db.exec(sql("ALTER TABLE " & table & " ADD COLUMN " & column))
       except DbError as e:
         if "duplicate column" notin e.msg: raise
+  # the dashboard, `stats` and the terminal screen read the last N days,
+  # overall and per chat: without these every refresh scans every post ever judged
+  db.exec(sql"CREATE INDEX IF NOT EXISTS processed_at ON processed (at)")
+  db.exec(sql"CREATE INDEX IF NOT EXISTS processed_chat_at ON processed (chat_id, at)")
 
 proc close*(s: State) = s.db.close()
 

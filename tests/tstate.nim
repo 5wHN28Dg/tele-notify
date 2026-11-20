@@ -1,5 +1,6 @@
-import std/[unittest, os, tables]
+import std/[unittest, os, tables, strutils]
 import telenotify/state
+import db_connector/db_sqlite
 
 let dir = getTempDir() / "tn-state-test"
 removeDir(dir)
@@ -117,6 +118,33 @@ suite "state":
     st.setMeta("last_alive", "123")
     check st.getMeta("last_alive") == "123"
     check st.getMeta("missing") == ""
+
+  test "time-window reads of processed use an index, not a full scan":
+    # the dashboard and `stats` read the last N days; without these a
+    # year of posts is scanned on every refresh
+    let db = open(dir / "state.sqlite3", "", "", "")
+    defer: db.close()
+    proc plan(q: string): string =
+      for r in db.fastRows(sql("EXPLAIN QUERY PLAN " & q)): result.add r[^1] & "\n"
+    let byTime = plan("SELECT chat_id FROM processed WHERE at > 0")
+    check "USING INDEX processed_at" in byTime
+    let byChat = plan("SELECT msg_id FROM processed WHERE chat_id = -100 AND at > 0")
+    check "processed_chat_at" in byChat
+
+  test "an old state file gets the indexes when opened":
+    let old = dir / "old.sqlite3"
+    let raw = open(old, "", "", "")
+    raw.exec(sql"""CREATE TABLE processed (chat_id INTEGER, msg_id INTEGER, chat_title TEXT,
+      verdict TEXT, role TEXT, reasons TEXT, action TEXT, at INTEGER, PRIMARY KEY (chat_id, msg_id))""")
+    raw.close()
+    let st2 = openState(old)
+    st2.close()
+    let db = open(old, "", "", "")
+    defer: db.close()
+    var names: seq[string]
+    for r in db.fastRows(sql"SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'processed'"):
+      names.add r[0]
+    check "processed_at" in names and "processed_chat_at" in names
 
 st.close()
 removeDir(dir)
