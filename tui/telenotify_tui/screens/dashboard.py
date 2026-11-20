@@ -28,6 +28,7 @@ from rich.text import Text
 from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
+from textual.color import Color, ColorParseError
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -57,9 +58,10 @@ FEED_ROWS = 50
 CHART_WIDTH = 46    # the activity panel's width (50) less its border and padding
 CHART_HEIGHT = 3
 # each series has its own fill as well as its colour (colour is never the only signal): solid,
-# quadrant checker, medium shade; the totals header above the chart names them. The owner's pick
-# (#95, #115): ▓ / ▒ were too alike on a high-DPI screen, and ░ was too faint
-SERIES_MARK = {"publish": "█", "review": "▚", "reject": "▒"}
+# quadrant checker, left half; the totals header above the chart names them. The owner's picks
+# (#95, #115, #102, #118): ▓ and ▒ looked alike and ░ was too faint, and VTE draws every shade
+# (░ ▒ ▓) as one flat tone, too faint (▒) or looking like a second solid █ (▓); ▌ keeps its shape
+SERIES_MARK = {"publish": "█", "review": "▚", "reject": "▌"}
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -126,10 +128,31 @@ def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
             for group in (bars[i:i + k] for i in range(0, len(bars), k))]
 
 
+# the theme's colours for the three series: fixed ones (green, yellow, grey50) are below 3:1 in the
+# light theme (#102, #75); text-success / text-warning / foreground pass in both themes
+SERIES_THEME = {"publish": "text-success", "review": "text-warning", "reject": "foreground"}
+SERIES_FALLBACK = {"publish": "green", "review": "yellow", "reject": "grey50"}
+
+
+def series_colours(theme: dict[str, str]) -> dict[str, str]:
+    """The chart's colours from the theme's variables. In a dark theme reject is a grey mixed from
+    the text and background colours (41 % text): the text colour itself is as light as publish and
+    review, so where one-column bars touch (24+ bars) a ▌ ran into a █ beside it (#118, the owner's
+    pick); this grey is 3:1 from the background and from both other series."""
+    colours = {k: theme.get(n, SERIES_FALLBACK[k]) for k, n in SERIES_THEME.items()}
+    try:
+        bg, fg = Color.parse(theme["background"]), Color.parse(theme["foreground"])
+    except (KeyError, ColorParseError):
+        return colours
+    if bg.brightness < 0.5:
+        colours["reject"] = bg.blend(fg, 0.41).with_alpha(1.0).hex   # no alpha: Rich can't draw #RRGGBBAA
+    return colours
+
+
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
-                 height: int = CHART_HEIGHT) -> Text:
-    """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▚), then
-    reject (dim, ▒). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+                 height: int = CHART_HEIGHT, colours: dict[str, str] | None = None) -> Text:
+    """A small stacked bar chart: publish (█) at the bottom, then review (▚), then
+    reject (▌), in the theme's colours (`colours`, see series_colours). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
     shape, so the height stays exact, and is told apart by colour only (tracked in #117).
 
     Bars are two columns wide with a gap while they fit, then one column,
@@ -163,7 +186,7 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
             fill = min(8, max(0, t - lo))
             mid = lo + max(fill, 1) / 2
             series = "publish" if mid < p else "review" if mid < r else "reject"
-            style = {"publish": "green", "review": "yellow", "reject": "grey50"}[series]
+            style = (colours or SERIES_FALLBACK)[series]
             glyph = SERIES_MARK[series] if fill == 8 else eighths[fill]
             out.append(glyph * bar_w, style=style)
             if gap and i < n - 1:
@@ -498,6 +521,12 @@ class DashboardPane(Vertical):
         bot_box = self.query_one("#dash-bot")
         bot_box.border_title = "Bot"
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
+        # the chart is drawn in the theme's colours (#102): draw it again when the theme changes
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
+
+    def _theme_changed(self, _theme) -> None:
+        if self.snapshot is not None:
+            self._show_activity(self.snapshot)
 
     def on_resize(self, event: events.Resize) -> None:
         # the login line has a short and a long form: pick again once the new layout is in place
@@ -708,14 +737,12 @@ class DashboardPane(Vertical):
         m = SERIES_MARK
         t.append(f"{'judged':>8}{m['publish'] + 'publish':>9}{m['review'] + 'review':>8}"
                  f"{m['reject'] + 'reject':>8}{'forwarded':>11}\n", style="bold")
-        t.append(f"{tot.judged:>8}")
-        t.append(f"{tot.publish:>9}", style="green")
-        t.append(f"{tot.review:>8}", style="yellow")
-        t.append(f"{tot.reject:>8}", style="dim")
+        # the numbers in the text colour: the marks above name the series (#118)
+        t.append(f"{tot.judged:>8}{tot.publish:>9}{tot.review:>8}{tot.reject:>8}")
         t.append(f"{tot.forwarded:>11}", style="bold")
         totals.update(t)
         if tot.judged:
-            chart.update(render_chart(ps.bars, ps.bucket))
+            chart.update(render_chart(ps.bars, ps.bucket, colours=series_colours(self.app.theme_variables)))
         else:
             chart.update(Text("nothing judged in this period", style="dim"))
 

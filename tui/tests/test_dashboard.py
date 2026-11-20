@@ -180,8 +180,13 @@ async def test_totals(paths):
         lines = text(app, "#totals").splitlines()
         # judged, publish, review, reject, forwarded over the last 7 days (the default)
         # the owner's pick in Kitty (#95): ▓ and ▒ were too alike on a high-DPI screen
-        assert lines[0].split() == ["judged", "█publish", "▚review", "▒reject", "forwarded"]   # marks name the chart's fills
+        assert lines[0].split() == ["judged", "█publish", "▚review", "▌reject", "forwarded"]   # marks name the chart's fills
         assert lines[1].split() == ["4", "1", "1", "2", "1"]
+        # the numbers in the text colour: the marks name the series, and a fixed green or yellow
+        # was below 4.5:1 in the light theme and clashed with the chart's theme colours (#118)
+        totals = app.query_one("#totals", Static).content
+        numbers = len(totals.plain.splitlines()[0]) + 1
+        assert not [sp for sp in totals.spans if sp.start >= numbers and str(sp.style) not in ("", "bold")]
         assert "Last 7 days" in str(app.query_one("#dash-activity").border_subtitle)
 
 
@@ -469,3 +474,51 @@ def test_an_unreadable_file_doesnt_promise_a_retry():
     snap.error, snap.busy = "DatabaseError: file is not a database", False
     note = dash.problem_note(snap)
     assert "retry" not in note and "see Bot" in note
+
+
+def _contrast(a, b) -> float:
+    def lum(c):
+        def ch(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+async def test_chart_marks_reach_3_to_1_in_both_themes(paths):
+    """#102, #118: the chart's marks are drawn in the theme's colours, at least 3:1 on its background
+    in both themes and redrawn on a theme switch. VTE draws a shade (░ ▒ ▓) as one flat tone, so every
+    mark has a shape of its own; and where one-column bars touch (24+ bars) the series are told apart
+    by colour too, 3:1 between each pair (reject a darker grey in a dark theme)."""
+    from textual.color import Color
+
+    from telenotify_tui.screens.dashboard import SERIES_MARK
+
+    assert not set(SERIES_MARK.values()) & set("░▒▓")
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        for theme in ("textual-dark", "textual-light"):
+            app.theme = theme
+            await settle(app, pilot)
+            bg = Color.parse(app.theme_variables["background"])
+            chart = app.query_one("#chart", Static).content
+            seen = {}
+            for span in chart.spans:
+                glyph = chart.plain[span.start]
+                if glyph in SERIES_MARK.values():
+                    seen[glyph] = Color.parse(str(span.style))
+            assert set(seen) == set(SERIES_MARK.values()), (theme, seen)   # today has all three
+            for glyph, colour in seen.items():
+                assert _contrast(colour, bg) >= 3, (theme, glyph, colour.hex, round(_contrast(colour, bg), 2))
+            publish, review, reject = (seen[SERIES_MARK[k]] for k in ("publish", "review", "reject"))
+            for a, b in ((publish, reject), (review, reject)):
+                assert _contrast(a, b) >= 3, (theme, a.hex, b.hex, round(_contrast(a, b), 2))
+
+def test_chart_colours_never_carry_alpha():
+    """A theme colour with alpha would blend into an 8-digit hex Rich can't draw (#118 run 3)."""
+    from telenotify_tui.screens.dashboard import series_colours
+    c = series_colours({"background": "#12121280", "foreground": "#E0E0E0EA",
+                        "text-success": "#8AD4A1", "text-warning": "#FFC473"})
+    assert len(c["reject"]) == 7, c
