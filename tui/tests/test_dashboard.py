@@ -515,3 +515,10 @@ async def test_chart_marks_reach_3_to_1_in_both_themes(paths):
             publish, review, reject = (seen[SERIES_MARK[k]] for k in ("publish", "review", "reject"))
             for a, b in ((publish, reject), (review, reject)):
                 assert _contrast(a, b) >= 3, (theme, a.hex, b.hex, round(_contrast(a, b), 2))
+
+def test_chart_colours_never_carry_alpha():
+    """A theme colour with alpha would blend into an 8-digit hex Rich can't draw (#118 run 3)."""
+    from telenotify_tui.screens.dashboard import series_colours
+    c = series_colours({"background": "#12121280", "foreground": "#E0E0E0EA",
+                        "text-success": "#8AD4A1", "text-warning": "#FFC473"})
+    assert len(c["reject"]) == 7, c

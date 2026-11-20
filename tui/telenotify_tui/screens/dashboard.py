@@ -145,7 +145,7 @@ def series_colours(theme: dict[str, str]) -> dict[str, str]:
     except (KeyError, ColorParseError):
         return colours
     if bg.brightness < 0.5:
-        colours["reject"] = bg.blend(fg, 0.41).hex
+        colours["reject"] = bg.blend(fg, 0.41).with_alpha(1.0).hex   # no alpha: Rich can't draw #RRGGBBAA
     return colours
 
 
