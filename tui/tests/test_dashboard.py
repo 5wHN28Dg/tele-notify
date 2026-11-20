@@ -94,15 +94,19 @@ async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
 # window size -> the line's form, and whether the Service row fits with it (the owner's choice B, #100:
 # it gives way only where the box is too short, as at 80 x 24)
 LOGIN_LAYOUTS = {
-    (80, 24): ("Not logged in:", False),
-    (120, 40): ("Not logged in:", True),
-    (160, 40): ("Not logged in to Telegram.", True),
+    # (size, real service, dry-run service): (the line starts, the Service row shows)
+    ((80, 24), "inactive", "active"): ("Not logged in:", False),
+    ((100, 30), "activating", "inactive"): ("Not logged in:", False),   # a 2-row Service row: 7 rows, one too many
+    ((100, 30), "activating", "active"): ("Not logged in:", True),      # a 1-row Service row: 6 rows, it fits
+    ((120, 40), "inactive", "active"): ("Not logged in:", True),
+    ((120, 40), "unknown", "unknown"): ("Not logged in:", True),     # a 2-row Service row still fits
+    ((160, 40), "inactive", "active"): ("Not logged in to Telegram.", True),
 }
 
 
-@pytest.mark.parametrize("size", list(LOGIN_LAYOUTS))
+@pytest.mark.parametrize("layout", list(LOGIN_LAYOUTS))
 @pytest.mark.parametrize("age", [30, 3 * 3600])
-async def test_a_lost_login_says_what_to_run(paths, now, age, size):
+async def test_a_lost_login_says_what_to_run(paths, now, age, layout, monkeypatch):
     """#65: Telegram logged the account out. The bot can't message you any more, and
     systemd keeps restarting it, so the Bot box says so and what to run, alive or not."""
     db = sqlite3.connect(paths.state)
@@ -111,7 +115,13 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, size):
     db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
     db.commit()
     db.close()
-    lead, service = LOGIN_LAYOUTS[size]
+    size, real, dry = layout
+    lead, service = LOGIN_LAYOUTS[layout]
+
+    async def state(mode: str) -> str:
+        return real if mode == "real" else dry
+
+    monkeypatch.setattr(bot, "service_state", state)
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=size) as pilot:
         await settle(app, pilot)
