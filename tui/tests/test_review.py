@@ -422,7 +422,15 @@ async def test_double_tap_doesnt_decide_the_next_post_unread(paths, state, now, 
         assert status_of(state, 11) == "to_send"
         assert status_of(state, 100) == "pending"
         assert "approved" in note(app) and "only just appeared" in note(app)
-        await pilot.click("#btn-send")           # a double click on Send: the same
+        # a double click on Send: the same. Made 0.1 s after #100 appeared (a pilot click would
+        # be judged by when it's handled, which a slow CI runner can push past the delay)
+        from textual import events
+        btn = app.query_one("#btn-send")
+        x, y = btn.region.x + 1, btn.region.y
+        for cls in (events.MouseDown, events.MouseUp):
+            e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+            e.time = pane._shown_at + 0.1
+            app.post_message(e)
         await pilot.pause()
         assert status_of(state, 100) == "pending"
         pane._shown_at -= 10                     # read now: the key works again
@@ -619,3 +627,176 @@ async def test_buttons_fit_an_80_column_terminal(paths, state, now):
         assert app.query_one("#btn-undo", Button).display
         assert app.query_one("#btn-keep", Button).region.width > 0
         assert app.query_one("#btn-undo", Button).region.right <= 80
+
+
+async def test_a_tap_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
+    # a slow machine: the second tap is made inside DECIDE_DELAY but handled after it (CI saw this)
+    from textual import events
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post never shown", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10                     # the first post has been read
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+        shown = pane._shown_at                   # the second post appeared now
+        early = events.Key("s", "s")
+        early.time = shown + 0.1                 # made inside the delay...
+        await pilot.pause(0.6)                   # ...handled after it
+        app.post_message(early)
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+        btn = app.query_one("#btn-send")         # the same for a click on Send
+        x, y = btn.region.x + 1, btn.region.y
+        for cls in (events.MouseDown, events.MouseUp):
+            e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+            e.time = shown + 0.1
+            app.post_message(e)
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+
+
+async def test_a_footer_click_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
+    # the footer's "s Send" makes a key when the click is *handled*; the click's own time counts
+    from textual import events
+    from textual.widgets._footer import FooterKey
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post never shown", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+        [send] = [k for k in app.query(FooterKey) if k.key == "s"]
+        x, y = send.region.x + 1, send.region.y
+        e = events.MouseDown(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+        e.time = pane._shown_at + 0.1            # made inside the delay...
+        await pilot.pause(0.6)                   # ...handled after it
+        app.post_message(e)
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+
+
+async def test_a_key_that_decided_nothing_leaves_no_time_behind(paths, state, now, monkeypatch):
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("enter", "down")       # no decision: nothing to remember
+        await pilot.pause(1.0)
+        assert pane._press_at is None
+        await pilot.click("#btn-send")           # read for a second: the click decides
+        await pilot.pause()
+        assert status_of(state, 100) == "to_send" or status_of(state, 11) == "to_send"
+
+
+async def test_a_later_press_elsewhere_doesnt_lend_a_footer_click_its_time(paths, state, now, monkeypatch):
+    from textual import events
+    from textual.widgets._footer import FooterKey
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post never shown", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("s")
+        await pilot.pause()
+        [send] = [k for k in app.query(FooterKey) if k.key == "s"]
+        text = app.query_one("#detail-text")
+
+        def press(widget, made):
+            x, y = widget.region.x + 1, widget.region.y
+            for cls in (events.MouseDown, events.MouseUp):
+                e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+                e.time = made
+                app.post_message(e)
+        shown = pane._shown_at
+        await pilot.pause(0.6)                   # a stall: all of these are handled late
+        press(send, shown + 0.1)                 # the footer "s": made too early
+        press(text, shown + 0.9)                 # a later click on the post text
+        await pilot.pause()
+        assert status_of(state, 100) == "pending"
+
+
+async def test_pilot_footer_clicks_never_dead_end(paths, state, now, monkeypatch):
+    # Textual's pilot clicks past the app: an earlier real press must not make them look early
+    from textual import events
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.2)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        text = app.query_one("#detail-text")
+        x, y = text.region.x + 1, text.region.y
+        e = events.MouseDown(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+        app.post_message(e)
+        await pilot.pause(1.0)
+        await pilot.click("FooterKey")           # the first footer key; then "s" itself
+        from textual.widgets._footer import FooterKey
+        [send] = [k for k in app.query(FooterKey) if k.key == "s"]
+        await pilot.click(send)
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+
+
+async def test_a_double_click_on_the_last_posts_footer_key_leaves_nothing_behind(paths, state, now, monkeypatch):
+    # the second press lands on the now-disabled key: no key is made, so no press may be kept
+    import time
+
+    from textual import events
+    from textual.widgets._footer import FooterKey
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+
+        # one place on the screen, as a user would click (the footer is rebuilt after each
+        # decision, and a key read mid-rebuild has no position yet)
+        [k] = [w for w in app.query(FooterKey) if w.key == "s"]
+        spot = (k.region.x + 1, k.region.y)
+
+        def click_footer(key):
+            x, y = spot
+            for cls in (events.MouseDown, events.MouseUp):
+                app.post_message(cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y))
+        click_footer("s")                        # the last post: sent
+        await pilot.pause(0.1)
+        click_footer("s")                        # the double click's second press: key disabled now
+        await pilot.pause(0.3)
+        assert status_of(state, 11) == "to_send"
+        add_pending(state, 100, "a new post", now)
+        pane.reload()
+        await pilot.pause()
+        await pilot.pause(0.8)                   # read it
+        assert time.monotonic() - pane._shown_at > 0.3
+        click_footer("s")                        # one click after reading decides
+        await pilot.pause(0.3)
+        assert status_of(state, 100) == "to_send"
+
+
+async def test_a_footer_press_during_a_drag_leaves_nothing_behind(paths, state, now, monkeypatch):
+    # while another widget holds the mouse the footer never sees the press: nothing to keep
+    from textual import events
+    from textual.widgets._footer import FooterKey
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await open_review(pilot)
+        [k] = [w for w in app.query(FooterKey) if w.key == "s"]
+        x, y = k.region.x + 1, k.region.y
+        app.capture_mouse(app.query_one("#detail-text"))      # a drag in progress elsewhere
+        app.post_message(events.MouseDown(None, x, y, 0, 0, 3, False, False, False, screen_x=x, screen_y=y))
+        await pilot.pause()
+        app.capture_mouse(None)
+        assert not any(app.footer_downs.values())

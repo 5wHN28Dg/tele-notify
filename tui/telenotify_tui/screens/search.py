@@ -10,20 +10,27 @@ current settings what they would say now.
   check`, links not followed); `J` follows links too and shows the text the
   filter read. Then and now are shown side by side.
 * `p` opens a box to paste any post and judge it, for trying things out.
+
+Searching never blocks the screen: the state file is read in a thread
+("searching…" shows meanwhile), a newer search replaces one still running,
+and nothing is read until the tab is first shown.
 """
 
 from __future__ import annotations
 
+import sqlite3
+import time
 from datetime import datetime
 from typing import ClassVar
 
 from rich.text import Text
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
+from textual.worker import get_current_worker
 
 from .. import bot
 from ..clean import clean
@@ -33,6 +40,9 @@ from ..store import Judged
 from . import search_data
 
 DEBOUNCE_SECONDS = 0.35
+LOCK_WAIT_SECONDS = 10      # how long a search waits for the bot's lock in all,
+LOCK_STEP_SECONDS = 0.25    # in steps this long, checking whether it was replaced
+CHATS_LOADING = "loading chats…"
 LIMIT = 200
 
 VERDICT_STYLE = {"publish": "bold green", "review": "bold yellow", "reject": "bold red"}
@@ -66,6 +76,10 @@ def when(at: int, fmt: str) -> str:
         return datetime.fromtimestamp(at).strftime(fmt) if at else "?"
     except (OverflowError, ValueError, OSError, TypeError):   # a broken time in the state file
         return "?"
+
+
+def _locked(e: Exception) -> bool:
+    return isinstance(e, sqlite3.OperationalError) and "locked" in str(e)
 
 
 def row_key(j: Judged) -> str:
@@ -137,7 +151,12 @@ class SearchPane(Vertical):
         self._rows: dict[str, Judged] = {}
         self._selected: Judged | None = None
         self._debounce: Timer | None = None
-        self._loaded = False
+        self._loaded = False     # shown at least once: until then nothing is searched
+        self._generation = 0     # the newest search started; older results are dropped
+        self._pending: tuple | None = None   # (filters, with chats, after Enter) of the search still reading
+        self._deferred_judge: bool | None = None   # j / J pressed while Enter's search ran
+        self._chats_waiting: list[tuple[int, str]] | None = None   # read while the chat drop-down was open
+        self._chats_shown = False   # the drop-down still says "loading chats…"
 
     # ------------------------------------------------------------ layout
 
@@ -145,7 +164,7 @@ class SearchPane(Vertical):
         with Horizontal(id="search-bar"):
             yield Input(placeholder="search text, chat, role, reasons…  (Enter)", id="q")
             yield Select(VERDICT_OPTIONS, value="all", allow_blank=False, id="verdict")
-            yield Select([("all chats", "all")], value="all", allow_blank=False, id="chat")
+            yield Select([(CHATS_LOADING, "all")], value="all", allow_blank=False, id="chat")
             yield Static("", id="count")
         with Horizontal(id="search-body"):
             table = DataTable(id="results", cursor_type="row", zebra_stripes=True)
@@ -178,6 +197,7 @@ class SearchPane(Vertical):
         table.add_column("role", key="role")
         table.add_column("first reason", key="reason")
         self._show_detail(None)
+        self.watch(self.query_one("#chat", Select), "expanded", self._chat_dropdown_toggled, init=False)
         note = self._binary_note()
         if note:
             self.query_one("#paste-result", Static).update(Text(note, style="yellow"))
@@ -206,50 +226,130 @@ class SearchPane(Vertical):
 
     def reload(self) -> None:
         """Refresh the chat list and re-run the current search."""
-        self._refresh_chats()
-        self.run_search()
+        self._loaded = True
+        if self._pending is not None and self._pending[:2] == (self._filters(), True):
+            return   # the same read just started (showing a tab asks twice)
+        self.run_search(chats=True)
 
-    def _refresh_chats(self) -> None:
+    def _apply_chats(self, chats: list[tuple[int, str]]) -> None:
         sel = self.query_one("#chat", Select)
+        if sel.expanded:
+            # never swap the list under the pointer: it comes when the drop-down closes
+            self._chats_waiting = chats
+            return
+        self._chats_waiting = None
         current = sel.value
-        try:
-            with self.app.store() as s:
-                chats = search_data.judged_chats(s) if s.exists else []
-        except Exception:  # noqa: BLE001 - a locked or odd state file shouldn't crash the screen
-            chats = []
         options = [("all chats", "all")] + [(Text(visual(short(title, 24))), cid) for cid, title in chats]
-        if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])]:
+        if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])] or not self._chats_shown:
+            self._chats_shown = True
             self._chat_options = options
             with sel.prevent(Select.Changed):
                 sel.set_options(options)
                 sel.value = current if any(o[1] == current for o in options) else "all"
 
-    def run_search(self) -> None:
+    def _chat_dropdown_toggled(self, expanded: bool) -> None:
+        if not expanded and self._chats_waiting is not None:
+            self._apply_chats(self._chats_waiting)
+
+    def run_search(self, chats: bool = False, focus_results: bool = False) -> None:
+        """Search with the current filters (and with `chats`, refresh the chat list
+        first). The state file is read in a thread: on a big file a query takes
+        seconds, and the screen must keep answering meanwhile (issue #56). A
+        newer search replaces one still running; its results are dropped, but
+        what it still had to do (the chat list, Enter's move to the results)
+        carries over to the newer one."""
         if self._debounce is not None:
             self._debounce.stop()
             self._debounce = None
-        query, verdict, chat_id = self._filters()
-        count = self.query_one("#count", Static)
-        rows: list[Judged] = []
-        problem = ""
+        if self._pending is not None:
+            chats = chats or self._pending[1]
+            focus_results = focus_results or self._pending[2]
+        self._generation += 1
+        filters = self._filters()
+        self._pending = (filters, chats, focus_results)
+        self.query_one("#count", Static).update("searching…")   # #count's own muted colour (contrast)
+        self._search_worker(self._generation, *filters, chats, focus_results)
+
+    @work(thread=True, exclusive=True, group="search-state")
+    def _search_worker(self, generation: int, query: str, verdict: str | None, chat_id: int | None,
+                       chats: bool, focus_results: bool) -> None:
+        worker = get_current_worker()
+        # While the bot holds a lock, wait for it in short steps, so a replaced
+        # search or quitting the screen doesn't sit out a 10 s busy timeout.
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            try:
+                found, rows, problem = self._read(worker, query, verdict, chat_id, chats)
+                break
+            except Exception as e:  # noqa: BLE001 - shown, not raised
+                if worker.is_cancelled:
+                    return
+                if _locked(e) and time.monotonic() < deadline:
+                    continue
+                found, rows, problem = None, [], f"couldn't read the state: {e}"
+                break
+        if worker.is_cancelled:
+            return
         try:
-            with self.app.store() as s:
-                if not s.exists:
-                    problem = f"no state file yet ({self.app.paths.state})"
-                elif not s.has_table("processed"):
-                    problem = "nothing judged yet"
-                else:
-                    rows = search_data.search(s, query, verdict, chat_id, limit=LIMIT)
-        except Exception as e:  # noqa: BLE001
-            problem = f"couldn't read the state: {e}"
-        self._fill(rows)
+            self.app.call_from_thread(self._apply, generation, found, rows, problem, focus_results)
+        except RuntimeError:   # the app closed while we read
+            pass
+
+    def _read(self, worker, query: str, verdict: str | None, chat_id: int | None,
+              chats: bool) -> tuple[list[tuple[int, str]] | None, list[Judged], str]:
+        """(chat list or None, rows, problem). Raises when the file is locked."""
+        found: list[tuple[int, str]] | None = None
+        with self.app.store(timeout=LOCK_STEP_SECONDS) as s:
+            if s.db is not None:
+                # a replaced search stops at once instead of finishing a long scan
+                s.db.set_progress_handler(lambda: worker.is_cancelled, 10_000)
+            if chats:
+                try:
+                    found = search_data.judged_chats(s) if s.exists else []
+                except Exception as e:   # an odd state file shouldn't crash the screen
+                    if worker.is_cancelled or _locked(e):
+                        raise
+                    found = []
+                if chat_id is not None and chat_id not in {cid for cid, _ in found}:
+                    chat_id = None   # the chosen chat is gone: the filter goes back to all chats
+            if not s.exists:
+                return found, [], f"no state file yet ({self.app.paths.state})"
+            if not s.has_table("processed"):
+                return found, [], "nothing judged yet"
+            return found, search_data.search(s, query, verdict, chat_id, limit=LIMIT), ""
+
+    def _apply(self, generation: int, chats: list[tuple[int, str]] | None, rows: list[Judged], problem: str,
+               focus_results: bool) -> None:
+        if generation != self._generation or not self.is_mounted:
+            return   # a newer search is on its way
+        self._pending = None
+        if chats is not None:
+            self._apply_chats(chats)
+        table = self.query_one("#results", DataTable)
+        # After Enter the results table may have focus already; a key or click there
+        # while the search ran selected a post: it stays selected if it is among
+        # the new rows, otherwise the cursor keeps its position.
+        moved = focus_results and self.app.focused is table
+        self._fill(rows, cursor=table.cursor_row if moved else None)
+        count = self.query_one("#count", Static)
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:
             n = len(rows)
             count.update(f"{n}{'+' if n >= LIMIT else ''} result{'s' if n != 1 else ''}")
+        if focus_results:
+            box = self.query_one("#q", Input)
+            if not self._rows and self.app.focused is table:
+                box.focus()     # nothing found: back to the box, as before
+            elif self._rows and self.app.focused is box:
+                table.focus()   # Enter on an empty table: move once the results are in
+        judge, self._deferred_judge = self._deferred_judge, None
+        if judge is not None and self._rows and not self.has_class("pasting"):
+            self.action_rejudge(judge)
 
-    def _fill(self, rows: list[Judged]) -> None:
+    def _fill(self, rows: list[Judged], cursor: int | None = None) -> None:
+        """Show `rows`. The selected post stays selected if it is among them;
+        otherwise row `cursor` (the last one if there are fewer), or the first."""
         table = self.query_one("#results", DataTable)
         keep = row_key(self._selected) if self._selected else None
         table.clear()
@@ -265,6 +365,10 @@ class SearchPane(Vertical):
         if keep in self._rows:
             table.move_cursor(row=table.get_row_index(keep))
             self._show_detail(self._rows[keep], keep_result=True)
+        elif cursor is not None and self._rows:
+            row = min(max(cursor, 0), table.row_count - 1)
+            table.move_cursor(row=row)
+            self._show_detail(self._rows[str(table.coordinate_to_cell_key((row, 0)).row_key.value)])
         elif rows:
             table.move_cursor(row=0)
             self._show_detail(self._rows[row_key(rows[0])])
@@ -279,19 +383,32 @@ class SearchPane(Vertical):
 
     @on(Input.Submitted, "#q")
     def _submitted(self) -> None:
-        self.run_search()
-        if self._rows:
-            self.query_one("#results", DataTable).focus()
+        # Enter moves to the results: at once when there are rows, so keys typed
+        # while the search runs (Down, j) reach the table and act on the new
+        # results; with an empty table only when results arrive, so letters typed
+        # meanwhile still go into the box.
+        table = self.query_one("#results", DataTable)
+        if table.row_count:
+            table.focus()
+        self.run_search(focus_results=True)
 
     @on(Select.Changed, "#verdict")
     @on(Select.Changed, "#chat")
     def _filter_changed(self) -> None:
-        self.run_search()
+        # The filters announce their first value when they are mounted: that must
+        # not search a tab nobody has opened yet (it held up the first tab, #56).
+        if self._loaded:
+            self.run_search()
 
     @on(DataTable.RowHighlighted, "#results")
     def _highlighted(self, event: DataTable.RowHighlighted) -> None:
-        j = self._rows.get(event.row_key.value) if event.row_key is not None else None
-        if j is not self._selected:
+        table = event.data_table
+        if event.row_key is None or not table.row_count:
+            return
+        if event.row_key.value != table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value:
+            return   # stale: the rows were replaced (or the cursor moved on) since it was sent
+        j = self._rows.get(event.row_key.value)
+        if j is not None and (self._selected is None or row_key(j) != row_key(self._selected)):
             self._show_detail(j)
 
     # ------------------------------------------------------------ detail
@@ -343,6 +460,9 @@ class SearchPane(Vertical):
         if self.has_class("pasting"):
             self._judge_paste(follow_links)
             return
+        if self._pending is not None and self._pending[2]:
+            self._deferred_judge = follow_links   # pressed after Enter: judge the new first result
+            return
         j = self._selected
         out = self.query_one("#judge-result", Static)
         if j is None:
@@ -378,6 +498,7 @@ class SearchPane(Vertical):
     # ------------------------------------------------------------- paste
 
     def action_paste(self) -> None:
+        self._deferred_judge = None   # a j waiting for results never judges the paste box
         self.add_class("pasting")
         self.query_one("#paste-text", TextArea).focus()
 
