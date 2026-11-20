@@ -220,7 +220,6 @@ def test_album_counts_where_its_first_picture_is(tmp_path):
         assert dd.period_stats(s, dd.resolve(dd.PeriodChoice("7d"), day), 46).totals.publish == 1
 
 
-
 def test_period_counts_read_only_the_period(tmp_path, monkeypatch):
     """#110: counting an album once looks up its first picture through the bot's album index, not a
     list of every album row in the file built on each refresh; the period goes through processed_at."""
@@ -239,6 +238,25 @@ def test_period_counts_read_only_the_period(tmp_path, monkeypatch):
         plan = [r[-1] for r in s.db.execute("EXPLAIN QUERY PLAN " + sql, args)]
         assert not [line for line in plan if line.startswith("SCAN")], plan
         assert any("processed_at" in line for line in plan), plan
+
+
+def test_without_the_album_index_albums_are_found_in_one_pass(tmp_path, monkeypatch):
+    """A file the bot hasn't opened since it added its album index (#109): a lookup per album row
+    would read the album's whole chat each time (minutes on a big file), so the first pictures are
+    found in one pass instead, and the counts are the same."""
+    day = date(2026, 11, 18)
+    rows = [(-1, 100, "A", "publish", "forwarded", at(day), 7), (-1, 101, "A", "", "part of a post already handled", at(day), 7)]
+    no_index = "\n".join(line for line in SCHEMA.splitlines() if "processed_chat_album" not in line)
+    path = tmp_path / "s.sqlite3"
+    new_db(path, rows, schema=no_index)
+    with Store(path) as s:
+        seen = []
+        rows_of = s._rows
+        monkeypatch.setattr(s, "_rows", lambda sql, args=(): seen.append((sql, args)) or rows_of(sql, args))
+        assert dd.period_stats(s, dd.resolve(dd.PeriodChoice("today"), day), 46).totals == dd.Totals(publish=1, forwarded=1)
+        [(sql, args)] = [q for q in seen if "GROUP BY" in q[0]]
+        plan = [r[-1] for r in s.db.execute("EXPLAIN QUERY PLAN " + sql, args)]
+        assert not [line for line in plan if line.startswith("SEARCH q")], plan   # no lookup per album row
 
 def test_old_state_file_without_album_column(tmp_path):
     old = SCHEMA.replace(", album_id INTEGER,\n  PRIMARY KEY", ",\n  PRIMARY KEY")
