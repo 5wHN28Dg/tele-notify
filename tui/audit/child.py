@@ -3,6 +3,7 @@
 
   python -m audit.child app [telenotify-tui arguments]   the screen, as a user starts it
   python -m audit.child timing JSON                       one R7 timing run
+  python -m audit.child terminal SPEC                     the screen in a real terminal (audit/terminal.py)
 """
 
 from __future__ import annotations
@@ -15,6 +16,10 @@ from . import appsrc
 
 
 def main(argv: list[str]) -> int:
+    if argv[:1] == ["terminal"] and len(argv) == 2:
+        from . import terminal  # builds its own environment from the spec first
+
+        return terminal.screen(argv[1])
     appsrc.use(os.environ.get(appsrc.ENV))
     if argv[:1] == ["app"]:
         from telenotify_tui.__main__ import main as app_main

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ from . import appsrc, guard
 REAL_HOME = guard.real_home()
 
 JOBS = ("isolation", "screenshots", "visible", "keys", "timing", "colours", "hostile", "failures", "tasks", "styles",
-        "leaks", "big-state", "interactive")
+        "leaks", "big-state", "interactive", "terminal")
 
 
 def _list(s: str) -> list[str]:
@@ -30,7 +31,7 @@ def parser() -> argparse.ArgumentParser:
                    help="full,words (default both; interactive: the screen's own choice for this terminal)")
     p.add_argument("--themes", type=_list, default=["dark"], help="dark,light (light only for R6)")
     p.add_argument("--only", type=_list, default=None, help="screenshots: shot name prefixes; "
-                   "failures: condition names; tasks: task names")
+                   "failures: condition names; tasks: task names; terminal: scene names")
     p.add_argument("--runs", type=int, default=3, help="timing: runs per lock kind")
     p.add_argument("--locks", type=_list, default=["none", "write", "exclusive"], help="timing: none,write,exclusive")
     p.add_argument("--posts", type=int, default=None, help="timing / big-state: judged posts (default 1 000 000)")
@@ -45,6 +46,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--big", action="store_true", help="interactive: use the large state file")
     p.add_argument("--size-check", action="store_true", help="interactive: say whether the terminal is at "
                    "least 80x24 and refuse to start if it is smaller")
+    p.add_argument("--terminals", type=_list, default=["kitty", "ptyxis"],
+                   help="terminal: kitty,ptyxis (each must be installed)")
+    p.add_argument("--kitty-config", type=Path, default=None,
+                   help="terminal: draw kitty with this kitty.conf instead of its defaults (font fidelity)")
     p.add_argument("--headless-check", action="store_true", help=argparse.SUPPRESS)   # tests only
     p.add_argument("--base", type=Path, default=None, help=argparse.SUPPRESS)   # tests only
     p.add_argument("--compare", type=Path, default=None,
@@ -57,12 +62,28 @@ def main(argv: list[str] | None = None) -> int:
     from . import evidence
     from . import sandbox as sbx
 
-    if a.job != "interactive" and a.bidi is None:
+    if a.job not in ("interactive", "terminal") and a.bidi is None:
         a.bidi = ["full", "words"]
     if a.job != "interactive" and a.out is None:
         print("--out DIR is required", file=sys.stderr)
         return 2
     out = a.out or (REAL_HOME / ".cache" / "agent-tmp" / "tn-audit" / "interactive")   # nothing is written there
+    if a.kitty_config is not None:
+        a.kitty_config = Path(os.path.abspath(a.kitty_config))
+        why = guard.why_forbidden(a.kitty_config, REAL_HOME)
+        if why:
+            print(f"refusing to run: --kitty-config {why}", file=sys.stderr)
+            return 2
+        if not a.kitty_config.is_file():
+            print(f"--kitty-config {a.kitty_config}: not a file", file=sys.stderr)
+            return 2
+    if a.job == "terminal":
+        from . import terminal
+        try:
+            terminal.plan_shots(a.terminals, a.sizes, a.themes, a.modes, a.bidi, set(a.only) if a.only else None)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 2
     sb = sbx.plan(out, base=a.base or sbx.BASE, job=a.job, dry_run=not a.real, use_repo_bin=a.bin == "repo",
                   real_home=REAL_HOME)
     try:
@@ -160,6 +181,10 @@ def run_job(a: argparse.Namespace, sb) -> dict:
     if a.job == "styles":
         from . import styles
         return styles.collect(sb)
+    if a.job == "terminal":
+        from . import terminal
+        return terminal.collect(sb, a.terminals, a.sizes, a.themes, a.modes, a.bidi,
+                                set(a.only) if a.only else None, kitty_config=a.kitty_config)
     raise SystemExit(f"unknown job {a.job}")
 
 
