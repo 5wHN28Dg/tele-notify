@@ -187,8 +187,8 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
 
 # ------------------------------------------------------------ snapshot
 
-# the Bot box's width from which "Logged out of Telegram. Stop, run telenotify login, then Start." fits a line
-LOGIN_WIDE = 64
+# the Bot box's width from which "Not logged in to Telegram. Stop, run telenotify login, then Start." fits a line
+LOGIN_WIDE = 67
 
 
 @dataclass
@@ -498,6 +498,10 @@ class DashboardPane(Vertical):
         bot_box.border_title = "Bot"
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
 
+    def on_resize(self, event: events.Resize) -> None:
+        # the login line has a short and a long form: pick again once the new layout is in place
+        self.call_after_refresh(self._show_status)
+
     def on_show(self) -> None:
         # Focus the feed when the tab is shown, so f / c / a and the arrow keys work at once.
         focused = self.screen.focused
@@ -608,7 +612,8 @@ class DashboardPane(Vertical):
             # first, so it shows even when the box is too short for the rest (80 x 24), and
             # short there; bold, in words (no new colour: red reads below 4.5:1 in the dark theme)
             narrow = self.query_one("#status", Static).content_region.width < LOGIN_WIDE
-            out.append("Logged out: " if narrow else "Logged out of Telegram. ", style="bold")
+            # "not logged in": true after a log-out and on a first start before `telenotify login`
+            out.append("Not logged in: " if narrow else "Not logged in to Telegram. ", style="bold")
             # Stop first: `telenotify login` can't share TDLib's folder with the bot systemd keeps restarting
             out.append("Stop, run ")
             out.append("telenotify login", style="bold")

@@ -13,7 +13,7 @@ from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.paths import Paths
 from telenotify_tui.postview import PostView
 from telenotify_tui.screens import dashboard_data as dd
-from telenotify_tui.screens.dashboard import ConfirmScreen, DashboardPane
+from telenotify_tui.screens.dashboard import LOGIN_WIDE, ConfirmScreen, DashboardPane
 from telenotify_tui.store import Store
 
 
@@ -113,12 +113,30 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, size):
         shown = status.region.intersection(box.content_region)
         drawn = [strip.text.strip() for strip in status.render_lines(Region(0, 0, shown.width, shown.height))]
         first = " ".join(" ".join(drawn).split())
-        lead = "Logged out:" if size[0] < 100 else "Logged out of Telegram."
+        if size[0] == 80:   # 3 rows in the 24-cell box, the rest of it below
+            assert drawn[2].endswith("Start.") and not drawn[1].endswith("Start.")
+        # "not logged in": right both for a log-out and for a first start before `telenotify login`
+        lead = "Not logged in:" if status.content_region.width < LOGIN_WIDE else "Not logged in to Telegram."
         assert first.startswith(f"{lead} Stop, run telenotify login, then Start.")
         if size[1] >= 30:   # "Stop ... Start": the buttons are in view where they were before
             restart = app.query_one("#svc-restart").region
             assert box.content_region.contains_region(restart)
 
+
+
+async def test_the_login_line_follows_a_resize(paths):
+    """Its short and long forms are chosen again when the window changes size, not at the next refresh."""
+    db = sqlite3.connect(paths.state)
+    db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        assert " ".join(text(app, "#status").split()).startswith("Not logged in: Stop")
+        await pilot.resize_terminal(160, 30)
+        await settle(app, pilot)
+        assert " ".join(text(app, "#status").split()).startswith("Not logged in to Telegram. Stop")
 
 async def test_a_new_login_clears_the_logged_out_line(paths, now):
     """The bot clears login_needed after a login: back to the usual connection line."""
