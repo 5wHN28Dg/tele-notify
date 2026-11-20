@@ -225,7 +225,8 @@ class Store:
         sql = f"""SELECT chat_title, SUM(verdict = 'publish'), SUM(verdict = 'review'),
                   SUM(verdict = 'reject'), SUM(action = 'forwarded' OR action = 'linked' {sent_review})
                   FROM processed p WHERE at > ? {first_of_album}
-                  GROUP BY chat_id ORDER BY COUNT(*) DESC"""
+                  GROUP BY +chat_id ORDER BY COUNT(*) DESC"""
+        # `+chat_id`, as in the bot's: read the last N days through processed_at, not a whole chat_id index
         since = int(time.time()) - days * 86400
         return [ChatStats(r[0] or "", r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0)
                 for r in self._rows(sql, (since,))]

@@ -56,6 +56,20 @@ def test_stats_counts_like_the_bot(state):
         assert sum(d[3] for d in s.per_day(7)) == 2
 
 
+
+def test_stats_reads_the_period_through_the_time_index(state, monkeypatch):
+    """Grouping by plain chat_id lets SQLite walk a whole chat_id index (every post
+    ever judged) instead of reading the last N days through processed_at."""
+    with Store(state) as s:
+        seen: list[tuple[str, tuple]] = []
+        rows = s._rows
+        monkeypatch.setattr(s, "_rows", lambda sql, args=(): seen.append((sql, args)) or rows(sql, args))
+        s.stats(7)
+        [(sql, args)] = [q for q in seen if "GROUP BY" in q[0]]
+        plan = [r[-1] for r in s.db.execute("EXPLAIN QUERY PLAN " + sql, args)]
+        assert "SEARCH p USING INDEX processed_at (at>?)" in plan, plan
+        assert any("processed_chat_album (chat_id=? AND album_id=?)" in line for line in plan), plan
+
 def test_review_decisions_happen_once(state):
     with Store(state) as s:
         [r] = s.reviews()

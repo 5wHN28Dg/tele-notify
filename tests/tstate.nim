@@ -119,17 +119,19 @@ suite "state":
     check st.getMeta("last_alive") == "123"
     check st.getMeta("missing") == ""
 
-  test "time-window reads of processed use an index, not a full scan":
-    # the dashboard and `stats` read the last N days; without these a
-    # year of posts is scanned on every refresh
+  test "the bot's reads of processed use an index, never a whole-table walk":
+    # the real queries: a full scan, or a walk over a whole index, grows
+    # with every post ever judged
     let db = open(dir / "state.sqlite3", "", "", "")
     defer: db.close()
-    proc plan(q: string): string =
-      for r in db.fastRows(sql("EXPLAIN QUERY PLAN " & q)): result.add r[^1] & "\n"
-    let byTime = plan("SELECT chat_id FROM processed WHERE at > 0")
-    check "USING INDEX processed_at" in byTime
-    let byChat = plan("SELECT msg_id FROM processed WHERE chat_id = -100 AND at > 0")
-    check "processed_chat_at" in byChat
+    proc plan(q: string, args: varargs[string]): seq[string] =
+      for r in db.fastRows(sql("EXPLAIN QUERY PLAN " & q), args): result.add r[^1]
+    let st7 = plan(statsSql, "0")
+    check "SEARCH p USING INDEX processed_at (at>?)" in st7
+    check "SEARCH q USING COVERING INDEX processed_chat_album (chat_id=? AND album_id=?)" in st7
+    check plan(processedSinceSql, "0") == @["SEARCH processed USING INDEX processed_at (at>?)"]
+    check plan(albumHandledSql, "-100", "7") ==
+      @["SEARCH processed USING INDEX processed_chat_album (chat_id=? AND album_id=?)"]
 
   test "an old state file gets the indexes when opened":
     let old = dir / "old.sqlite3"
@@ -144,7 +146,7 @@ suite "state":
     var names: seq[string]
     for r in db.fastRows(sql"SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'processed'"):
       names.add r[0]
-    check "processed_at" in names and "processed_chat_at" in names
+    check "processed_at" in names and "processed_chat_at" in names and "processed_chat_album" in names
 
 st.close()
 removeDir(dir)
