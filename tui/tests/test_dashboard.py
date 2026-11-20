@@ -113,8 +113,10 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, size):
         shown = status.region.intersection(box.content_region)
         drawn = [strip.text.strip() for strip in status.render_lines(Region(0, 0, shown.width, shown.height))]
         first = " ".join(" ".join(drawn).split())
-        if size[0] == 80:   # 3 rows in the 24-cell box, the rest of it below
+        if size[0] == 80:   # 3 rows in the 24-cell box, then (owner's choice B) no Service row: Mode, Review
             assert drawn[2].endswith("Start.") and not drawn[1].endswith("Start.")
+            rest = " ".join(" ".join(drawn[3:]).split())
+            assert "Service" not in rest and rest.startswith("Mode") and "1 pending" in rest
         # "not logged in": right both for a log-out and for a first start before `telenotify login`
         lead = "Not logged in:" if status.content_region.width < LOGIN_WIDE else "Not logged in to Telegram."
         assert first.startswith(f"{lead} Stop, run telenotify login, then Start.")

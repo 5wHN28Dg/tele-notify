@@ -608,10 +608,11 @@ class DashboardPane(Vertical):
                 st = "unknown (no systemctl?)" if all(v == "unknown" for v in self.services.values()) else st
             return st, style
 
-        if snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed:
+        login_line = snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed
+        narrow = self.query_one("#status", Static).content_region.width < LOGIN_WIDE
+        if login_line:
             # first, so it shows even when the box is too short for the rest (80 x 24), and
             # short there; bold, in words (no new colour: red reads below 4.5:1 in the dark theme)
-            narrow = self.query_one("#status", Static).content_region.width < LOGIN_WIDE
             # "not logged in": true after a log-out and on a first start before `telenotify login`
             out.append("Not logged in: " if narrow else "Not logged in to Telegram. ", style="bold")
             # Stop first: `telenotify login` can't share TDLib's folder with the bot systemd keeps restarting
@@ -626,7 +627,10 @@ class DashboardPane(Vertical):
                 parts.append((" · ", "dim"))
             parts.append((f"{label[m]}: ", "bold" if m == self.mode else ""))
             parts.append(svc(m))
-        row("Service", *parts)
+        # the owner's choice (#100): with the login line in a narrow box (80 x 24), Mode and the pending
+        # count matter more than the service row, whose buttons are below the box there anyway (#57)
+        if not (login_line and narrow):
+            row("Service", *parts)
 
         if snap is None:
             out.append("reading the state file…", style="dim")
