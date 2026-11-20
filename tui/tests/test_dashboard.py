@@ -13,7 +13,7 @@ from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.paths import Paths
 from telenotify_tui.postview import PostView
 from telenotify_tui.screens import dashboard_data as dd
-from telenotify_tui.screens.dashboard import LOGIN_WIDE, ConfirmScreen, DashboardPane
+from telenotify_tui.screens.dashboard import ConfirmScreen, DashboardPane
 from telenotify_tui.store import Store
 
 
@@ -91,7 +91,16 @@ async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
 
 
 
-@pytest.mark.parametrize("size", [(80, 24), (120, 30)])
+# window size -> the line's form, and whether the Service row fits with it (the owner's choice B, #100:
+# it gives way only where the box is too short, as at 80 x 24)
+LOGIN_LAYOUTS = {
+    (80, 24): ("Not logged in:", False),
+    (120, 40): ("Not logged in:", True),
+    (160, 40): ("Not logged in to Telegram.", True),
+}
+
+
+@pytest.mark.parametrize("size", list(LOGIN_LAYOUTS))
 @pytest.mark.parametrize("age", [30, 3 * 3600])
 async def test_a_lost_login_says_what_to_run(paths, now, age, size):
     """#65: Telegram logged the account out. The bot can't message you any more, and
@@ -102,6 +111,7 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, size):
     db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
     db.commit()
     db.close()
+    lead, service = LOGIN_LAYOUTS[size]
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=size) as pilot:
         await settle(app, pilot)
@@ -113,14 +123,14 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, size):
         shown = status.region.intersection(box.content_region)
         drawn = [strip.text.strip() for strip in status.render_lines(Region(0, 0, shown.width, shown.height))]
         first = " ".join(" ".join(drawn).split())
-        if size[0] == 80:   # 3 rows in the 24-cell box, then (owner's choice B) no Service row: Mode, Review
-            assert drawn[2].endswith("Start.") and not drawn[1].endswith("Start.")
-            rest = " ".join(" ".join(drawn[3:]).split())
-            assert "Service" not in rest and rest.startswith("Mode") and "1 pending" in rest
         # "not logged in": right both for a log-out and for a first start before `telenotify login`
-        lead = "Not logged in:" if status.content_region.width < LOGIN_WIDE else "Not logged in to Telegram."
         assert first.startswith(f"{lead} Stop, run telenotify login, then Start.")
-        if size[1] >= 30:   # "Stop ... Start": the buttons are in view where they were before
+        rest = first.split("Start.", 1)[1]
+        assert ("Service" in rest) == service
+        assert "Mode" in rest and "1 pending" in rest   # never pushed out of the box
+        if size == (80, 24):   # 3 rows in the 24-cell box
+            assert drawn[2].endswith("Start.") and not drawn[1].endswith("Start.")
+        else:   # "Stop ... Start": the buttons are in view where they were before
             restart = app.query_one("#svc-restart").region
             assert box.content_region.contains_region(restart)
 
@@ -150,7 +160,7 @@ async def test_a_new_login_clears_the_logged_out_line(paths, now):
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
         status = " ".join(text(app, "#status").split())
-        assert "logged out" not in status and "telenotify login" not in status
+        assert "Not logged in" not in status and "telenotify login" not in status
         assert "Telegram ready" in status
 
 async def test_totals(paths):

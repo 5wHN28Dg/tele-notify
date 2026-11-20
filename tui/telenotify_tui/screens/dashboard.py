@@ -187,8 +187,8 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
 
 # ------------------------------------------------------------ snapshot
 
-# the Bot box's width from which "Not logged in to Telegram. Stop, run telenotify login, then Start." fits a line
-LOGIN_WIDE = 67
+# the Bot box's width from which "Not logged in to Telegram. Stop, run telenotify login, then Start." (66) fits a line
+LOGIN_WIDE = 66
 
 
 @dataclass
@@ -592,6 +592,20 @@ class DashboardPane(Vertical):
             self._show_alerts(snap)
 
     def _show_status(self) -> None:
+        status = self.query_one("#status", Static)
+        out = self._status_text(show_service=True)
+        snap = self.snapshot
+        if snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed:
+            # the owner's choice B (#100): where the login line leaves no room (80 x 24), the Service
+            # row gives way, so Mode and the pending count stay in the box; it stays wherever it fits
+            width = status.content_region.width
+            room = self.query_one("#dash-bot").content_region.height - 1   # the buttons' row
+            if width > 0 and len(out.wrap(self.app.console, width)) > room:
+                out = self._status_text(show_service=False)
+        status.remove_class("muted")
+        status.update(out)
+
+    def _status_text(self, show_service: bool) -> Text:
         snap = self.snapshot
         out = Text()
 
@@ -627,9 +641,7 @@ class DashboardPane(Vertical):
                 parts.append((" · ", "dim"))
             parts.append((f"{label[m]}: ", "bold" if m == self.mode else ""))
             parts.append(svc(m))
-        # the owner's choice (#100): with the login line in a narrow box (80 x 24), Mode and the pending
-        # count matter more than the service row, whose buttons are below the box there anyway (#57)
-        if not (login_line and narrow):
+        if show_service:
             row("Service", *parts)
 
         if snap is None:
@@ -671,9 +683,8 @@ class DashboardPane(Vertical):
                 a = snap.alerts[0]
                 row("Alerts", (f"{len(snap.alerts)}", ""),
                     (f"  last {fmt_age(now - a.at)} ago, press a", "dim"))
-        status = self.query_one("#status", Static)
-        status.remove_class("muted")
-        status.update(out.rstrip() or out)
+        out.rstrip()
+        return out
 
     def _show_activity(self, snap: Snapshot) -> None:
         totals = self.query_one("#totals", Static)
