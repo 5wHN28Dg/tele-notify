@@ -101,6 +101,13 @@ class TeleNotifyApp(App):
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
+        # the ansi themes take the terminal's own colours: dark in a dark terminal even as
+        # "light", and our hover and selection styles vanish in them (#112, the owner's check)
+        for name in ("ansi-dark", "ansi-light"):
+            self.unregister_theme(name)
+        # TEXTUAL_THEME may have named one: Textual already built its colours from it, so apply
+        # the theme it falls back to now (#116, review run 1)
+        self.theme = self.current_theme.name
         self.footer_downs: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
         self.press_made_at: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button

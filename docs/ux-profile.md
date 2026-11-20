@@ -171,7 +171,7 @@ day.
   All truecolour.
 - **Sizes:** 80 × 24 smallest (80 × 23 inside `tmux` with its status line, also checked); 120 × 40 typical; 200 × 50 largest checked.
 - **Themes:** `textual-dark` (default) and `textual-light`, switched in Textual's command palette (`ctrl+p`), not
-  saved between runs (#73). The palette also offers 19 other themes that aren't supported (#81).
+  saved between runs (#73). The palette also offers 17 other themes that aren't supported (#81; the two ansi themes were removed in #116).
 - **Inputs:** the keyboard and the mouse are both first-class in the screen; the keyboard alone in the command line.
 - **Assistive technology:** the terminal's font size; GNOME's High Contrast and Large Text through the terminal;
   GNOME's Reduced Motion and animations off (Textual's own animations must follow them, A11; Textual has

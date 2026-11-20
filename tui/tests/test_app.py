@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import pytest
+from textual.app import InvalidThemeError
 from textual.widgets import TabbedContent
 
 from telenotify_tui.app import TeleNotifyApp
@@ -22,3 +26,44 @@ async def test_plain_q_does_not_quit_but_ctrl_q_does(paths):
         await pilot.press("ctrl+q")
         await pilot.pause()
         assert not app.is_running
+
+
+async def test_the_ansi_themes_are_not_offered(paths):
+    """#112, the owner's check: "ansi light is not light, it is pitch black and text blends with
+    highlight color"; the ansi themes take the terminal's own colours, which we can't check."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        names = set(app.available_themes)
+        assert not {"ansi-dark", "ansi-light"} & names
+        assert {"textual-dark", "textual-light"} <= names
+        with pytest.raises(InvalidThemeError):
+            app.theme = "ansi-light"
+
+
+@pytest.mark.parametrize("env_theme, expected", [("ansi-light", "textual-dark"), ("ansi-dark,textual-light", "textual-light")])
+def test_an_ansi_theme_from_the_environment_isnt_used(paths, env_theme, expected):
+    """#112: TEXTUAL_THEME (read when Textual is imported) can't bring an ansi theme back."""
+    import os
+    import subprocess
+    import sys
+    code = f"""
+import asyncio
+from pathlib import Path
+from telenotify_tui.app import TeleNotifyApp
+from telenotify_tui.paths import Paths
+paths = Paths(config=Path({str(paths.config)!r}), data_dir=Path({str(paths.data_dir)!r}),
+              state=Path({str(paths.state)!r}), binary=None, dry_run=True)
+async def main():
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        print(app.theme, app.current_theme.name, app.theme_variables["background"])
+asyncio.run(main())
+"""
+    env = {**os.environ, "TEXTUAL_THEME": env_theme, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    out = subprocess.run([sys.executable, "-c", code], check=False, env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr[-2000:]
+    theme, current, background = out.stdout.split()[-3:]
+    assert theme == current == expected
+    assert not background.startswith("ansi")
