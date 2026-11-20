@@ -56,6 +56,7 @@ proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
     of "authorizationStateWaitPhoneNumber", "authorizationStateWaitCode",
        "authorizationStateWaitPassword", "authorizationStateWaitOtherDeviceConfirmation":
       if not interactive:
+        c.stopped = true   # as for an unsupported step: nothing more to read
         raise newException(NotLoggedIn, "not logged in to Telegram: run `telenotify login` first")
       try:
         case authState

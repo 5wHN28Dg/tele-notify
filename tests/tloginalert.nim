@@ -16,16 +16,19 @@ suite "login needed":
       recordLoginNeeded(st, "authorizationStateWaitPhoneNumber", dryRun = false)
     let alerts = st.alertTexts()
     check alerts.len == 1
-    check alerts[0].startsWith("Run `telenotify login`")   # the step first
+    # the steps first; `telenotify login` can't share TDLib's folder with a running bot
+    check alerts[0].startsWith("Run `systemctl --user stop tele-notify`, then `telenotify login`, " &
+                               "then `systemctl --user start tele-notify`:")
     check "authorizationState" notin alerts[0]                # plain words
-    check "systemctl --user restart tele-notify" in alerts[0]
+    check "restart" notin alerts[0]
     check st.getMeta("connection") == "logged out"
 
   test "the dry run's service is named":
     let st = openState(dir / "state-dryrun.sqlite3")
     defer: st.close()
     recordLoginNeeded(st, "authorizationStateLoggingOut", dryRun = true)
-    check "systemctl --user restart tele-notify-dryrun" in st.alertTexts()[0]
+    check st.alertTexts()[0].startsWith("Run `systemctl --user stop tele-notify-dryrun`, then `telenotify login`, " &
+                                        "then `systemctl --user start tele-notify-dryrun`:")
 
   test "after logging in again, a later log-out alerts again":
     let st = openState(dir / "state2.sqlite3")

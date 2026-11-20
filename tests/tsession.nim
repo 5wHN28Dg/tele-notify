@@ -1,7 +1,7 @@
 ## Logging in against a fake libtdjson, and where state is kept.
 
 import std/[unittest, asyncdispatch, json, deques, os, strutils, unicode]
-import telenotify/[session, tdjson, config, commands]
+import telenotify/[session, tdjson, config, commands, state]
 
 var outbox = initDeque[string]()
 var current: string
@@ -36,6 +36,33 @@ suite "session":
       if fut.finished: break
       poll(50)
     check fut.finished and fut.failed and "unsupported login step" in fut.readError.msg
+
+  test "logged out at start: the screen is told (#65)":
+    let st = openState(getTempDir() / "tn-session-login" / "state.sqlite3")
+    defer: st.close()
+    st.setMeta("login_needed", "")
+    nextState = "authorizationStateWaitPhoneNumber"
+    outbox.addLast authUpdate("authorizationStateWaitTdlibParameters")
+    let fut = loggedInOrRecord(st, false, connectWith(lib, cfg, interactive = false))
+    for _ in 0 ..< 40:
+      if fut.finished: break
+      poll(50)
+    check fut.finished and fut.failed and fut.readError of NotLoggedIn
+    check st.getMeta("login_needed") == "1"
+    check st.getMeta("connection") == "logged out"
+
+  test "logged in again: cleared as soon as TDLib is ready, not after the chat list (#65)":
+    let st = openState(getTempDir() / "tn-session-login" / "state.sqlite3")
+    defer: st.close()
+    st.setMeta("login_needed", "1")
+    nextState = "authorizationStateReady"
+    outbox.addLast authUpdate("authorizationStateWaitTdlibParameters")
+    let fut = loggedInOrRecord(st, false, connectWith(lib, cfg, interactive = false))
+    for _ in 0 ..< 40:
+      if fut.finished: break
+      poll(50)
+    check fut.finished and not fut.failed
+    check st.getMeta("login_needed") == ""
 
   test "our own shutdown is not a lost session; a logout is":
     check not sessionEnded("authorizationStateClosing", stopping = true)

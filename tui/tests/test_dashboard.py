@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from textual.geometry import Region
 from textual.widgets import DataTable, Select, Static, TabbedContent
 
 from telenotify_tui import bot
@@ -104,15 +105,17 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, size):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=size) as pilot:
         await settle(app, pilot)
-        status = text(app, "#status")
-        words = " ".join(status.split())
-        assert "not running" not in words and "Telegram" not in words.split("Restart.", 1)[1]
-        # first, so a box too short for the rest (80 x 24) still shows it
-        assert words.startswith("Logged out of Telegram. Run telenotify login, then Restart.")
+        words = " ".join(text(app, "#status").split())
+        assert "not running" not in words and "Telegram" not in words.split("Start.", 1)[1]
+        # first, so a box too short for the rest (80 x 24) still shows it: read the rows drawn in the box
         box = app.query_one("#dash-bot")
-        shown = app.query_one("#status").region.intersection(box.content_region)
-        assert shown.height >= len(status.split("Restart.")[0].splitlines())
-        if size[1] >= 30:   # "then Restart": the button is in view where it was before
+        status = app.query_one("#status", Static)
+        shown = status.region.intersection(box.content_region)
+        drawn = [strip.text.strip() for strip in status.render_lines(Region(0, 0, shown.width, shown.height))]
+        first = " ".join(" ".join(drawn).split())
+        lead = "Logged out:" if size[0] < 100 else "Logged out of Telegram."
+        assert first.startswith(f"{lead} Stop, run telenotify login, then Start.")
+        if size[1] >= 30:   # "Stop ... Start": the buttons are in view where they were before
             restart = app.query_one("#svc-restart").region
             assert box.content_region.contains_region(restart)
 

@@ -187,6 +187,10 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
 
 # ------------------------------------------------------------ snapshot
 
+# the Bot box's width from which "Logged out of Telegram. Stop, run telenotify login, then Start." fits a line
+LOGIN_WIDE = 64
+
+
 @dataclass
 class Snapshot:
     """Everything the dashboard shows from the state file, read in one go."""
@@ -601,11 +605,14 @@ class DashboardPane(Vertical):
             return st, style
 
         if snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed:
-            # first, so it shows even when the box is too short for the rest (80 x 24)
-            out.append("Logged out of Telegram. ", style="bold red")
-            out.append("Run ")
+            # first, so it shows even when the box is too short for the rest (80 x 24), and
+            # short there; bold, in words (no new colour: red reads below 4.5:1 in the dark theme)
+            narrow = self.query_one("#status", Static).content_region.width < LOGIN_WIDE
+            out.append("Logged out: " if narrow else "Logged out of Telegram. ", style="bold")
+            # Stop first: `telenotify login` can't share TDLib's folder with the bot systemd keeps restarting
+            out.append("Stop, run ")
             out.append("telenotify login", style="bold")
-            out.append(", then Restart.\n")
+            out.append(", then Start.\n")
 
         label = {"real": "real", "dry-run": "dry run"}
         parts: list[tuple[str, str]] = []
