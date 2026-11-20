@@ -259,15 +259,14 @@ def first_judged(store: Store) -> tuple[date | None, bool]:
 def _first_of_album(store: Store) -> tuple[str, str]:
     """(WITH clause, condition): an album is one post, however many pictures,
     so only its first row (lowest msg_id, as in `telenotify stats`) counts.
-    The first rows are found in one pass, not with one search per album row."""
+    Each album row of the period looks up its album's first row through the
+    bot's (chat_id, album_id, msg_id) index, so a refresh reads the period,
+    not every album row ever judged (#110)."""
     if "album_id" not in store._columns("processed"):
         return "", ""
-    # Grouping by album first (not chat_id, the key's first column) makes
-    # SQLite scan the table once instead of walking it in key order.
-    with_firsts = ("WITH firsts AS (SELECT chat_id, MIN(msg_id) AS msg_id FROM processed "
-                   "WHERE COALESCE(album_id, 0) != 0 GROUP BY album_id, chat_id) ")
-    condition = "AND (COALESCE(album_id, 0) = 0 OR (chat_id, msg_id) IN (SELECT chat_id, msg_id FROM firsts))"
-    return with_firsts, condition
+    condition = ("AND (COALESCE(album_id, 0) = 0 OR msg_id = (SELECT MIN(msg_id) FROM processed q "
+                 "WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))")
+    return "", condition
 
 
 def _sent_review(store: Store) -> str:
@@ -289,8 +288,8 @@ def period_stats(store: Store, period: Period, max_bars: int) -> PeriodStats:
     chats: dict[int, list] = {}   # chat id -> [title, newest at, publish, review, reject, forwarded]
     if store.has_table("processed"):
         with_firsts, first_of_album = _first_of_album(store)
-        # GROUP BY the day first, for the same reason as in _first_of_album: 0.03 s
-        # instead of 0.4 s for one day of a million-row file.
+        # GROUP BY the day first: SQLite then reads the period through the bot's
+        # processed_at index instead of walking the file in key order.
         sql = f"""{with_firsts}SELECT chat_id, chat_title, MAX(at), date(at, 'unixepoch', 'localtime') d,
                   SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
                   SUM(action = 'forwarded' OR action = 'linked' {_sent_review(store)})
