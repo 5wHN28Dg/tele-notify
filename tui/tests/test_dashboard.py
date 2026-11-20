@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from textual.geometry import Region
 from textual.widgets import DataTable, Select, Static, TabbedContent
 
 from telenotify_tui import bot
@@ -88,6 +89,89 @@ async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
         telegram = next(line for line in status.splitlines() if line.startswith("Telegram"))
         assert "not running" in telegram and "ready" not in telegram and "up " not in telegram
 
+
+
+# window size -> the line's form, and whether the Service row fits with it (the owner's choice B, #100:
+# it gives way only where the box is too short, as at 80 x 24)
+LOGIN_LAYOUTS = {
+    # (size, real service, dry-run service): (the line starts, the Service row shows)
+    ((80, 24), "inactive", "active"): ("Not logged in:", False),
+    ((100, 30), "activating", "inactive"): ("Not logged in:", False),   # a 2-row Service row: 7 rows, one too many
+    ((100, 30), "activating", "active"): ("Not logged in:", True),      # a 1-row Service row: 6 rows, it fits
+    ((120, 40), "inactive", "active"): ("Not logged in:", True),
+    ((120, 40), "unknown", "unknown"): ("Not logged in:", True),     # a 2-row Service row still fits
+    ((160, 40), "inactive", "active"): ("Not logged in to Telegram.", True),
+}
+
+
+@pytest.mark.parametrize("layout", list(LOGIN_LAYOUTS))
+@pytest.mark.parametrize("age", [30, 3 * 3600])
+async def test_a_lost_login_says_what_to_run(paths, now, age, layout, monkeypatch):
+    """#65: Telegram logged the account out. The bot can't message you any more, and
+    systemd keeps restarting it, so the Bot box says so and what to run, alive or not."""
+    db = sqlite3.connect(paths.state)
+    db.execute("UPDATE meta SET value = ? WHERE key = 'last_alive'", (str(now - age),))
+    db.execute("UPDATE meta SET value = 'logged out' WHERE key = 'connection'")
+    db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
+    db.commit()
+    db.close()
+    size, real, dry = layout
+    lead, service = LOGIN_LAYOUTS[layout]
+
+    async def state(mode: str) -> str:
+        return real if mode == "real" else dry
+
+    monkeypatch.setattr(bot, "service_state", state)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=size) as pilot:
+        await settle(app, pilot)
+        words = " ".join(text(app, "#status").split())
+        assert "not running" not in words and "Telegram" not in words.split("Start.", 1)[1]
+        # first, so a box too short for the rest (80 x 24) still shows it: read the rows drawn in the box
+        box = app.query_one("#dash-bot")
+        status = app.query_one("#status", Static)
+        shown = status.region.intersection(box.content_region)
+        drawn = [strip.text.strip() for strip in status.render_lines(Region(0, 0, shown.width, shown.height))]
+        first = " ".join(" ".join(drawn).split())
+        # "not logged in": right both for a log-out and for a first start before `telenotify login`
+        assert first.startswith(f"{lead} Stop, run telenotify login, then Start.")
+        rest = first.split("Start.", 1)[1]
+        assert ("Service" in rest) == service
+        assert "Mode" in rest and "1 pending" in rest   # never pushed out of the box
+        if size == (80, 24):   # 3 rows in the 24-cell box
+            assert drawn[2].endswith("Start.") and not drawn[1].endswith("Start.")
+        else:   # "Stop ... Start": the buttons are in view where they were before
+            restart = app.query_one("#svc-restart").region
+            assert box.content_region.contains_region(restart)
+
+
+
+async def test_the_login_line_follows_a_resize(paths):
+    """Its short and long forms are chosen again when the window changes size, not at the next refresh."""
+    db = sqlite3.connect(paths.state)
+    db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        assert " ".join(text(app, "#status").split()).startswith("Not logged in: Stop")
+        await pilot.resize_terminal(160, 30)
+        await settle(app, pilot)
+        assert " ".join(text(app, "#status").split()).startswith("Not logged in to Telegram. Stop")
+
+async def test_a_new_login_clears_the_logged_out_line(paths, now):
+    """The bot clears login_needed after a login: back to the usual connection line."""
+    db = sqlite3.connect(paths.state)
+    db.execute("INSERT INTO meta VALUES ('login_needed', '')")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        status = " ".join(text(app, "#status").split())
+        assert "Not logged in" not in status and "telenotify login" not in status
+        assert "Telegram ready" in status
 
 async def test_totals(paths):
     app = TeleNotifyApp(paths, refresh_seconds=0)

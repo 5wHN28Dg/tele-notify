@@ -187,6 +187,10 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
 
 # ------------------------------------------------------------ snapshot
 
+# the Bot box's width from which "Not logged in to Telegram. Stop, run telenotify login, then Start." (66) fits a line
+LOGIN_WIDE = 66
+
+
 @dataclass
 class Snapshot:
     """Everything the dashboard shows from the state file, read in one go."""
@@ -196,6 +200,7 @@ class Snapshot:
     started_at: int | None = None
     mode: str = ""
     connection: str = ""
+    login_needed: bool = False   # Telegram logged the account out (the bot sets it, a login clears it)
     pending: int = 0
     period: dd.PeriodStats | None = None
     period_cost: float = 0.0   # seconds it took to count `period`
@@ -226,6 +231,7 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
             snap.started_at = _int(s.meta("started_at"))
             snap.mode = s.meta("mode")
             snap.connection = s.meta("connection")
+            snap.login_needed = s.meta("login_needed") == "1"
             snap.pending = s.review_counts().get("pending", 0)
             day = dd.today(now)
             if reuse is not None and (choice.kind == "custom" or reuse.period.last == day):
@@ -492,6 +498,10 @@ class DashboardPane(Vertical):
         bot_box.border_title = "Bot"
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
 
+    def on_resize(self, event: events.Resize) -> None:
+        # the login line has a short and a long form: pick again once the new layout is in place
+        self.call_after_refresh(self._show_status)
+
     def on_show(self) -> None:
         # Focus the feed when the tab is shown, so f / c / a and the arrow keys work at once.
         focused = self.screen.focused
@@ -582,6 +592,20 @@ class DashboardPane(Vertical):
             self._show_alerts(snap)
 
     def _show_status(self) -> None:
+        status = self.query_one("#status", Static)
+        out = self._status_text(show_service=True)
+        snap = self.snapshot
+        if snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed:
+            # the owner's choice B (#100): where the login line leaves no room (80 x 24), the Service
+            # row gives way, so Mode and the pending count stay in the box; it stays wherever it fits
+            width = status.content_region.width
+            room = self.query_one("#dash-bot").content_region.height - 1   # the buttons' row
+            if width > 0 and len(out.wrap(self.app.console, width)) > room:
+                out = self._status_text(show_service=False)
+        status.remove_class("muted")
+        status.update(out)
+
+    def _status_text(self, show_service: bool) -> Text:
         snap = self.snapshot
         out = Text()
 
@@ -598,6 +622,18 @@ class DashboardPane(Vertical):
                 st = "unknown (no systemctl?)" if all(v == "unknown" for v in self.services.values()) else st
             return st, style
 
+        login_line = snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed
+        narrow = self.query_one("#status", Static).content_region.width < LOGIN_WIDE
+        if login_line:
+            # first, so it shows even when the box is too short for the rest (80 x 24), and
+            # short there; bold, in words (no new colour: red reads below 4.5:1 in the dark theme)
+            # "not logged in": true after a log-out and on a first start before `telenotify login`
+            out.append("Not logged in: " if narrow else "Not logged in to Telegram. ", style="bold")
+            # Stop first: `telenotify login` can't share TDLib's folder with the bot systemd keeps restarting
+            out.append("Stop, run ")
+            out.append("telenotify login", style="bold")
+            out.append(", then Start.\n")
+
         label = {"real": "real", "dry-run": "dry run"}
         parts: list[tuple[str, str]] = []
         for i, m in enumerate(bot.SERVICES):
@@ -605,7 +641,8 @@ class DashboardPane(Vertical):
                 parts.append((" · ", "dim"))
             parts.append((f"{label[m]}: ", "bold" if m == self.mode else ""))
             parts.append(svc(m))
-        row("Service", *parts)
+        if show_service:
+            row("Service", *parts)
 
         if snap is None:
             out.append("reading the state file…", style="dim")
@@ -636,7 +673,8 @@ class DashboardPane(Vertical):
             up = []
             if snap.started_at and not stale:
                 up = [("  ·  ", "dim"), (f"up {fmt_age(now - snap.started_at)}", "")]
-            row("Telegram", (conn, conn_style), *up)
+            if not snap.login_needed:   # the first line already says it: keep the box short enough for the buttons
+                row("Telegram", (conn, conn_style), *up)
             if snap.pending:
                 row("Review", (f"{snap.pending} pending", "bold yellow"), ("  press 2 to review", "dim"))
             else:
@@ -645,9 +683,8 @@ class DashboardPane(Vertical):
                 a = snap.alerts[0]
                 row("Alerts", (f"{len(snap.alerts)}", ""),
                     (f"  last {fmt_age(now - a.at)} ago, press a", "dim"))
-        status = self.query_one("#status", Static)
-        status.remove_class("muted")
-        status.update(out.rstrip() or out)
+        out.rstrip()
+        return out
 
     def _show_activity(self, snap: Snapshot) -> None:
         totals = self.query_one("#totals", Static)

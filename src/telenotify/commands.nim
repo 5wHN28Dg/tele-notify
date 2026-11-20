@@ -13,6 +13,50 @@ proc sessionEnded*(authState: string, stopping: bool): bool =
   ## Closed too).
   authState != "" and authState != "authorizationStateReady" and not stopping
 
+proc loginAlert*(why: string, dryRun: bool): string =
+  ## What to run first, then why, in plain words. `why` is "not logged in" (the
+  ## bot started without a login) or a TDLib authorization state.
+  let service = if dryRun: "tele-notify-dryrun" else: "tele-notify"
+  let cause = case why
+    of "not logged in": "this account isn't logged in to Telegram (yet, or any more)"
+    of "authorizationStateLoggingOut", "authorizationStateClosed":
+      "Telegram logged this account out (from another device, or Telegram ended the session)"
+    else: "Telegram ended this account's session"
+  # stopped first: `telenotify login` can't share TDLib's folder with the
+  # bot that systemd keeps restarting
+  &"Run `systemctl --user stop {service}`, then `telenotify login`, then " &
+    &"`systemctl --user start {service}`: {cause}, so the bot can't read or forward anything."
+
+proc recordLoginNeeded*(st: State, why: string, dryRun: bool) =
+  ## The account isn't logged in: keep one alert with the commands to run, so
+  ## the terminal screen can show it (the bot can't message you any more). Once
+  ## until the next successful login, however often systemd restarts the bot.
+  ## Never raises.
+  try: st.markLoginNeeded(loginAlert(why, dryRun))
+  except CatchableError: discard
+
+proc isLogOut*(authState: string): bool =
+  ## A lost session that means the login is gone (not TDLib closing by itself).
+  authState in ["authorizationStateLoggingOut", "authorizationStateWaitPhoneNumber",
+                "authorizationStateWaitCode", "authorizationStateWaitPassword",
+                "authorizationStateClosed"]
+
+proc clearLoginNeeded*(st: State) =
+  ## Logged in again: a later log-out alerts again. Never raises.
+  try: st.setMeta("login_needed", "")
+  except CatchableError: discard
+
+proc loggedInOrRecord*(st: State, dryRun: bool, connecting: Future[Session]): Future[Session] {.async.} =
+  ## Wait for the login. Not logged in: tell the terminal screen (the bot
+  ## can't message you any more). Logged in: clear that at once, as TDLib is
+  ## ready, not after the chat list loads (minutes after a log-out wiped it).
+  try:
+    result = await connecting
+  except NotLoggedIn as e:
+    recordLoginNeeded(st, "not logged in", dryRun)
+    raise e
+  clearLoginNeeded(st)
+
 proc printable*(s: string): string =
   ## Post text without control characters, so a post (or a scraped job
   ## page) can't clear or rewrite your terminal in `review`.
@@ -70,7 +114,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   var titles = initTable[int64, string]()
   let watched = cfg.chats
   var accessReady = false   # the start-up check reads the current state first
-  let s = await connect(cfg, interactive = false, onUpdate =
+  let s = await loggedInOrRecord(st, dry, connect(cfg, interactive = false, onUpdate =
     proc (u: JsonNode) {.closure, gcsafe.} =
       if l == nil: return
       case u{"@type"}.getStr
@@ -120,7 +164,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
         let err = u{"error", "message"}.getStr(u{"error_message"}.getStr("unknown error"))
         asyncCheck l.alert("a message to chat " & $u{"message", "chat_id"}.getBiggestInt &
                            " could not be sent: " & err)
-      else: discard)
+      else: discard))
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
@@ -152,6 +196,8 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l.log "stopping"
   try: st.setMeta("connection", "stopped")
   except CatchableError: discard
+  if sessionLost.isLogOut:
+    recordLoginNeeded(st, sessionLost, dry)   # before closing the state: the screen shows it
   await s.client.close()
   st.close()
   if sessionLost != "":

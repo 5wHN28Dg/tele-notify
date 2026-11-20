@@ -10,6 +10,8 @@ import std/[asyncdispatch, json, os, strutils, terminal, sets]
 import config, td, tdjson
 
 type
+  NotLoggedIn* = object of ValueError
+    ## The account isn't logged in (never was, or Telegram logged it out).
   Session* = object
     client*: TdClient
     lib*: TdLib
@@ -54,7 +56,8 @@ proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
     of "authorizationStateWaitPhoneNumber", "authorizationStateWaitCode",
        "authorizationStateWaitPassword", "authorizationStateWaitOtherDeviceConfirmation":
       if not interactive:
-        raise newException(ValueError, "not logged in to Telegram: run `telenotify login` first")
+        c.stopped = true   # as for an unsupported step: nothing more to read
+        raise newException(NotLoggedIn, "not logged in to Telegram: run `telenotify login` first")
       try:
         case authState
         of "authorizationStateWaitPhoneNumber":
