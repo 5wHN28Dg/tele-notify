@@ -89,6 +89,47 @@ async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
         assert "not running" in telegram and "ready" not in telegram and "up " not in telegram
 
 
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 30)])
+@pytest.mark.parametrize("age", [30, 3 * 3600])
+async def test_a_lost_login_says_what_to_run(paths, now, age, size):
+    """#65: Telegram logged the account out. The bot can't message you any more, and
+    systemd keeps restarting it, so the Bot box says so and what to run, alive or not."""
+    db = sqlite3.connect(paths.state)
+    db.execute("UPDATE meta SET value = ? WHERE key = 'last_alive'", (str(now - age),))
+    db.execute("UPDATE meta SET value = 'logged out' WHERE key = 'connection'")
+    db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=size) as pilot:
+        await settle(app, pilot)
+        status = text(app, "#status")
+        words = " ".join(status.split())
+        assert "not running" not in words and "Telegram" not in words.split("Restart.", 1)[1]
+        # first, so a box too short for the rest (80 x 24) still shows it
+        assert words.startswith("Logged out of Telegram. Run telenotify login, then Restart.")
+        box = app.query_one("#dash-bot")
+        shown = app.query_one("#status").region.intersection(box.content_region)
+        assert shown.height >= len(status.split("Restart.")[0].splitlines())
+        if size[1] >= 30:   # "then Restart": the button is in view where it was before
+            restart = app.query_one("#svc-restart").region
+            assert box.content_region.contains_region(restart)
+
+
+async def test_a_new_login_clears_the_logged_out_line(paths, now):
+    """The bot clears login_needed after a login: back to the usual connection line."""
+    db = sqlite3.connect(paths.state)
+    db.execute("INSERT INTO meta VALUES ('login_needed', '')")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        status = " ".join(text(app, "#status").split())
+        assert "logged out" not in status and "telenotify login" not in status
+        assert "Telegram ready" in status
+
 async def test_totals(paths):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:

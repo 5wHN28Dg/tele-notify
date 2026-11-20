@@ -196,6 +196,7 @@ class Snapshot:
     started_at: int | None = None
     mode: str = ""
     connection: str = ""
+    login_needed: bool = False   # Telegram logged the account out (the bot sets it, a login clears it)
     pending: int = 0
     period: dd.PeriodStats | None = None
     period_cost: float = 0.0   # seconds it took to count `period`
@@ -226,6 +227,7 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
             snap.started_at = _int(s.meta("started_at"))
             snap.mode = s.meta("mode")
             snap.connection = s.meta("connection")
+            snap.login_needed = s.meta("login_needed") == "1"
             snap.pending = s.review_counts().get("pending", 0)
             day = dd.today(now)
             if reuse is not None and (choice.kind == "custom" or reuse.period.last == day):
@@ -598,6 +600,13 @@ class DashboardPane(Vertical):
                 st = "unknown (no systemctl?)" if all(v == "unknown" for v in self.services.values()) else st
             return st, style
 
+        if snap is not None and snap.exists and not snap.busy and not snap.error and snap.login_needed:
+            # first, so it shows even when the box is too short for the rest (80 x 24)
+            out.append("Logged out of Telegram. ", style="bold red")
+            out.append("Run ")
+            out.append("telenotify login", style="bold")
+            out.append(", then Restart.\n")
+
         label = {"real": "real", "dry-run": "dry run"}
         parts: list[tuple[str, str]] = []
         for i, m in enumerate(bot.SERVICES):
@@ -636,7 +645,8 @@ class DashboardPane(Vertical):
             up = []
             if snap.started_at and not stale:
                 up = [("  ·  ", "dim"), (f"up {fmt_age(now - snap.started_at)}", "")]
-            row("Telegram", (conn, conn_style), *up)
+            if not snap.login_needed:   # the first line already says it: keep the box short enough for the buttons
+                row("Telegram", (conn, conn_style), *up)
             if snap.pending:
                 row("Review", (f"{snap.pending} pending", "bold yellow"), ("  press 2 to review", "dim"))
             else:
