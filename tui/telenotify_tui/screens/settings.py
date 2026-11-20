@@ -41,6 +41,7 @@ from .. import bot
 from ..clean import clean
 from ..rtl import visual
 from . import settings_data as sd
+from .armed import Armed
 
 FORM_HELP = {
     "max_experience_years": "More than this many years required means \"not for me\" (default 1)",
@@ -57,8 +58,13 @@ FORM_HELP = {
 
 # ----------------------------------------------------------------- modals
 
-class ConfirmModal(ModalScreen[bool]):
-    """Yes / no. Dismisses with True only on the yes button or `y`."""
+class ConfirmModal(Armed, ModalScreen[bool]):
+    """A question with a button that names its action and Cancel. Dismisses with
+    True only on that button or `y`. Cancel has the focus, so enter is safe; the
+    action is styled destructive when it loses something; for ARM_DELAY seconds
+    after opening, presses are ignored, so a key or click carried over from the
+    step before can't confirm."""
+
 
     DEFAULT_CSS = """
     ConfirmModal { align: center middle; }
@@ -66,25 +72,44 @@ class ConfirmModal(ModalScreen[bool]):
                               padding: 1 2; }
     ConfirmModal Horizontal { height: auto; margin-top: 1; }
     ConfirmModal Button { margin-right: 2; }
+    /* the stock -error button's text is 4.47:1; these pass 4.5:1 in both themes */
+    ConfirmModal Button.-style-default.-error, ConfirmModal Button.-style-default.-error:hover,
+    ConfirmModal Button.-style-default.-error.-active, ConfirmModal Button.-style-default.-error:focus {
+        background: $error-muted; color: $text-error; background-tint: $foreground 0%;
+    }
+    /* pressed: Textual tints by 30 %, which drops any variant under 4.5:1 */
+    ConfirmModal Button.-style-default.-active { tint: $background 0%; }
+    ConfirmModal #confirm-wait { color: $text-muted; height: 1; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("y", "answer(True)", "Confirm"),
+                                             Binding("n,escape", "answer(False)", "Cancel")]
 
-    def __init__(self, message: str, yes: str = "Yes"):
+    def __init__(self, message: str, yes: str, destructive: bool = True):
         super().__init__()
         self.message, self.yes = message, yes
+        self.variant = "error" if destructive else "warning"
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(Text(visual(self.message)), id="confirm-text")
+            yield Static("", id="confirm-wait")
             with Horizontal():
-                yield Button(f"{self.yes} (y)", variant="warning", id="yes")
+                yield Button(f"{self.yes} (y)", variant=self.variant, id="yes")
                 yield Button("Cancel (n)", id="no")
 
+    def on_mount(self) -> None:
+        self._arm()
+        self.query_one("#no", Button).focus()
+
+
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "yes")
+        if event.button.id == "yes" and self._too_soon(event.button):
+            return
+        self._answer(event.button.id == "yes")
 
     def action_answer(self, yes: bool) -> None:
-        self.dismiss(yes)
+        self._answer(yes)                        # an early `y` was stopped in Armed.on_key
 
 
 class EvalModal(ModalScreen[None]):
@@ -933,7 +958,8 @@ class SettingsPane(Vertical):
 
         self.app.push_screen(ConfirmModal(
             f"Not saved: config.json was changed elsewhere for {keys}, which you changed too.\n"
-            "Use the file's value for these and keep your other edits?", "Use the file's"), done)
+            "Drop your edits to these and use the file's values? Your other edits are kept.",
+            "Use the file's values"), done)
 
     async def _offer_restart(self, mode: str) -> None:
         """After a save: offer to restart the bot, but only when it is running
@@ -953,7 +979,8 @@ class SettingsPane(Vertical):
                 self.run_worker(self._restart(mode), group="restart")
 
         self.app.push_screen(ConfirmModal(
-            f"Saved. Restart the bot ({name} service) so it uses the new settings?", "Restart"), done)
+            f"Saved. Restart the bot ({name} service) so it uses the new settings?", "Restart", destructive=False),
+            done)
 
     async def _restart(self, mode: str) -> None:
         # try-restart: if the service stopped meanwhile, it stays stopped

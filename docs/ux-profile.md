@@ -318,7 +318,9 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
   `HOME`, fake `systemctl`, `xdg-open`, `gio` and `BROWSER`, and refuses the real data folders. Textual pilot
   screenshots (SVG, and PNG through `rsvg-convert` for eyes) at 80 × 24, 120 × 40 and 200 × 50, both themes. It also
   collects keys, contrast, timing, hostile text, failures, task scripts, styles, and an interactive mode for the
-  owner. Until it is merged, reviewers run the same steps by hand from its branch, or from the checklist in
+  owner. Its `terminal` job captures the screen as kitty and Ptyxis (VTE) really draw it (PNG, in a headless GNOME
+  compositor of its own): each tab as it opens and the keys panel, no input, so it narrows but doesn't replace the
+  owner's look in Kitty and VTE below. Until it is merged, reviewers run the same steps by hand from its branch, or from the checklist in
   `docs/UI-UX-POLICY.md` 3.3.
 - **Command line:** golden-output tests (to add in phase 2: help, normal, error, summary).
 - **Messages:** unit tests that render each alert from synthetic input.

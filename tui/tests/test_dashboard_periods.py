@@ -454,3 +454,40 @@ async def test_slow_counts_are_reused_between_ticks_but_not_after_a_change(paths
         pane.reload()
         await settle(app, pilot)
         assert counted == ["7d", "today", "today"]
+
+
+def test_chart_series_are_told_apart_without_colour():
+    # policy: colour is never the only signal (A5), charts tell series apart without colour (V15)
+    bars = [dd.DayCount("2026-11-01", publish=10, review=10, reject=10)]
+    rows = render_chart(bars, "day", height=3).plain.splitlines()[:3]   # top to bottom: reject, review, publish
+    assert rows[2].strip() == dash.SERIES_MARK["publish"] * 2
+    assert rows[1].strip() == dash.SERIES_MARK["review"] * 2
+    assert rows[0].strip() == dash.SERIES_MARK["reject"] * 2
+    assert len(set(dash.SERIES_MARK.values())) == 3
+
+
+async def test_the_totals_header_names_each_series_mark(paths):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        for _ in range(50):
+            header = str(app.query_one("#totals", Static).render()).splitlines()[0]
+            if "publish" in header:
+                break
+            await pilot.pause(0.1)
+        for series in ("publish", "review", "reject"):
+            assert f"{dash.SERIES_MARK[series]}{series}" in header
+
+
+@pytest.mark.parametrize("small,style", [({"publish": 1}, "green"), ({"review": 1}, "yellow"),
+                                         ({"reject": 1}, "grey50"),
+                                         ({"publish": 10, "reject": 1}, "green"),   # mixed, one eighth tall
+                                         ({"review": 6, "reject": 5}, "yellow")])
+def test_a_sliver_has_the_colour_of_its_biggest_series(small, style):
+    # a bar within one partial cell, next to a tall one, shows in its biggest series' colour
+    bars = [dd.DayCount("2026-11-01", publish=480), dd.DayCount("2026-11-02", **small)]
+    chart = render_chart(bars, "day", height=3)
+    bottom = chart.plain.splitlines()[2]
+    start = bottom.index("▁")
+    styles = [str(sp.style) for sp in chart.spans if sp.start <= len("\n".join(chart.plain.splitlines()[:2])) + 1 + start < sp.end]
+    assert styles == [style]

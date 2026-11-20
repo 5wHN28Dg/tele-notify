@@ -16,7 +16,7 @@ web_scraping.py
 /Private
 # local environments and caches
 myenv/
-.venv/
+.venv
 .ropeproject/
 .ruff_cache/
 __pycache__/
