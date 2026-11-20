@@ -223,10 +223,12 @@ class Store:
         first_of_album = ("AND (COALESCE(album_id, 0) = 0 OR msg_id = (SELECT MIN(msg_id) FROM processed q "
                           "WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))") if album else ""
         sql = f"""SELECT chat_title, SUM(verdict = 'publish'), SUM(verdict = 'review'),
-                  SUM(verdict = 'reject'), SUM(action = 'forwarded' OR action = 'linked' {sent_review})
+                  SUM(verdict = 'reject'), SUM(action = 'forwarded' OR action = 'linked' {sent_review}),
+                  MAX(at)
                   FROM processed p WHERE at > ? {first_of_album}
-                  GROUP BY +chat_id ORDER BY COUNT(*) DESC"""
-        # `+chat_id`, as in the bot's: read the last N days through processed_at, not a whole chat_id index
+                  GROUP BY +chat_id ORDER BY COUNT(*) DESC, chat_id"""
+        # as in the bot's: `+chat_id` reads the last N days through processed_at, not a whole chat_id
+        # index; MAX(at) takes the title from the newest row; `, chat_id` keeps equal counts in one order
         since = int(time.time()) - days * 86400
         return [ChatStats(r[0] or "", r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0)
                 for r in self._rows(sql, (since,))]

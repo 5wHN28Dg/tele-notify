@@ -192,12 +192,15 @@ type StatRow* = object
 const statsSql* = """SELECT chat_title,
       SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
       SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
-        WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent'))
+        WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent')),
+      MAX(at)
       FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
         (SELECT MIN(msg_id) FROM processed q WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))
-      GROUP BY +chat_id ORDER BY COUNT(*) DESC"""
+      GROUP BY +chat_id ORDER BY COUNT(*) DESC, chat_id"""
   # `+chat_id`: group after reading the last N days through processed_at; plain
-  # `chat_id` lets SQLite walk a whole chat_id index instead, every post ever judged
+  # `chat_id` lets SQLite walk a whole chat_id index instead, every post ever judged.
+  # MAX(at): SQLite then takes chat_title from the newest row (a renamed chat).
+  # `, chat_id`: equal counts in the same order every time.
 
 proc stats*(s: State, days: int): seq[StatRow] =
   ## Per chat over the last `days` days: how many messages got each verdict

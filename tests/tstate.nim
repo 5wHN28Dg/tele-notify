@@ -129,9 +129,24 @@ suite "state":
     let st7 = plan(statsSql, "0")
     check "SEARCH p USING INDEX processed_at (at>?)" in st7
     check "SEARCH q USING COVERING INDEX processed_chat_album (chat_id=? AND album_id=?)" in st7
+    for line in st7: check not line.startsWith("SCAN")   # nothing else walks a whole table
     check plan(processedSinceSql, "0") == @["SEARCH processed USING INDEX processed_at (at>?)"]
     check plan(albumHandledSql, "-100", "7") ==
       @["SEARCH processed USING INDEX processed_chat_album (chat_id=? AND album_id=?)"]
+
+  test "stats: equal counts in chat order, each chat under its newest title":
+    let ts = openState(dir / "ties.sqlite3")
+    defer: ts.close()
+    ts.markProcessed(-100, 1, "Old name", "publish", "", "", "forwarded")
+    ts.ageProcessed(-100, 1)                       # judged yesterday, under its old name
+    ts.markProcessed(-100, 2, "New name", "publish", "", "", "forwarded")
+    ts.markProcessed(-300, 1, "C", "reject", "", "", "rejected")
+    ts.markProcessed(-300, 2, "C", "reject", "", "", "rejected")
+    ts.markProcessed(-200, 1, "B", "review", "", "", "queued for review")
+    ts.markProcessed(-200, 2, "B", "review", "", "", "queued for review")
+    var order: seq[string]
+    for r in ts.stats(7): order.add r.chat
+    check order == @["C", "B", "New name"]          # 2 each: by chat id, the same every time
 
   test "an old state file gets the indexes when opened":
     let old = dir / "old.sqlite3"
