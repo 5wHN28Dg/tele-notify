@@ -47,7 +47,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import Alert, ChatStats, Judged, Store
+from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy
 from . import dashboard_data as dd
 from . import search_data
 from .armed import Armed
@@ -67,6 +67,10 @@ SLOW_REUSE_SECONDS = 60
 CUSTOM_SHOWN = "custom-shown"   # the picker entry naming the custom range shown now
 VERDICT_STYLE = {"publish": "green", "review": "yellow", "reject": "dim"}
 STAT_COLUMNS = ("chat", "total", "publish", "review", "reject", "forwarded")
+# A failed read is retried on the next refresh tick; these say so where the numbers would be.
+# Said once, in the Bot box; the other boxes only point to it.
+BUSY_ELSEWHERE = "Not shown while the state file is busy (see Bot)."
+UNREADABLE_NOTE = "Not shown: the state file can't be read (see Bot)."
 
 
 # ------------------------------------------------------------- helpers
@@ -200,6 +204,7 @@ class Snapshot:
     alerts: list[Alert] = field(default_factory=list)
     problems: list[dd.ChatProblem] = field(default_factory=list)
     error: str = ""
+    busy: bool = False   # the error is another program's lock on the file: it passes
 
 
 def _int(v: str) -> int | None:
@@ -236,7 +241,15 @@ def load_snapshot(path: Path, choice: dd.PeriodChoice, reuse: dd.PeriodStats | N
             snap.problems = dd.chat_problems(s, now)
     except (sqlite3.Error, OSError, ValueError, OverflowError) as e:  # a locked or half-written file: say so, try again next tick
         snap.error = clean(f"{type(e).__name__}: {e}")
+        snap.busy = is_busy(e)
     return snap
+
+
+def problem_note(snap: Snapshot) -> str:
+    """What to show in place of data the last read couldn't get ("" when it could)."""
+    if not snap.error:
+        return ""
+    return BUSY_ELSEWHERE if snap.busy else UNREADABLE_NOTE
 
 
 # --------------------------------------------------------------- modal
@@ -561,7 +574,7 @@ class DashboardPane(Vertical):
         self.snapshot = snap
         self._show_status()
         self._show_activity(snap)
-        if old is None or old.feed != snap.feed:
+        if old is None or old.feed != snap.feed or old.error != snap.error:
             self._show_feed(snap)
         if old is None or old.stats != snap.stats:
             self._show_stats(snap)
@@ -596,6 +609,8 @@ class DashboardPane(Vertical):
 
         if snap is None:
             out.append("reading the state file…", style="dim")
+        elif snap.busy:
+            out.append(BUSY_NOTE, style="bold")   # words, theme colours: readable in both themes
         elif snap.error:
             out.append(f"can't read the state file: {snap.error}", style="red")
         elif not snap.exists:
@@ -641,10 +656,10 @@ class DashboardPane(Vertical):
         note = self.query_one("#chats-period", Static)
         ps = snap.period
         if not snap.exists or snap.error or ps is None:
-            totals.update(Text("No activity to show.", style="dim"))
+            totals.update(Text(problem_note(snap) or "No activity to show.", style="dim"))
             chart.update("")
             box.border_subtitle = ""
-            note.update("")
+            note.update(Text(problem_note(snap), style="dim"))
             return
         by = {"day": "by day", "week": "by week", "month": "by month", "year": "by year"}[ps.bucket]
         box.border_subtitle = f"{ps.period.describe()} · {by}"
@@ -686,7 +701,7 @@ class DashboardPane(Vertical):
                           Text(j.verdict, style=style), Text(visual(j.role)),
                           Text(visual(first_reason(j.reasons)), style=style), key=key)
         if not snap.feed:
-            self._detail(None, "Nothing judged yet." if snap.exists else "No state file yet.")
+            self._detail(None, problem_note(snap) or ("Nothing judged yet." if snap.exists else "No state file yet."))
             return
         if keep in self._feed:
             table.move_cursor(row=table.get_row_index(keep))
@@ -714,6 +729,8 @@ class DashboardPane(Vertical):
     @on(DataTable.RowHighlighted, "#feed")
     @on(DataTable.RowSelected, "#feed")
     def _feed_row(self, event: DataTable.RowHighlighted | DataTable.RowSelected) -> None:
+        if event.row_key is None:   # an empty feed (e.g. the state file was locked): nothing to show
+            return
         j = self._feed.get(event.row_key.value)
         if j is not None:
             self._detail(j)

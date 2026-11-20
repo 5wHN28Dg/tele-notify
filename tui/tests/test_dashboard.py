@@ -204,6 +204,56 @@ async def test_feed_newest_first_and_selection_shows_reasons(paths):
         assert "مطلوب مهندس كهرباء" in detail
 
 
+async def test_locked_state_file_arrow_keys_dont_crash_and_it_recovers(paths, state, monkeypatch):
+    """Issue #54: another program holds an exclusive lock on the state file. The
+    read fails, the feed empties, and the arrow keys on it used to crash the
+    screen (a highlight with no row). Now the feed says the file is busy, the
+    keys do nothing, and the next refresh after the lock is gone shows it all again."""
+    from telenotify_tui.screens import dashboard as dash
+
+    monkeypatch.setattr(dash, "Store", lambda path: Store(path, timeout=0.1))
+    app = TeleNotifyApp(paths, refresh_seconds=0.3)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        feed = app.query_one("#feed", DataTable)
+        assert feed.row_count == 4
+        feed.focus()
+        db = sqlite3.connect(state, isolation_level=None)
+        db.execute("BEGIN EXCLUSIVE")
+        try:
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if app.query_one(DashboardPane).snapshot.error:
+                    break
+            await settle(app, pilot)
+            assert app.query_one(DashboardPane).snapshot.error
+            await pilot.press("down", "up", "down", "enter")
+            await settle(app, pilot)
+            assert app.is_running and app._exception is None
+            busy = "The state file is busy (another program has it locked); retrying"
+            assert busy in text(app, "#status")                  # said once, in the Bot box
+            assert busy not in text(app, "#feed-detail")         # the other boxes point to it
+            assert "see Bot" in text(app, "#feed-detail")
+            status = app.query_one("#status", Static).render()
+            spans = [str(sp.style) for sp in status.spans
+                     if status.plain[sp.start:sp.end].startswith("The state file is busy")]
+            assert spans == ["bold"]                             # no literal colour: theme text, both themes
+            assert "Nothing judged yet" not in text(app, "#feed-detail")
+        finally:
+            db.execute("ROLLBACK")
+            db.close()
+        for _ in range(40):                      # lock gone: the next refresh brings it back
+            await pilot.pause(0.05)
+            if not app.query_one(DashboardPane).snapshot.error:
+                break
+        await settle(app, pilot)
+        assert feed.row_count == 4
+        assert "busy" not in text(app, "#status") and "alive" in text(app, "#status")
+        await pilot.press("down")
+        await settle(app, pilot)
+        assert "review" in text(app, "#feed-detail")
+
+
 async def test_banned_chat_in_health_and_alerts(paths):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:
@@ -326,3 +376,11 @@ async def test_number_keys_leave_dashboard_with_focus_inside(paths):
         await pilot.press("4")
         await settle(app, pilot)
         assert tabs.active == "settings"
+
+
+def test_an_unreadable_file_doesnt_promise_a_retry():
+    from telenotify_tui.screens import dashboard as dash
+    snap = dash.Snapshot(exists=True)
+    snap.error, snap.busy = "DatabaseError: file is not a database", False
+    note = dash.problem_note(snap)
+    assert "retry" not in note and "see Bot" in note

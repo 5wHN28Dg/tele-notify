@@ -39,7 +39,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import Review
+from ..store import BUSY_NOTE, Review, is_busy
 from .review_data import history, remove_label, write_label
 
 DECISION_KEYS = ("send", "keep", "discard", "next", "open_link", "check")
@@ -138,9 +138,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     DEFAULT_CSS = """
     ReviewPane { height: 1fr; }
-    ReviewPane #review-top { height: 1; }
+    ReviewPane #review-top { height: auto; }   /* a long note wraps instead of being cut */
     ReviewPane #review-summary { width: auto; text-style: bold; }
-    ReviewPane #review-note { width: 1fr; margin-left: 2; }
+    ReviewPane #review-note { width: 1fr; margin-left: 2; height: auto; }   /* wraps: never cut */
     ReviewPane #review-dryrun { height: auto; }
     ReviewPane #review-empty { height: 1fr; content-align: center middle; text-align: center; }
     ReviewPane #review-split { height: 1fr; }
@@ -163,6 +163,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._shown_at = 0.0                       # time.monotonic() when the open post was drawn
         self._last: tuple[Review, str] | None = None   # the last decision made here, while undoable
         self._decided_note = ""                    # what that decision's note said
+        self._unrecorded = ""                      # a decision the state file refused, said until the next one
         self._press_at: float | None = None        # when the key or click deciding now was *made*
 
     # seconds during which s / d (keys and buttons) are ignored after a new post
@@ -276,15 +277,21 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 past = history(st) if self._history_mode else []
         except (sqlite3.Error, OSError, ValueError) as e:   # a lock, a broken file, a value that isn't a number
             self._read_error = True
-            self.note(f"can't read the state file: {e}", "warn")
+            busy = is_busy(e)
+            problem = BUSY_NOTE if busy else f"can't read the state file: {e}"
+            if self._unrecorded:   # beside, never instead of, a decision that wasn't recorded
+                self.note(f"{self._unrecorded}  ·  {problem}", "bad")
+            else:
+                self.note(problem, "warn")
             if self._history_mode or not self._items:
-                self.query_one("#review-empty", Static).update(Content(clean(f"Can't read the state file: {e}")))
+                said = BUSY_NOTE if busy else f"Can't read the state file: {e}"
+                self.query_one("#review-empty", Static).update(Content(clean(said)))
                 self._show_only("#review-empty")
             self._sync_controls()
             return
         if self._read_error:
             self._read_error = False
-            self.note("")
+            self.note(self._unrecorded, "bad") if self._unrecorded else self.note("")
         mode = " · dry run" if paths.dry_run else ""
         self.query_one("#review-summary", Static).update(
             Content(f"Recently decided{mode}" if self._history_mode
@@ -422,8 +429,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             with self.app.store(UI_TIMEOUT) as st:
                 ok = st.decide(r.id, status)
         except (sqlite3.Error, OSError) as e:   # the bot holds a lock, or the file is broken
-            self.note(f"#{r.msg_id} NOT recorded (the state file can't be written: {e}); try again", "bad")
+            self._unrecorded = f"#{r.msg_id} NOT recorded (the state file can't be written: {e}); try again"
+            self.note(self._unrecorded, "bad")
             return
+        self._unrecorded = ""
         self._just_decided = r.id
         if not ok:
             self._decided_note = ""

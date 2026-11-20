@@ -16,7 +16,7 @@ from telenotify_tui.screens import dashboard_data as dd
 from telenotify_tui.screens import review as review_mod
 from telenotify_tui.screens.review import CheckModal, ReviewPane
 from telenotify_tui.screens.review_data import labels_path, write_label
-from telenotify_tui.store import Review, Store
+from telenotify_tui.store import BUSY_NOTE, Review, Store
 
 
 @pytest.fixture(autouse=True)
@@ -271,18 +271,20 @@ async def test_locked_state_file_is_a_note_not_a_crash(paths, state, labels, mon
             assert "NOT recorded" in note(app) and "locked" in note(app)
             app.query_one(ReviewPane).reload()                   # nor can the queue be read
             await pilot.pause()
-            assert "can't read the state file" in note(app)
+            assert BUSY_NOTE in note(app)   # the Dashboard's wording for a lock
+            assert "#11 NOT recorded" in note(app)               # ...beside, never instead of, the failed decision
             assert app.is_running
         finally:
             db.execute("ROLLBACK")
             db.close()
         assert status_of(state, 11) == "pending"
-        app.query_one(ReviewPane).reload()                       # lock gone: back to normal
+        app.query_one(ReviewPane).reload()                       # lock gone: the failure is still said
         await pilot.pause()
-        assert note(app) == ""
+        assert "#11 NOT recorded" in note(app) and BUSY_NOTE not in note(app)
         await pilot.press("s")
         await pilot.pause()
         assert status_of(state, 11) == "to_send"
+        assert "NOT recorded" not in note(app)                   # until the decision is made
     assert len(read_labels(labels)) == 1
 
 
@@ -629,6 +631,44 @@ async def test_buttons_fit_an_80_column_terminal(paths, state, now):
         assert app.query_one("#btn-undo", Button).region.right <= 80
 
 
+async def test_a_locked_state_file_is_worded_as_on_the_dashboard(paths, state, monkeypatch):
+    # one wording for one state on every tab (policy C2, W1)
+    from telenotify_tui.store import BUSY_NOTE
+    monkeypatch.setattr(review_mod, "UI_TIMEOUT", 0.1)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        db = sqlite3.connect(state, isolation_level=None)
+        db.execute("BEGIN EXCLUSIVE")
+        try:
+            await pilot.press("2")
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if BUSY_NOTE[:20] in note(app) or BUSY_NOTE[:20] in str(app.query_one("#review-empty", Static).render()):
+                    break
+            shown = note(app) + str(app.query_one("#review-empty", Static).render())
+            assert BUSY_NOTE in shown
+            assert "database is locked" not in shown
+        finally:
+            db.execute("ROLLBACK")
+            db.close()
+
+
+async def test_the_busy_note_is_whole_at_80x24(paths, state, monkeypatch):
+    # never cut what matters (W7): the note wraps rather than losing its end
+    monkeypatch.setattr(review_mod, "UI_TIMEOUT", 0.1)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        db = lock(state)
+        try:
+            app.query_one(ReviewPane).reload()
+            await pilot.pause()
+            box = app.query_one("#review-note", Static)
+            assert box.size.width * box.size.height >= len(BUSY_NOTE), box.size   # room for all of it
+            assert "retrying" in app.export_screenshot()                        # and it is drawn
+        finally:
+            db.execute("ROLLBACK")
+            db.close()
 async def test_a_tap_made_too_early_but_handled_late_doesnt_decide(paths, state, now, monkeypatch):
     # a slow machine: the second tap is made inside DECIDE_DELAY but handled after it (CI saw this)
     from textual import events
