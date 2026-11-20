@@ -257,6 +257,17 @@ def _up(w, t):
     return _mouse(events.MouseUp, w, t)
 
 
+async def _armed(pilot, screen, limit: float = 5.0) -> float:
+    """When the dialog takes presses: it arms at its first paint, which a slow runner reaches late."""
+    import time
+    end = time.monotonic() + limit
+    while screen._armed_at == float("inf"):
+        if time.monotonic() > end:
+            pytest.fail("the dialog never armed")
+        await pilot.pause(0.01)
+    return screen._armed_at
+
+
 @pytest.mark.parametrize("case", list(STALLS))
 async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_systemctl, monkeypatch, case):  # noqa: F811
     import time
@@ -272,7 +283,8 @@ async def test_a_press_made_too_early_but_handled_late_cant_confirm(paths, fake_
         if "enter" in case or "space" in case:
             yes.focus()
             await pilot.pause()
-        early, late = screen._armed_at - 0.1, screen._armed_at + 0.05
+        armed = await _armed(pilot, screen)
+        early, late = armed - 0.1, armed + 0.05
         while time.monotonic() < late + 0.05:                # the machine stalls past the delay
             await pilot.pause(0.05)
         for e in STALLS[case](yes, no, early, late):
@@ -292,8 +304,7 @@ async def test_after_the_delay_a_press_confirms(paths, fake_systemctl, monkeypat
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        while screen._armed_at == float("inf"):               # drawn: the delay is set
-            await pilot.pause(0.01)
+        await _armed(pilot, screen)                            # drawn: the delay is set
         app.post_message(_key("y", "y", screen._armed_at - 0.1))   # made too early: says so
         await pilot.pause()
         assert "Too quick" in str(screen.query_one("#confirm-wait").render())
@@ -334,7 +345,7 @@ async def test_a_press_dragged_off_doesnt_make_a_later_key_too_quick(paths, fake
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
         yes.focus()
-        early = screen._armed_at - 0.1
+        early = await _armed(pilot, screen) - 0.1
         app.post_message(_down(yes, early))                    # pressed, then dragged off: no click
         app.post_message(_up_at(1, 1, early))
         while time.monotonic() < screen._armed_at + 0.05:
@@ -354,8 +365,7 @@ async def test_an_early_double_click_doesnt_make_the_next_click_too_quick(paths,
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        while screen._armed_at == float("inf"):               # armed at its first paint
-            await pilot.pause(0.01)
+        await _armed(pilot, screen)
         # carried over from the opening button: made before the dialog was armed, whenever they're
         # handled (a slow runner can take longer than ARM_DELAY to get here: stamp, don't read the clock)
         early = screen._armed_at - 0.2
@@ -375,12 +385,16 @@ async def test_an_early_double_click_doesnt_make_the_next_click_too_quick(paths,
 
 async def test_a_pilot_click_after_the_delay_confirms(paths, fake_systemctl, monkeypatch):  # noqa: F811
     # Textual's pilot (tests, the audit harness) hands clicks straight to the screen: headless, they count
+    import time
     monkeypatch.setattr(ConfirmScreen, "ARM_DELAY", 0.3)
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(120, 40)) as pilot:
         await settle(app, pilot)
         await pilot.click("#svc-stop")
-        await pilot.pause(0.5)
+        await pilot.pause(0.05)
+        armed = await _armed(pilot, app.screen)
+        while time.monotonic() < armed + 0.05:
+            await pilot.pause(0.05)
         await pilot.click("#confirm-yes")
         await settle(app, pilot)
         assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", "stop")]
@@ -396,13 +410,15 @@ async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_syst
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        while time.monotonic() < screen._armed_at - 0.05:
+        while time.monotonic() < await _armed(pilot, screen) - 0.05:
             await pilot.pause(0.02)
         just_early = screen._armed_at - 0.01                    # stamped: a slow runner may be past it by now
         app.post_message(_down(yes, just_early))                # refused: just too early
         app.post_message(_up(yes, just_early))
-        await pilot.pause()
+        await pilot.pause()                                     # at once: Textual's own press effect ends in 0.2 s
         assert isinstance(app.screen, ConfirmScreen)
+        assert "Too quick" in str(screen.query_one("#confirm-wait").render())   # it was refused
+        assert not yes.has_class("-active")   # not left looking pressed (Textual would ignore the next press)
         while time.monotonic() < screen._armed_at + 0.05:      # well within Textual's 0.2 s press effect
             await pilot.pause(0.02)
         now = time.monotonic()
