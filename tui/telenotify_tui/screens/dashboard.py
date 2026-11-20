@@ -58,7 +58,7 @@ CHART_WIDTH = 46    # the activity panel's width (50) less its border and paddin
 CHART_HEIGHT = 3
 # each series has its own fill as well as its colour (colour is never the only signal): solid,
 # dark shade, light shade; the totals header above the chart names them
-SERIES_MARK = {"publish": "█", "review": "▓", "reject": "▒"}
+SERIES_MARK = {"publish": "█", "review": "▚", "reject": "░"}   # the owner's pick (#95); ▓ / ▒ were too alike
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -127,8 +127,8 @@ def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
 
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT) -> Text:
-    """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▓), then
-    reject (dim, ▒). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+    """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▚), then
+    reject (dim, ░). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
     shape, so the height stays exact, and is told apart by colour only (tracked in #67).
 
     Bars are two columns wide with a gap while they fit, then one column,
