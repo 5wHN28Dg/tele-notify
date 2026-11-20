@@ -354,10 +354,14 @@ async def test_an_early_double_click_doesnt_make_the_next_click_too_quick(paths,
         await pilot.pause(0.05)
         screen = app.screen
         yes = screen.query_one("#confirm-yes", Button)
-        for _ in range(2):                                    # carried over from the opening button
-            now = time.monotonic()
-            app.post_message(_down(yes, now))
-            app.post_message(_up(yes, now))
+        while screen._armed_at == float("inf"):               # armed at its first paint
+            await pilot.pause(0.01)
+        # carried over from the opening button: made before the dialog was armed, whenever they're
+        # handled (a slow runner can take longer than ARM_DELAY to get here: stamp, don't read the clock)
+        early = screen._armed_at - 0.2
+        for _ in range(2):
+            app.post_message(_down(yes, early))
+            app.post_message(_up(yes, early))
         await settle(app, pilot)
         assert isinstance(app.screen, ConfirmScreen)
         while time.monotonic() < screen._armed_at + 0.3:
@@ -394,10 +398,11 @@ async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_syst
         yes = screen.query_one("#confirm-yes", Button)
         while time.monotonic() < screen._armed_at - 0.05:
             await pilot.pause(0.02)
-        now = time.monotonic()
-        app.post_message(_down(yes, now))                       # refused: just too early
-        app.post_message(_up(yes, now))
+        just_early = screen._armed_at - 0.01                    # stamped: a slow runner may be past it by now
+        app.post_message(_down(yes, just_early))                # refused: just too early
+        app.post_message(_up(yes, just_early))
         await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
         while time.monotonic() < screen._armed_at + 0.05:      # well within Textual's 0.2 s press effect
             await pilot.pause(0.02)
         now = time.monotonic()
