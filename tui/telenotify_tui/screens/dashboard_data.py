@@ -257,11 +257,15 @@ def first_judged(store: Store) -> tuple[date | None, bool]:
 
 
 def _has_album_index(store: Store) -> bool:
-    """Has `processed` an index starting with (chat_id, album_id), as the bot adds (#109)?"""
+    """Has `processed` the bot's album index (#109): a full (not partial) index on
+    (chat_id, album_id, msg_id) with the default collation? Only that one lets
+    SQLite look an album's first row up without reading its whole chat."""
     for idx in store._rows("PRAGMA index_list(processed)"):
+        if idx[4]:   # partial
+            continue
         name = str(idx[1]).replace("'", "''")   # read from the file: quoted as a string
-        cols = [r[2] for r in store._rows(f"PRAGMA index_info('{name}')")]
-        if cols[:2] == ["chat_id", "album_id"]:
+        cols = [(r[2], r[4]) for r in store._rows(f"PRAGMA index_xinfo('{name}')") if r[5]]   # key columns
+        if cols[:3] == [("chat_id", "BINARY"), ("album_id", "BINARY"), ("msg_id", "BINARY")]:
             return True
     return False
 

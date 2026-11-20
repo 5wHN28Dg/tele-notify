@@ -240,13 +240,20 @@ def test_period_counts_read_only_the_period(tmp_path, monkeypatch):
         assert any("processed_at" in line for line in plan), plan
 
 
-def test_without_the_album_index_albums_are_found_in_one_pass(tmp_path, monkeypatch):
-    """A file the bot hasn't opened since it added its album index (#109): a lookup per album row
+@pytest.mark.parametrize("index", [
+    "",                                                                          # none
+    "CREATE INDEX x ON processed (chat_id, album_id);",                          # no msg_id
+    "CREATE INDEX x ON processed (chat_id, album_id, msg_id) WHERE album_id != 0;",   # partial
+    "CREATE INDEX x ON processed (chat_id, album_id COLLATE NOCASE, msg_id);",   # another collation
+])
+def test_without_the_album_index_albums_are_found_in_one_pass(tmp_path, monkeypatch, index):
+    """A file the bot hasn't opened since it added its album index (#109), or with an index SQLite
+    can't use for it (#119 review): a lookup per album row
     would read the album's whole chat each time (minutes on a big file), so the first pictures are
     found in one pass instead, and the counts are the same."""
     day = date(2026, 11, 18)
     rows = [(-1, 100, "A", "publish", "forwarded", at(day), 7), (-1, 101, "A", "", "part of a post already handled", at(day), 7)]
-    no_index = "\n".join(line for line in SCHEMA.splitlines() if "processed_chat_album" not in line)
+    no_index = "\n".join(line for line in SCHEMA.splitlines() if "processed_chat_album" not in line) + index
     path = tmp_path / "s.sqlite3"
     new_db(path, rows, schema=no_index)
     with Store(path) as s:
