@@ -180,7 +180,7 @@ async def test_totals(paths):
         lines = text(app, "#totals").splitlines()
         # judged, publish, review, reject, forwarded over the last 7 days (the default)
         # the owner's pick in Kitty (#95): ▓ and ▒ were too alike on a high-DPI screen
-        assert lines[0].split() == ["judged", "█publish", "▚review", "░reject", "forwarded"]   # marks name the chart's fills
+        assert lines[0].split() == ["judged", "█publish", "▚review", "▒reject", "forwarded"]   # marks name the chart's fills
         assert lines[1].split() == ["4", "1", "1", "2", "1"]
         assert "Last 7 days" in str(app.query_one("#dash-activity").border_subtitle)
 
