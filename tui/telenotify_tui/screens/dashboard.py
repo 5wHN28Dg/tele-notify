@@ -57,9 +57,10 @@ FEED_ROWS = 50
 CHART_WIDTH = 46    # the activity panel's width (50) less its border and padding
 CHART_HEIGHT = 3
 # each series has its own fill as well as its colour (colour is never the only signal): solid,
-# quadrant checker, medium shade; the totals header above the chart names them. The owner's pick
-# (#95, #115): ▓ / ▒ were too alike on a high-DPI screen, and ░ was too faint
-SERIES_MARK = {"publish": "█", "review": "▚", "reject": "▒"}
+# quadrant checker, dark shade; the totals header above the chart names them. The owner's picks
+# (#95, #115, #102): ▓ and ▒ looked alike, ░ was too faint, and VTE draws ▒ as a 50 % tone that
+# can't reach 3:1 in the light theme; ▓ (75 %) in the text colour does
+SERIES_MARK = {"publish": "█", "review": "▚", "reject": "▓"}
 # A period whose numbers took longer than this to count (all time on a big
 # state file) is counted again at most every SLOW_REUSE_SECONDS, not on every
 # refresh tick; choosing a period always counts it afresh.
@@ -126,10 +127,16 @@ def _merge(bars: list[dd.DayCount], width: int) -> list[dd.DayCount]:
             for group in (bars[i:i + k] for i in range(0, len(bars), k))]
 
 
+# the theme's colours for the three series: fixed ones (green, yellow, grey50) are below 3:1 in the
+# light theme (#102, #75); text-success / text-warning / foreground pass in both themes
+SERIES_THEME = {"publish": "text-success", "review": "text-warning", "reject": "foreground"}
+SERIES_FALLBACK = {"publish": "green", "review": "yellow", "reject": "grey50"}
+
+
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
-                 height: int = CHART_HEIGHT) -> Text:
-    """A small stacked bar chart: publish (green, █) at the bottom, then review (yellow, ▚), then
-    reject (dim, ▒). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
+                 height: int = CHART_HEIGHT, colours: dict[str, str] | None = None) -> Text:
+    """A small stacked bar chart: publish (green, █) at the bottom, then review (amber, ▚), then
+    reject (the text colour, ▓), in the theme's colours (`colours`). A full cell shows its series' mark; the top cell of a bar keeps the eighth-block
     shape, so the height stays exact, and is told apart by colour only (tracked in #117).
 
     Bars are two columns wide with a gap while they fit, then one column,
@@ -163,7 +170,7 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
             fill = min(8, max(0, t - lo))
             mid = lo + max(fill, 1) / 2
             series = "publish" if mid < p else "review" if mid < r else "reject"
-            style = {"publish": "green", "review": "yellow", "reject": "grey50"}[series]
+            style = (colours or SERIES_FALLBACK)[series]
             glyph = SERIES_MARK[series] if fill == 8 else eighths[fill]
             out.append(glyph * bar_w, style=style)
             if gap and i < n - 1:
@@ -498,6 +505,12 @@ class DashboardPane(Vertical):
         bot_box = self.query_one("#dash-bot")
         bot_box.border_title = "Bot"
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
+        # the chart is drawn in the theme's colours (#102): draw it again when the theme changes
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
+
+    def _theme_changed(self, _theme) -> None:
+        if self.snapshot is not None:
+            self._show_activity(self.snapshot)
 
     def on_resize(self, event: events.Resize) -> None:
         # the login line has a short and a long form: pick again once the new layout is in place
@@ -715,7 +728,8 @@ class DashboardPane(Vertical):
         t.append(f"{tot.forwarded:>11}", style="bold")
         totals.update(t)
         if tot.judged:
-            chart.update(render_chart(ps.bars, ps.bucket))
+            v = self.app.theme_variables
+            chart.update(render_chart(ps.bars, ps.bucket, colours={k: v.get(n, SERIES_FALLBACK[k]) for k, n in SERIES_THEME.items()}))
         else:
             chart.update(Text("nothing judged in this period", style="dim"))
 

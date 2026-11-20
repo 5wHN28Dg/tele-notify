@@ -180,7 +180,7 @@ async def test_totals(paths):
         lines = text(app, "#totals").splitlines()
         # judged, publish, review, reject, forwarded over the last 7 days (the default)
         # the owner's pick in Kitty (#95): ▓ and ▒ were too alike on a high-DPI screen
-        assert lines[0].split() == ["judged", "█publish", "▚review", "▒reject", "forwarded"]   # marks name the chart's fills
+        assert lines[0].split() == ["judged", "█publish", "▚review", "▓reject", "forwarded"]   # marks name the chart's fills
         assert lines[1].split() == ["4", "1", "1", "2", "1"]
         assert "Last 7 days" in str(app.query_one("#dash-activity").border_subtitle)
 
@@ -469,3 +469,41 @@ def test_an_unreadable_file_doesnt_promise_a_retry():
     snap.error, snap.busy = "DatabaseError: file is not a database", False
     note = dash.problem_note(snap)
     assert "retry" not in note and "see Bot" in note
+
+
+def _contrast(a, b) -> float:
+    def lum(c):
+        def ch(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+async def test_chart_marks_reach_3_to_1_in_both_themes(paths):
+    """#102: the chart's marks are drawn in the theme's colours, at least 3:1 on its background in
+    both themes, also as VTE draws them (a shade as a flat tone: ▓ 75 %); redrawn on a theme switch."""
+    from textual.color import Color
+
+    from telenotify_tui.screens.dashboard import SERIES_MARK
+
+    tone = {"█": 1.0, "▚": 1.0, "▓": 0.75}   # how much of the colour VTE gives each mark
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        for theme in ("textual-dark", "textual-light"):
+            app.theme = theme
+            await settle(app, pilot)
+            v = app.theme_variables
+            bg = Color.parse(v["background"])
+            chart = app.query_one("#chart", Static).content
+            seen = {}
+            for span in chart.spans:
+                glyph = chart.plain[span.start]
+                if glyph in tone:
+                    seen[glyph] = Color.parse(str(span.style))
+            assert set(seen) == set(SERIES_MARK.values()), (theme, seen)   # today has all three
+            for glyph, colour in seen.items():
+                drawn = bg.blend(colour, tone[glyph])
+                assert _contrast(drawn, bg) >= 3, (theme, glyph, colour.hex, round(_contrast(drawn, bg), 2))

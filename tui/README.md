@@ -30,7 +30,7 @@ The Activity box on the Dashboard counts posts over a period: today, the last 7 
 
 "Forwarded" is what reached your channel: posts published straight away plus reviews you approved once the bot has sent them (not pending, discarded or only kept ones). A dry run forwards nothing. An album counts as one post.
 
-The chart shows one bar per day while the period fits (up to 46 days), then per week, month or year. Each series has its own fill as well as its colour: █ publish, ▚ review, ▒ reject (the header above the numbers repeats them); a bar's top cell keeps its exact height and is told apart by colour only. The numbers come from the bot's state file, which keeps a row for every judged post for good (only the post text is cleared after `keep_text_days`), so they survive restarts. Over a long period on a very large state file (a million posts takes about a second) the numbers are counted again at most once a minute instead of every few seconds.
+The chart shows one bar per day while the period fits (up to 46 days), then per week, month or year. Each series has its own fill as well as its colour, in the theme's colours: █ publish, ▚ review, ▓ reject (the header above the numbers repeats them); a bar's top cell keeps its exact height and is told apart by colour only. The numbers come from the bot's state file, which keeps a row for every judged post for good (only the post text is cleared after `keep_text_days`), so they survive restarts. Over a long period on a very large state file (a million posts takes about a second) the numbers are counted again at most once a minute instead of every few seconds.
 
 ### Editing a keyword list (Settings)
 
