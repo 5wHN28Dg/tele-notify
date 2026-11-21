@@ -233,6 +233,35 @@ suite "listener":
     check lat.live.count == 1 and lat.live.median in 2'i64 .. 12
     check lat.reviewed.count == 0
 
+  test "live messages held while the backlog is read are caught up, not live (#74)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    let (l, st) = setup(f)
+    var fired = false
+    f.duringUnread = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if not fired:
+          fired = true
+          l.enqueue msg(-2, 11, "We are hiring a junior network technician in Basra. Fresh graduates welcome.")
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 10'i64), (-2'i64, 11'i64)]
+    check st.caughtUp(-2, 11)
+
+  test "messages that arrive while the connection is down or catching up are caught up, not live (#74)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    const tech = "We are hiring a junior network technician in Basra. Fresh graduates welcome."
+    l.onConnectionState("connectionStateConnecting")          # lost
+    l.enqueue msg(-2, 1, tech)
+    l.onConnectionState("connectionStateUpdating")            # back: TDLib replays what was missed
+    l.enqueue msg(-2, 2, tech & " Zubair")
+    l.onConnectionState("connectionStateReady")               # caught up
+    l.enqueue msg(-2, 3, tech & " Umm Qasr")
+    waitFor l.processQueue()
+    check st.seen(-2, 1) and st.seen(-2, 2) and st.seen(-2, 3)
+    check st.caughtUp(-2, 1) and st.caughtUp(-2, 2) and not st.caughtUp(-2, 3)
+
   test "a chat's backlog read on retry is caught up too (#74)":
     let f = FakeTg()
     f.chats[-2] = @[msg(-2, 5, "We are hiring a junior network technician in Basra. Fresh graduates welcome.")]

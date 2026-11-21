@@ -64,6 +64,7 @@ type
     awayPublished, awayReview: int  # the backlog's posts, for one summary
     retrying: bool                  # handling a backlog read on retry (summarized too)
     downSince: int64
+    connection: string            # TDLib's last connection state ("" = none yet)
     selfChat: int64
     titles*: Table[int64, string]   # watched chats' titles, for alerts
     checkingAccess: bool            # the start-up access check is running
@@ -434,8 +435,18 @@ proc noteOtherBot*(l: Listener, m: TgMessage) {.async.} =
   except CatchableError as e:
     l.say "   could not note the other bot's post: " & e.msg
 
+proc catchingUp(l: Listener): bool =
+  ## Not simply connected: down, connecting, or Telegram replaying what was
+  ## missed ("updating"). "" = no state reported yet.
+  l.downSince > 0 or l.connection notin ["", "connectionStateReady"]
+
 proc enqueue*(l: Listener, m: TgMessage) =
   ## A live message. During bootstrap it waits until the backlog is done.
+  ## One that arrives while the backlog is read, or while the connection
+  ## is down or catching up (TDLib replays the missed messages as new
+  ## ones), counts as caught up, not live, in the forwarding time (#74).
+  var m = m
+  if l.bootstrapping or l.catchingUp: m.caughtUp = true
   if l.bootstrapping: l.held.add m
   else: l.queue.addLast m
 
@@ -618,6 +629,7 @@ proc heartbeat*(l: Listener) {.async.} =
 proc onConnectionState*(l: Listener, state: string) =
   ## Called with TDLib's connection state ("connectionStateReady", ...).
   let t = getTime().toUnix
+  l.connection = state
   # for the terminal screen: "ready", "updating", "connecting", ...
   try: l.state.setMeta("connection", state.replace("connectionState", "").toLowerAscii)
   except CatchableError: discard

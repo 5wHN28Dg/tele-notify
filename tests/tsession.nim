@@ -97,6 +97,21 @@ suite "session":
       "  caught up after downtime: typically within 10m 00s (half are faster), 95 of 100 within 2h 00m (3 posts)",
       "  after your review: typically within 1d 1h (half are faster), 95 of 100 within 2d 7h (2 posts)"]
 
+  test "--days is a number from 1 to 3650 (#74)":
+    check parseDays("1") == 1 and parseDays("7") == 7 and parseDays("3650") == 3650
+    for bad in ["0", "-3", "3651", "99999999999999"]:
+      try:
+        discard parseDays(bad)
+        check false
+      except ValueError as e:
+        check e.msg == "--days must be between 1 and 3650" or
+              (bad == "99999999999999" and e.msg == "--days needs a number")
+    try:
+      discard parseDays("week")
+      check false
+    except ValueError as e:
+      check e.msg == "--days needs a number"
+
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"
     check statePath(cfg, true).endsWith "state-dryrun.sqlite3"

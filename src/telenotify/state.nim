@@ -49,9 +49,19 @@ proc flock(fd, operation: cint): cint {.importc, header: "<sys/file.h>".}
 const lockEx = 2.cint
 const lockNb = 4.cint
 
-var upgradeLockWaitMs* = 120_000
+var upgradeLockWaitMs* = 20_000
   ## How long opening an old file waits for another telenotify (the bot, or
-  ## a command) that is upgrading it. Tests shorten it.
+  ## a command) that is upgrading it: the copy takes well under a second for
+  ## a state file of a few MB. Tests shorten it.
+
+var upgradeTestHook*: proc (stage: string) {.nimcall.} = nil
+  ## Tests only: called during an upgrade at "locked" (just after taking
+  ## the lock), "renamed" (the copy has its name, before the folder is
+  ## flushed) and "columns" (inside the upgrade's transaction, after the
+  ## columns, before the version is written), to fail or race there.
+
+proc testHook(stage: string) =
+  if upgradeTestHook != nil: upgradeTestHook(stage)
 
 proc lockForUpgrade(path: string): cint =
   ## An exclusive lock on `<path>.lock`, so only one process at a time
@@ -108,13 +118,19 @@ proc backupBeforeUpgrade(db: DbConn, path: string, version: int) =
     db.exec(sql"VACUUM INTO ?", tmp)
     syncPath(tmp)                  # VACUUM INTO doesn't flush its file itself
     moveFile(tmp, dest)
-    syncPath(dest.parentDir)       # the rename itself
   except CatchableError as e:
     try: removeFile(tmp)
     except CatchableError: discard
     raise newException(IOError, "could not keep a copy of " & path & " as " & dest &
       " before upgrading it, so it was left as it was. Free some disk space and check that you " &
       "can write to " & path.parentDir & ", then start telenotify again. (" & e.msg & ")")
+  try:
+    testHook("renamed")
+    syncPath(dest.parentDir)       # the rename itself
+  except CatchableError as e:
+    raise newException(IOError, "kept a copy of " & path & " as " & dest & ", but could not " &
+      "make sure it is on the disk yet, so " & path & " was not upgraded and is unchanged. Check " &
+      "the disk, then start telenotify again. (" & e.msg & ")")
 
 proc userVersion(db: DbConn): int = parseInt(db.getValue(sql"PRAGMA user_version"))
 
@@ -193,23 +209,35 @@ proc openState*(path: string): State =
     return
   # Older than this build (or new). One process at a time: take the lock,
   # look again (another one may have just upgraded it), and keep a fresh
-  # copy of an existing file before changing anything. If the copy fails,
-  # stop here with the file untouched.
+  # copy of an existing file before changing anything. Then the columns and
+  # the version in one transaction: all of the upgrade, or none of it. If
+  # anything fails, stop here with the file as it was, saying so in one line.
   var lock = -1.cint
   try:
     lock = lockForUpgrade(path)
+    testHook("locked")
     removeStaleCopies(path)
     let version = db.userVersion
     if version < schemaVersion:
       if db.getValue(sql"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'processed'") != "":
         backupBeforeUpgrade(db, path, version)
-      db.createTables()
-      db.exec(sql("PRAGMA user_version = " & $schemaVersion))
+      db.exec(sql"BEGIN IMMEDIATE")
+      try:
+        db.createTables()
+        testHook("columns")
+        db.exec(sql("PRAGMA user_version = " & $schemaVersion))
+        db.exec(sql"COMMIT")
+      except CatchableError as e:
+        try: db.exec(sql"ROLLBACK")
+        except CatchableError: discard        # keep the first error
+        raise newException(IOError, "could not upgrade " & path & " to schema version " &
+          $schemaVersion & ", so it was left as it was (" & e.msg & ")")
     else:
       db.createTables()
-  except CatchableError:
+  except CatchableError as e:
     db.close()
-    raise
+    # one line in the journal, whatever went wrong (`run` prints "error: " & msg)
+    raise newException(IOError, e.msg.splitLines.join(" "))
   finally:
     if lock >= 0: discard posix.close(lock)
 

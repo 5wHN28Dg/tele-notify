@@ -355,6 +355,13 @@ proc cmdCompare*(cfg: Config, days: int) =
          st.publishedText(x.nim.chatId, x.nim.msgId).short(90)
     echo "    why: ", x.nim.reasons.short(160)
 
+proc parseDays*(val: string): int =
+  ## `--days:N`: a whole number from 1 to 3650 (ten years), or ValueError
+  ## with the message to show.
+  try: result = parseInt(val)
+  except ValueError: raise newException(ValueError, "--days needs a number")
+  if result notin 1 .. 3650: raise newException(ValueError, "--days must be between 1 and 3650")
+
 proc duration(secs: int64): string =
   ## 45s, 3m 05s, 2h 07m, 3d 4h
   if secs < 60: fmt"{secs}s"

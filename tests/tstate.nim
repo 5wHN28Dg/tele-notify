@@ -329,6 +329,7 @@ suite "state":
     let fd = posix.open(cstring(old & ".lock"), posix.O_RDWR or posix.O_CREAT, 0o600)
     check fd >= 0
     check flock(fd, 2) == 0                       # LOCK_EX: another telenotify is upgrading
+    check upgradeLockWaitMs == 20_000              # a copy takes well under a second
     let saved = upgradeLockWaitMs
     upgradeLockWaitMs = 300
     defer: upgradeLockWaitMs = saved
@@ -346,6 +347,64 @@ suite "state":
     let up = openState(old)
     up.close()
     check fileExists(backupPath(old, 0))
+
+  proc columnsOf(path: string): seq[string] =
+    let db = open(path, "", "", "")
+    defer: db.close()
+    for r in db.fastRows(sql"PRAGMA table_info(processed)"): result.add r[1]
+
+  proc versionOf(path: string): string =
+    let db = open(path, "", "", "")
+    defer: db.close()
+    db.getValue(sql"PRAGMA user_version")
+
+  test "the columns and the version are written together, or neither; the failure is one line (#74)":
+    let old = oldFile("halfway.sqlite3")
+    upgradeTestHook = proc (stage: string) =
+      if stage == "columns": raise newException(DbError, "database is locked\nsecond line")
+    defer: upgradeTestHook = nil
+    try:
+      discard openState(old)
+      check false
+    except IOError as e:
+      check "left as it was" in e.msg and "database is locked" in e.msg
+      check '\n' notin e.msg                     # one line in the journal
+    check versionOf(old) == "0"
+    let cols = columnsOf(old)
+    check "posted_at" notin cols and "caught_up" notin cols and "text_hash" notin cols
+    upgradeTestHook = nil
+    let up = openState(old)                      # the next start
+    check up.seen(-1, 5)
+    up.close()
+    check versionOf(old) == $schemaVersion and "caught_up" in columnsOf(old)
+
+  test "the version is looked at again once the lock is held (#74)":
+    let old = oldFile("raced.sqlite3")
+    # another telenotify finished the upgrade while this one waited for the lock
+    upgradeTestHook = proc (stage: string) =
+      if stage == "locked":
+        let other = open(old, "", "", "")
+        other.exec(sql"ALTER TABLE processed ADD COLUMN posted_at INTEGER")
+        other.exec(sql"PRAGMA user_version = 1")
+        other.close()
+    defer: upgradeTestHook = nil
+    let up = openState(old)
+    up.close()
+    check not fileExists(backupPath(old, 0))     # nothing to copy any more: it's upgraded
+    check "caught_up" in columnsOf(old)
+
+  test "a copy not yet confirmed on the disk says so, and the file is not upgraded (#74)":
+    let old = oldFile("unsynced.sqlite3")
+    upgradeTestHook = proc (stage: string) =
+      if stage == "renamed": raise newException(OSError, "Input/output error")
+    defer: upgradeTestHook = nil
+    try:
+      discard openState(old)
+      check false
+    except IOError as e:
+      check "kept a copy" in e.msg and "was not upgraded and is unchanged" in e.msg
+    check fileExists(backupPath(old, 0))
+    check versionOf(old) == "0" and "posted_at" notin columnsOf(old)
 
   test "the copy-failure message says what to do next (#74)":
     let old = oldFile("hint.sqlite3")
