@@ -82,7 +82,17 @@ class Host:
         rec = f'echo "$(basename "$0") $*" >> "{log}"\n'
         _exe(self.fakes / "apt-get", "#!/bin/sh\n" + rec)
         _exe(self.fakes / "apt-cache", '#!/bin/sh\n[ "${FAKE_NO_VALKEY:-}" != 1 ]\n')
-        _exe(self.fakes / "systemctl", "#!/bin/sh\n" + rec)
+        # the service's state: a file; curl gets kittygram's front page only while it runs
+        up = tmp / "kittygram-up"
+        _exe(self.fakes / "systemctl", "#!/bin/sh\n" + rec +
+             f'case "$1 $2" in "start kittygram"|"restart kittygram") [ "${{FAKE_DOWN:-}}" = 1 ] || touch "{up}";;\n'
+             f'  "stop kittygram") rm -f "{up}";;\n'
+             f'  "is-active --quiet") [ -f "{up}" ]; exit $?;;\n'
+             'esac\n')
+        _exe(self.fakes / "dpkg-query", '#!/bin/sh\nfor p; do :; done\n'
+             'case " ${FAKE_INSTALLED:-} " in *" $p "*) printf "install ok installed";; *) exit 1;; esac\n')
+        _exe(self.fakes / "getent", f'#!/bin/sh\necho "kittygram:x:999:988::${{FAKE_KG_HOME:-{self.home}}}:/usr/sbin/nologin"\n')
+        _exe(self.fakes / "stat", '#!/bin/sh\necho "${FAKE_OWNER:-kittygram}"\n')
         _exe(self.fakes / "id", "#!/bin/sh\n"
              f'if [ "$1" = -u ]; then echo {0 if root else 1000}; exit 0; fi\n'
              f'[ -f "{self.users}/$1" ]\n')
@@ -97,7 +107,10 @@ class Host:
         curl = ("#!/bin/sh\n" + rec +
                 'out=""; url=""\n'
                 'while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; --max-time) shift 2;; -*) shift;; *) url=$1; shift;; esac; done\n'
-                'case "$url" in http://127.0.0.1:*) [ "${FAKE_DOWN:-}" != 1 ]; exit $?;; esac\n'
+                'case "$url" in http://127.0.0.1:*)\n'
+                f'  if [ "${{FAKE_PORT_TAKEN:-}}" = 1 ]; then echo "<p>some other program</p>"; exit 0; fi\n'
+                f'  [ -f "{up}" ] || exit 7; echo "<p>Kittygram is an anonymous Instagram frontend</p>"; exit 0;;\n'
+                'esac\n'
                 '[ -n "$out" ] && echo junk > "$out"\n')
         _exe(self.fakes / "curl", curl)
         # tools kittygram's user runs (as_kg's PATH starts with $home/luarocks51/bin)
@@ -117,7 +130,7 @@ class Host:
         who = f'echo "ran $0 as ${{AS_KITTYGRAM:-root}}" >> "{log}"\n'
         _exe(lr / "luarocks", "#!/bin/sh\n" + rec + who +
              'if [ "$1" = --version ]; then echo "/x/luarocks 3.11.1"; exit 0; fi\n'
-             'if [ "$1" = init ]; then printf \'#!/bin/sh\\necho "app-luarocks $*" >> "%s"\\n\' '
+             'if [ "$1" = init ]; then printf \'#!/bin/sh\\necho "app-luarocks $*" >> "%s"\\nmkdir -p lua_modules\\n\' '
              f'"{log}" > ./luarocks; chmod +x ./luarocks; fi\n')
         if built:
             _exe(self.home / "openresty" / "bin" / "openresty",
@@ -167,7 +180,7 @@ def test_a_first_install_sets_kittygram_up_for_the_bot(tmp_path):
     assert (h.home / "app" / "luarocks.lock").read_text() == (REPO / "deploy" / "kittygram-luarocks.lock").read_text()
     calls = h.calls()
     assert "useradd --system" in calls and "app-luarocks build" in calls and "lapis migrate production" in calls
-    assert "systemctl enable kittygram" in calls and "systemctl restart kittygram" in calls
+    assert "systemctl enable kittygram" in calls and "systemctl start kittygram" in calls
     assert "systemctl enable --now valkey-server" in calls
     assert "as root" not in calls                               # kittygram's programs ran as kittygram
     assert "ran " in calls
@@ -183,7 +196,7 @@ def test_running_it_again_keeps_the_secret_and_rebuilds_nothing(tmp_path):
     assert secret in h.config()
     calls = h.calls()
     assert "useradd" not in calls and "git clone" not in calls and "app-luarocks build" not in calls
-    assert "systemctl restart kittygram" in calls
+    assert "systemctl start kittygram" in calls
 
 
 def test_another_port(tmp_path):
@@ -210,7 +223,7 @@ def test_a_download_that_doesnt_match_its_checksum_is_not_built(tmp_path):
     assert "doesn't match its expected checksum" in r.stderr
     assert not (h.home / "src" / "openresty-1.27.1.2.tar.gz").exists()
     assert not (h.home / "src" / "openresty-1.27.1.2").exists()
-    assert "systemctl restart kittygram" not in h.calls()
+    assert "systemctl start kittygram" not in h.calls()
 
 
 def test_a_kittygram_that_doesnt_answer_is_reported(tmp_path):
@@ -254,3 +267,61 @@ def test_the_lock_pins_every_module_running_with_the_bot():
                  "lua-cjson", "lsqlite3", "luautf8"):                 # kittygram's own dependencies
         assert name in pins, name
     assert len(pins) == 18
+
+
+def test_a_port_another_program_holds_is_refused_before_starting(tmp_path):
+    h = Host(tmp_path)
+    r = h.run(FAKE_PORT_TAKEN="1")
+    assert r.returncode != 0 and "another program answers" in r.stderr
+    assert "systemctl start kittygram" not in h.calls()
+
+
+def test_a_kittygram_that_doesnt_come_up_is_stopped_not_left_restarting(tmp_path):
+    h = Host(tmp_path)
+    r = h.run(FAKE_DOWN="1")
+    assert r.returncode != 0 and "so it was stopped" in r.stderr
+    assert h.calls().strip().splitlines()[-1].startswith("systemctl stop kittygram")
+
+
+def test_a_redis_already_installed_is_used_not_joined_by_valkey(tmp_path):
+    h = Host(tmp_path)
+    r = h.run(FAKE_INSTALLED="redis-server")
+    assert r.returncode == 0, r.stderr
+    assert "valkey" not in h.calls()
+
+
+def test_a_secret_line_without_its_comma_is_still_replaced(tmp_path):
+    h = Host(tmp_path)
+    example = h.upstream / "config.example.lua"
+    example.write_text(example.read_text().replace('"CHANGE_THIS!", --', '"CHANGE_THIS!" --'))
+    r = h.run()
+    assert r.returncode == 0, r.stderr
+    assert re.search(r'secret = "[0-9a-f]{48}" --', h.config())
+
+
+def test_an_existing_install_that_doesnt_fit_is_left_alone(tmp_path):
+    for name, extra, why in (("home", {"FAKE_KG_HOME": "/srv/elsewhere"}, "another home folder"),
+                             ("owner", {"FAKE_OWNER": "root"}, "doesn't belong to the kittygram user")):
+        d = tmp_path / name
+        d.mkdir()
+        h = Host(d)
+        r = h.run(**extra)
+        assert r.returncode != 0 and why in r.stderr
+        assert "systemctl restart kittygram" not in h.calls() and "systemctl start kittygram" not in h.calls()
+
+
+def test_a_port_with_a_leading_zero_is_refused(tmp_path):
+    h = Host(tmp_path)
+    assert h.run("08430").returncode != 0
+
+
+def test_modules_are_installed_from_scratch(tmp_path):
+    """LuaRocks keeps loading a newer version already installed, so a pin could never go back."""
+    h = Host(tmp_path)
+    assert h.run().returncode == 0
+    newer = h.home / "app" / "lua_modules" / "lib" / "lapis-9.9"
+    newer.mkdir(parents=True)
+    marker = h.home / "app" / "lua_modules" / ".tele-notify-modules"
+    marker.write_text("an older lock\n")
+    assert h.run().returncode == 0
+    assert not newer.exists()

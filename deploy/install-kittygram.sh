@@ -56,7 +56,7 @@ fail() {
 }
 
 case $port in
-  '' | *[!0-9]*) fail "the port must be a number, like 8430" ;;
+  '' | *[!0-9]* | 0*) fail "the port must be a number, like 8430" ;;
 esac
 [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || fail "the port must be between 1024 and 65535"
 [ "$(id -u)" = 0 ] || fail "run it as root (sudo): it installs packages, a user and a system service"
@@ -82,10 +82,17 @@ fetch_checked() {
 say "installing packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q > /dev/null || fail "apt-get update failed"
-# kittygram's cache: valkey, or redis (the same protocol, on 127.0.0.1:6379)
-# where this release has no valkey (Debian 12, Ubuntu 22.04)
-cache=valkey-server
-if ! apt-cache show valkey-server > /dev/null 2>&1; then
+# kittygram's cache on 127.0.0.1:6379: a redis already installed, else valkey,
+# else redis (the same protocol) where this release has no valkey (Debian 12,
+# Ubuntu 22.04). Never both: they'd fight over the port.
+installed() {
+  dpkg-query -W -f '${Status}' "$1" 2> /dev/null | grep -q 'install ok installed'
+}
+if installed redis-server && ! installed valkey-server; then
+  cache=redis-server
+elif apt-cache show valkey-server > /dev/null 2>&1; then
+  cache=valkey-server
+else
   cache=redis-server
 fi
 apt-get install -y -q --no-install-recommends build-essential libpcre2-dev libssl-dev zlib1g-dev \
@@ -97,6 +104,8 @@ if ! id kittygram > /dev/null 2>&1; then
   useradd --system --create-home --home-dir "$home" --shell /usr/sbin/nologin kittygram ||
     fail "could not add the kittygram user"
 fi
+[ "$(getent passwd kittygram | cut -d : -f 6)" = "$home" ] ||
+  fail "a kittygram user already exists with another home folder than $home; nothing was changed"
 chmod 700 "$home"
 as_kg mkdir -p "$home/src"
 
@@ -130,6 +139,8 @@ if [ ! -d "$app/.git" ]; then
   say "fetching kittygram..."
   as_kg git clone -q "$kittygram_repo" "$app" || fail "could not fetch kittygram from $kittygram_repo"
 fi
+[ "$(stat -c %U "$app")" = kittygram ] ||
+  fail "$app doesn't belong to the kittygram user (chown -R kittygram:kittygram $app, then run this again)"
 if [ "$(as_kg git -C "$app" rev-parse HEAD)" != "$kittygram_commit" ]; then
   as_kg git -C "$app" fetch -q origin || fail "could not fetch kittygram's updates"
   as_kg git -C "$app" checkout -q "$kittygram_commit" || fail "kittygram has no commit $kittygram_commit"
@@ -149,8 +160,11 @@ fi
 as_kg chmod 600 "$app/config.lua"
 # a random secret for kittygram's signed tokens, given to sed on its standard
 # input (not on a command line, where other users could see it)
-printf 's/secret = "CHANGE_THIS!",/secret = "%s",/\n' "$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')" |
+printf 's/secret = "CHANGE_THIS!"/secret = "%s"/\n' "$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')" |
   as_kg sed -i -f - "$app/config.lua"
+if as_kg grep -qF 'secret = "CHANGE_THIS!"' "$app/config.lua"; then
+  fail "could not set a secret in $app/config.lua"
+fi
 as_kg sed -i \
   -e "/^config(\"production\", {/,/^})/{
 s/port = \"[0-9]*\"/port = \"$port\"/
@@ -161,6 +175,8 @@ as_kg sed -n '/^config("production", {/,/^})/p' "$app/config.lua" | grep -q "por
   fail "could not set the port in $app/config.lua; its production block may have changed"
 as_kg sed -n '/^config("production", {/,/^})/p' "$app/config.lua" | grep -q 'allow_json = true' ||
   fail "could not turn JSON answers on in $app/config.lua"
+as_kg sed -n '/^config("production", {/,/^})/p' "$app/config.lua" | grep -q 'num_workers = "1"' ||
+  fail "could not set one worker in $app/config.lua"
 
 # kittygram's Lua modules at the pinned versions, again when the commit or
 # the pins changed
@@ -168,7 +184,8 @@ as_kg sh -c "cat > '$app/luarocks.lock'" < "$lockfile"
 modules="$kittygram_commit $(sha256sum < "$lockfile" | cut -d ' ' -f 1)"
 if [ "$(as_kg cat "$app/lua_modules/.tele-notify-modules" 2> /dev/null || true)" != "$modules" ]; then
   say "installing kittygram's Lua modules..."
-  as_kg sh -c "cd '$app' && luarocks init --lua-version=5.1 --lua-versions=5.1 > '$home/src/rocks.log' 2>&1 &&
+  # from scratch: LuaRocks would keep loading a newer version already there
+  as_kg sh -c "cd '$app' && rm -rf lua_modules && luarocks init --lua-version=5.1 --lua-versions=5.1 > '$home/src/rocks.log' 2>&1 &&
     CC='gcc -std=gnu99' ./luarocks build >> '$home/src/rocks.log' 2>&1 &&
     printf '%s\n' '$modules' > lua_modules/.tele-notify-modules" ||
     fail "installing kittygram's Lua modules failed; see $home/src/rocks.log"
@@ -220,13 +237,22 @@ EOF
 mv -f "$units/kittygram.service.tmp" "$units/kittygram.service"
 systemctl daemon-reload || fail "systemctl daemon-reload failed"
 systemctl enable kittygram > /dev/null 2>&1 || fail "could not enable kittygram.service"
-systemctl restart kittygram || fail "could not start kittygram; see journalctl -u kittygram"
+systemctl stop kittygram > /dev/null 2>&1 || true
+if curl -fsS -o /dev/null --max-time 5 "http://127.0.0.1:$port/"; then
+  fail "another program answers on 127.0.0.1:$port; stop it or give this script another port"
+fi
+systemctl start kittygram || fail "could not start kittygram; see journalctl -u kittygram"
 
+# its own front page (it names itself), from the running service
 say "waiting for kittygram to answer..."
 tries=0
-until curl -fsS -o /dev/null --max-time 5 "http://127.0.0.1:$port/"; do
+until systemctl is-active --quiet kittygram &&
+  curl -fsS --max-time 5 "http://127.0.0.1:$port/" 2> /dev/null | grep -qi kittygram; do
   tries=$((tries + 1))
-  [ "$tries" -lt "${KG_WAIT_TRIES:-20}" ] || fail "kittygram doesn't answer on 127.0.0.1:$port; see journalctl -u kittygram"
+  if [ "$tries" -ge "${KG_WAIT_TRIES:-20}" ]; then
+    systemctl stop kittygram > /dev/null 2>&1 || true   # not restarting every 10 s for nothing
+    fail "kittygram doesn't answer on 127.0.0.1:$port, so it was stopped; see journalctl -u kittygram"
+  fi
   sleep 1
 done
 
