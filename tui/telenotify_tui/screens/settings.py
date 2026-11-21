@@ -50,6 +50,8 @@ FORM_HELP = {
     "dry_run": "Judge and record, but forward nothing",
     "alerts": "Tell you about problems (downtime, lost access, log-out) in Saved Messages and through your notification bot",
     "alert_after_minutes": "Downtime shorter than this is only logged (default 10)",
+    "notify_published": "Through your notification bot: a message for each post published to your channel",
+    "notify_review": "Through your notification bot: a message for each post sent to review",
     "data_dir": "TDLib login and state (default ~/.local/share/tele-notify); empty = default",
     "tdlib_path": "Path to libtdjson.so if it isn't found automatically; empty = automatic",
     "target_chat": "ID of the chat matches are forwarded to",

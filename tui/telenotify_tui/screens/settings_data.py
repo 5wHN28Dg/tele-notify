@@ -52,7 +52,8 @@ LIST_KEYS: dict[str, str] = {
     "extra_job_sites": "More career sites whose job pages carry a schema.org JobPosting",
 }
 INT_KEYS: dict[str, int] = {"max_experience_years": 1, "alert_after_minutes": 10}
-BOOL_KEYS: dict[str, bool] = {"publish_when_unsure": False, "dry_run": False, "alerts": True}
+BOOL_KEYS: dict[str, bool] = {"publish_when_unsure": False, "dry_run": False, "alerts": True,
+                              "notify_published": True, "notify_review": True}
 STR_KEYS: dict[str, str] = {"data_dir": "", "tdlib_path": ""}
 CHAT_KEYS = ("chats", "target_chat")
 SECRET_KEYS = ("api_id", "api_hash")
@@ -70,7 +71,8 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                   "extra_job_signals", "extra_not_a_job", "extra_job_sites",
                                   "max_experience_years", "publish_when_unsure"]),
     ("chats", "Chats", list(CHAT_KEYS)),
-    ("bot", "Bot", ["dry_run", "alerts", "alert_after_minutes", "data_dir", "tdlib_path"]),
+    ("bot", "Bot", ["dry_run", "alerts", "alert_after_minutes", "notify_published", "notify_review",
+                     "data_dir", "tdlib_path"]),
 ]
 
 DEFAULTS: dict[str, Any] = {**{k: [] for k in LIST_KEYS}, **INT_KEYS, **BOOL_KEYS, **STR_KEYS,

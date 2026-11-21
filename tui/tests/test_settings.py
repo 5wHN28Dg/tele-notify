@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from conftest import BAD, GOOD
-from textual.widgets import Button, DataTable, Input, OptionList, Static, TabbedContent
+from textual.widgets import Button, Checkbox, DataTable, Input, OptionList, Static, TabbedContent
 
 from telenotify_tui import bot, rtl
 from telenotify_tui.app import TeleNotifyApp
@@ -818,3 +818,26 @@ async def test_revert_during_an_edit_of_an_added_item_cancels_it(paths, abc_cfg)
         assert editor.editing is None                            # "new" is gone: no stale index
         await retype(pilot, editor, "x")
         assert pane.edited["location_keywords_en"] == ["a", "A", "b", "c", "x"]
+
+
+async def test_each_kind_of_bot_notification_can_be_switched_off(paths, cfg_path, services):
+    """#127 (O1/MSG5): notify_published and notify_review, on by default, as the bot reads them."""
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        published = pane.query_one("#f-notify_published", Checkbox)
+        review = pane.query_one("#f-notify_review", Checkbox)
+        assert published.value and review.value                      # the bot's defaults
+        review.scroll_visible()
+        await pilot.pause()
+        await pilot.click(review)
+        await pilot.pause()
+        assert not review.value and pane.dirty
+        await save(pilot)
+        await pilot.press("n")                                          # don't restart the bot
+        await pilot.pause()
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg["notify_review"] is False
+    assert "notify_published" not in cfg                               # unchanged keys aren't written
