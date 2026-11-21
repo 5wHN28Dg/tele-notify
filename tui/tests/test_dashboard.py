@@ -699,3 +699,37 @@ async def test_the_footer_at_80_columns(paths):
             k = keys[key]
             pad = k.get_component_styles("footer-key--description").padding.right   # a blank cell
             assert k.region.right - pad <= palette, key   # the label itself is clear of it
+
+
+async def test_a_docked_panel_makes_the_dashboard_narrow(paths):
+    """Review run 2 (R2-2): Textual's keys panel docks on the right and narrows the pane while the
+    window stays wide; the boxes then don't fit side by side either."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        assert not pane.has_class("-narrow")
+        app.action_show_help_panel()
+        await settle(app, pilot)
+        assert pane.has_class("-narrow")
+        bot_box = app.query_one("#dash-bot")
+        assert bot_box.content_region.contains_region(app.query_one("#svc-restart").region)
+
+
+async def test_the_login_line_is_right_after_flipping_back(paths, now):
+    """Review run 2 (R2-1): a refresh while the Bot box is hidden must not leave its short wording."""
+    db = sqlite3.connect(paths.state)
+    db.execute("INSERT INTO meta VALUES ('login_needed', '1')")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        await pilot.press("v")                      # Activity shown, Bot hidden
+        await settle(app, pilot)
+        pane._load_services()                       # what a refresh tick does (a worker)
+        await settle(app, pilot)
+        await pilot.press("v")                      # Bot again, full width
+        await settle(app, pilot)
+        assert " ".join(text(app, "#status").split()).startswith("Not logged in to Telegram.")

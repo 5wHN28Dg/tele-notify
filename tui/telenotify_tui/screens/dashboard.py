@@ -542,9 +542,10 @@ class DashboardPane(Vertical):
             self._show_activity(self.snapshot)
 
     def on_resize(self, event: events.Resize) -> None:
-        # NARROW and SHORT are the window's size, as the README says, not this pane's (which is smaller)
+        # NARROW and SHORT are the window's size, as the README says (this pane is 2 columns
+        # narrower); a panel docked beside it (Textual's keys panel) narrows the pane too
         window = self.app.size
-        narrow = window.width < NARROW
+        narrow = window.width < NARROW or event.size.width < NARROW - 2
         if narrow != self.has_class("-narrow"):
             self.set_class(narrow, "-narrow")
             self._top_titles()
@@ -567,12 +568,15 @@ class DashboardPane(Vertical):
     def action_flip_top(self) -> None:
         self.toggle_class("-show-activity")
         self._focus_shown_box()
+        # the Bot box's wording depends on its width, which is 0 while it's hidden: pick it again
+        self.call_after_refresh(self._show_status)
 
     def _show_top(self, which: str) -> None:
         """In a narrow window, show the top box `which` ("bot" or "activity"); both show in a wide one."""
         if self.has_class("-narrow"):
             self.set_class(which == "activity", "-show-activity")
             self._focus_shown_box()
+            self.call_after_refresh(self._show_status)
 
     def _focus_shown_box(self) -> None:
         """If the focused widget is in a top box that is now hidden, move focus to the shown box's
