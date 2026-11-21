@@ -37,8 +37,7 @@ suite "instagram links":
     let ig = kittygramReader("http://127.0.0.1:8430", fakeFrontend(seen), fakeFrontend(seen), fakeOcr())
     let r = waitFor ig.readPost("Df665JXhgxw")
     check seen[][0] == "http://127.0.0.1:8430/p/Df665JXhgxw/?json=true"
-    check r.text.count("مطلوب مهندس كهرباء حديث التخرج") == 1           # the second picture
-    check "https://cdn.example/Df665JXhgxw-1.webp" notin seen[]         # the first: Instagram read its text
+    check r.text.count("مطلوب مهندس كهرباء حديث التخرج") == 2           # both pictures
     check "May be an image of text that says" in r.text
     check r.notes.anyIt("instagram" in it.toLowerAscii)
 
@@ -238,7 +237,7 @@ suite "instagram load and wiring (PR #126)":
     let ig = kittygramReader("http://k", answerFetcher(seen, $many), answerFetcher(seen, $many),
                              slowOcr(now, 30, calls), fakeClock(now))
     let r = waitFor ig.readLinked("instagram.com/p/B1/ instagram.com/p/B2/")
-    check calls[] == 2                                  # 0 s, 30 s; at 60 s the third isn't started
+    check calls[] == 1                                  # at 30 s only 15 s are left: no second picture
     check seen[].countIt("/?json=true" in it) == 1      # and B2 isn't asked for
     check r.notes.anyIt("instagram B1: time for Instagram spent" in it)
     check r.notes.anyIt("instagram B2: time for Instagram spent, not read" in it)
@@ -313,7 +312,7 @@ suite "instagram load and wiring (PR #126)":
     discard waitFor ig.readPost("G0")                # the oldest: forgotten
     check calls[] == cacheSize + 2
 
-  test "a picture Instagram already read (alt text 'text that says') isn't OCR'd; its text is kept":
+  test "a picture Instagram already read (alt text 'text that says') is still OCR'd; its alt text is kept":
     let now = new float
     let calls = new int
     let seen = new seq[string]
@@ -322,10 +321,11 @@ suite "instagram load and wiring (PR #126)":
     let ig = kittygramReader("http://k", answerFetcher(seen, answer), answerFetcher(seen, answer),
                              slowOcr(now, 1, calls), fakeClock(now))
     let r = waitFor ig.readPost("H1")
-    check calls[] == 0 and "https://cdn.example/h1.webp" notin seen[]
+    check calls[] == 1 and "https://cdn.example/h1.webp" in seen[]
     check "Hiring: junior engineer, Basra" in r.text
+    check "مطلوب مهندس كهرباء حديث التخرج" in r.text
     check not r.unread
-    check r.notes.anyIt("read instagram post H1 (1 pictures, 1 by Instagram's own text reading)" == it)
+    check "read instagram post H1 (1 pictures)" in r.notes
 
   test "a short post whose Instagram link couldn't be read is marked unreadable":
     let down: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
@@ -347,3 +347,79 @@ suite "instagram load and wiring (PR #126)":
     let ok = kittygramReader("http://k", fakeFrontend(seen), fakeFrontend(seen), fakeOcr())
     let g4 = waitFor gather(Post(text: "https://www.instagram.com/p/U2/"), down, fakeOcr(), instagram = ok)
     check g4.unreadable == ""
+
+suite "instagram review fixes, round 2 (PR #126)":
+  test "a picture isn't started with less than 25 s of the budget left":
+    let now = new float
+    let calls = new int
+    var many = newJArray()
+    for i in 1 .. 3: many.add %*{"image_url": "https://cdn.example/r" & $i & ".webp"}
+    let seen = new seq[string]
+    let ig = kittygramReader("http://k", answerFetcher(seen, $many), answerFetcher(seen, $many),
+                             slowOcr(now, 21, calls), fakeClock(now))
+    let r = waitFor ig.readLinked("instagram.com/p/R1/")
+    check calls[] == 1                    # at 21 s, 24 s are left: not enough for another
+    check seen[].countIt("cdn.example" in it) == 1
+    check r.notes.anyIt("instagram R1: time for Instagram spent" in it)
+    now[] = 0
+    calls[] = 0
+    let ig2 = kittygramReader("http://k", answerFetcher(seen, $many), answerFetcher(seen, $many),
+                              slowOcr(now, 19, calls), fakeClock(now))
+    discard waitFor ig2.readLinked("instagram.com/p/R2/")
+    check calls[] == 2                    # at 19 s, 26 s are left: one more; at 38 s, no third
+
+  test "a post cut short by the budget isn't remembered":
+    let now = new float
+    let calls = new int
+    var many = newJArray()
+    for i in 1 .. 3: many.add %*{"image_url": "https://cdn.example/s" & $i & ".webp"}
+    let seen = new seq[string]
+    let ig = kittygramReader("http://k", answerFetcher(seen, $many), answerFetcher(seen, $many),
+                             slowOcr(now, 30, calls), fakeClock(now))
+    let r1 = waitFor ig.readLinked("instagram.com/p/S1/")
+    check not r1.unread and r1.notes.anyIt("time for Instagram spent" in it)
+    discard waitFor ig.readLinked("instagram.com/p/S1/")
+    check seen[].countIt("/?json=true" in it) == 2      # fetched again
+
+  test "a post with one failed picture among good ones isn't remembered":
+    let now = new float
+    let calls = new int
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "https://cdn.example/bad.webp"}, {"image_url": "https://cdn.example/ok.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer),
+                             answerFetcher(seen, answer, @["https://cdn.example/bad.webp"]),
+                             slowOcr(now, 1, calls), fakeClock(now))
+    let r1 = waitFor ig.readLinked("instagram.com/p/V1/")
+    check not r1.unread
+    discard waitFor ig.readLinked("instagram.com/p/V1/")
+    check seen[].countIt("/?json=true" in it) == 2      # fetched again
+    check calls[] == 2
+
+  test "share links without a kind aren't read either, and count as unread":
+    let links = instagramLinks("https://www.instagram.com/share/BAm9xY2kz/")
+    check links.codes.len == 0 and links.shares == @["share/BAm9xY2kz"]
+    let seen = new seq[string]
+    let ig = kittygramReader("http://k", fakeFrontend(seen), fakeFrontend(seen), fakeOcr())
+    let r = waitFor ig.readLinked("https://www.instagram.com/share/BAm9xY2kz/")
+    check seen[].len == 0 and r.unread
+    check "instagram share/BAm9xY2kz: share links aren't read" in r.notes
+
+  test "the host may follow punctuation, a non-breaking space or Arabic, never an ASCII letter":
+    check instagramCodes("رابط:instagram.com/p/X1/") == @["X1"]
+    check instagramCodes("(instagram.com/p/X2)") == @["X2"]
+    check instagramCodes("\"instagram.com/p/X3\" 'instagram.com/p/X4'") == @["X3", "X4"]
+    check instagramCodes("رابطinstagram.com/p/X5/") == @["X5"]                    # glued to an Arabic letter
+    check instagramCodes("see\u00A0instagram.com/p/X6/ \u200Finstagram.com/p/X7/") == @["X6", "X7"]
+    check instagramCodes("👉instagram.com/p/X8/") == @["X8"]
+    check instagramCodes("notinstagram.com/p/Y1/ 9instagram.com/p/Y2/") == newSeq[string]()
+
+  test "a short post is at most 100 characters of its own, links, hashtags and @mentions left out":
+    let down: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      return Fetched(ok: false, error: "connection refused")
+    let ig = kittygramReader("http://k", down, down, fakeOcr())
+    proc unreadable(text: string): bool =
+      (waitFor gather(Post(text: text), down, fakeOcr(), instagram = ig)).unreadable != ""
+    check unreadable("ب".repeat(100) & " https://www.instagram.com/p/W1/")
+    check not unreadable("ب".repeat(101) & " https://www.instagram.com/p/W1/")
+    check unreadable("ب".repeat(100) & " instagram.com/p/W1/")                    # a bare link isn't counted
+    check unreadable("ب".repeat(90) & " #وظائف_البصرة #وظائف @basrajobs https://www.instagram.com/p/W1/")

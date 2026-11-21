@@ -40,7 +40,8 @@ type
   Ocr* = proc (image: string): Future[OcrResult] {.closure, gcsafe.}
 
 const shortPostChars* = 100
-  ## A post with at most this many characters of its own (links left out) is
+  ## A post with at most this many characters of its own (links, hashtags and
+  ## @mentions left out) is
   ## "short": a link it carries may be the whole ad.
 
 proc defaultOcr*(): Ocr =
@@ -82,10 +83,11 @@ proc follow(link: JobLink, fetcher: Fetcher, jobSites: seq[string]): Future[Foll
   return Followed(text: t, notes: notes)
 
 proc ownChars(text: string): int =
-  ## Characters of `text` that aren't links or spaces.
+  ## Characters of `text` that aren't links, #hashtags, @mentions or spaces.
   for w in text.splitWhitespace:
     let lw = w.toLowerAscii
-    if "://" in lw or "instagram.com" in lw or lw.startsWith("www."): continue
+    if "://" in lw or "instagram.com" in lw or lw.startsWith("www.") or
+        lw.startsWith("#") or lw.startsWith("@"): continue
     result += w.runeLen
 
 proc gather*(post: Post, fetcher: Fetcher, ocr: Ocr,

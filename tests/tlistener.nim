@@ -332,6 +332,18 @@ suite "listener":
     check "the linked Instagram post could not be read, so this is a guess" in r[0].reasons
     check "front end failed: offline test" in r[0].reasons
 
+  test "a photo that can't be read and an unreadable Instagram link: the reason names both":
+    let f = FakeTg()
+    f.brokenPhotos.incl 9
+    f.chats[-1] = @[msg(-1, 1, "التفاصيل https://www.instagram.com/p/DAbc125/", photo = 9)]
+    let (l, st) = setup(f)
+    l.instagram = kittygramReader("http://127.0.0.1:8430", noFetch(), noFetch(), defaultOcr())
+    waitFor l.bootstrap()
+    let r = st.pendingReviews()
+    check r.len == 1
+    check "the picture could not be read and the linked Instagram post could not be read, so this is a guess" in
+      r[0].reasons
+
   test "a backlog too big to read in full is reported":
     let f = FakeTg()
     f.chats[-1] = @[msg(-1, 1, bad)]

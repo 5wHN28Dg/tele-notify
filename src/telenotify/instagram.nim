@@ -15,16 +15,18 @@
 ##
 ## The listener judges one post at a time, so reading is kept short:
 ## * at most 2 linked posts per Telegram post and 3 pictures per linked post;
-## * about 45 s in all per Telegram post: when it's spent, no further
-##   picture or post is started (one already started finishes; a download
-##   gives up after 20 s), with a note;
-## * a picture whose description already holds Instagram's own reading of
-##   its text ("... text that says ...") isn't downloaded or OCR'd: the
-##   description is kept instead;
+## * a budget of about 45 s per Telegram post: no picture or post is
+##   started with less than 25 s of it left (a download may take 20 s), and
+##   a note says so. The real bound is a little higher: a step already
+##   running finishes within its own limits, up to about 20 s for a
+##   download plus 60 s for OCR;
+## * Instagram's own descriptions are kept, but every picture is OCR'd
+##   anyway while the budget allows: a description ("... text that says
+##   ...") quotes little, and reads Arabic badly;
 ## * a post read in full is remembered by its code (200 posts, 6 h), so an
 ##   ad cross-posted to several channels is read once.
 ##
-## Share links (instagram.com/share/p/<token>/) carry a token, not the
+## Share links (instagram.com/share/p/<token>/, /share/<token>) carry a token, not the
 ## post's code, and only Instagram can turn one into a post: they're
 ## skipped, with a note.
 
@@ -35,6 +37,8 @@ const
   maxPosts* = 2          ## linked posts read per Telegram post
   maxPictures* = 3       ## pictures downloaded and OCR'd per linked post
   budgetSeconds* = 45.0  ## time for all the Instagram reading of one Telegram post
+  stepSeconds* = 25.0    ## budget a picture or post needs left to be started
+                         ## (a download may take 20 s, plus a margin)
   cacheSize* = 200       ## linked posts remembered
   cacheSeconds* = 6 * 3600.0
   postKinds = ["p", "reel", "reels", "tv"]
@@ -83,7 +87,11 @@ proc instagramLinks*(text: string): InstagramLinks =
     let at = lower.find(host, i)
     if at < 0: break
     i = at + host.len
-    if at > 0 and lower[at - 1] notin {'/', '.', ' ', '\t', '\n', '\r', '\v', '\f'}: continue
+    # what may come just before the host: not an ASCII letter, digit or other
+    # punctuation (`notinstagram.com`), but any non-ASCII byte is fine (an
+    # Arabic letter, an emoji, U+00A0, U+200E/U+200F glued before it)
+    if at > 0 and lower[at - 1] notin {'/', '.', ' ', '\t', '\n', '\r', '\v', '\f',
+                                       '(', ':', '"', '\'', '\x80'..'\xFF'}: continue
     # up to three path segments; a segment ends at '/', anything else ends the path
     var segs: seq[string]
     var origs: seq[string]
@@ -96,9 +104,11 @@ proc instagramLinks*(text: string): InstagramLinks =
       if e >= text.len or text[e] != '/': break
       k = e + 1
     if segs.len >= 2 and segs[0] == "share":
-      if segs[1] in postKinds and segs.len >= 3 and segs[2] != "":
-        let s = "share/" & segs[1] & "/" & origs[2]
-        if s notin result.shares: result.shares.add s
+      var s = ""
+      if segs[1] in postKinds:
+        if segs.len >= 3 and segs[2] != "": s = "share/" & segs[1] & "/" & origs[2]
+      elif segs[1] != "": s = "share/" & origs[1]    # instagram.com/share/<token>
+      if s != "" and s notin result.shares: result.shares.add s
       continue
     var c = -1
     if segs.len >= 2 and segs[0] in postKinds: c = 1
@@ -161,7 +171,7 @@ proc readPost*(ig: Instagram, code: string, deadline = Inf): Future[InstagramRea
     r.unread = true
     return r
   var parts: seq[string]
-  var tried, read, fromText, failed = 0
+  var tried, read, failed = 0
   var outOfTime = false
   for item in items:
     if item.kind != JObject: continue
@@ -169,14 +179,11 @@ proc readPost*(ig: Instagram, code: string, deadline = Inf): Future[InstagramRea
     if alt != "" and alt notin parts: parts.add alt
     let caption = item{"caption"}.getStr("").strip
     if caption != "" and caption notin parts: parts.add caption
-    if "text that says" in alt.toLowerAscii:
-      inc fromText      # Instagram already read this picture's text: kept above
-      continue
     var url = item{"image_url"}.getStr("").strip
     if url == "": url = item{"thumbnail"}.getStr("").strip
     if not url.startsWith("https://"): continue
     if tried >= maxPictures: continue
-    if ig.clock() >= deadline:
+    if deadline - ig.clock() < stepSeconds:
       outOfTime = true
       continue
     inc tried
@@ -195,13 +202,11 @@ proc readPost*(ig: Instagram, code: string, deadline = Inf): Future[InstagramRea
   r.text = parts.join("\n")
   if outOfTime:
     r.notes.add "instagram " & code & ": time for Instagram spent, pictures left unread"
-  if read + fromText == 0:
+  if read == 0:
     r.notes.add "instagram " & code & ": no pictures read"
     r.unread = true
   else:
-    var n = "read instagram post " & code & " (" & $(read + fromText) & " pictures"
-    if fromText > 0: n.add ", " & $fromText & " by Instagram's own text reading"
-    r.notes.add n & ")"
+    r.notes.add "read instagram post " & code & " (" & $read & " pictures)"
   if not r.unread and not outOfTime and failed == 0: ig.remember(code, r)
   return r
 
@@ -219,7 +224,7 @@ proc readLinked*(ig: Instagram, text: string): Future[InstagramRead] {.async.} =
   for code in links.codes:
     if n >= maxPosts: break
     inc n
-    if ig.clock() >= deadline:
+    if deadline - ig.clock() < stepSeconds:
       r.notes.add "instagram " & code & ": time for Instagram spent, not read"
       continue
     let p = await ig.readPost(code, deadline)

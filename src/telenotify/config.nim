@@ -33,8 +33,10 @@
 ##   (an Instagram front end, e.g. "http://127.0.0.1:8430"; it must start
 ##   with http:// or https://) through which the pictures of Instagram posts
 ##   linked in an ad are read (#114): up to 2 posts per ad and 3 pictures per
-##   post, about 45 s per ad in all, each post read in full remembered for
-##   6 h (200 posts). Share links (instagram.com/share/...) aren't read.
+##   post, within a budget of about 45 s per ad (nothing is started with
+##   less than 25 s left; a step already running can still take up to about
+##   20 s to download plus 60 s of OCR), each post read in full remembered
+##   for 6 h (200 posts). Share links (instagram.com/share/...) aren't read.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
 ##
