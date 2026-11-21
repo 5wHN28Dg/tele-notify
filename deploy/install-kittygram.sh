@@ -86,7 +86,7 @@ apt-get update -q > /dev/null || fail "apt-get update failed"
 # else redis (the same protocol) where this release has no valkey (Debian 12,
 # Ubuntu 22.04). Never both: they'd fight over the port.
 installed() {
-  dpkg-query -W -f '${Status}' "$1" 2> /dev/null | grep -q 'install ok installed'
+  dpkg-query -W -f '${Status}' "$1" 2> /dev/null | grep -q 'ok installed$'
 }
 if installed redis-server && ! installed valkey-server; then
   cache=redis-server
@@ -157,7 +157,8 @@ as_kg grep -q 'listen 127\.0\.0\.1:\${{PORT}};' "$app/nginx.conf" ||
 if [ ! -f "$app/config.lua" ]; then
   as_kg cp "$app/config.example.lua" "$app/config.lua"
 fi
-as_kg chmod 600 "$app/config.lua"
+as_kg chmod 600 "$app/config.lua" ||
+  fail "$app/config.lua doesn't belong to the kittygram user (chown kittygram:kittygram it, then run this again)"
 # a random secret for kittygram's signed tokens, given to sed on its standard
 # input (not on a command line, where other users could see it)
 printf 's/secret = "CHANGE_THIS!"/secret = "%s"/\n' "$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')" |
@@ -177,6 +178,10 @@ as_kg sed -n '/^config("production", {/,/^})/p' "$app/config.lua" | grep -q 'all
   fail "could not turn JSON answers on in $app/config.lua"
 as_kg sed -n '/^config("production", {/,/^})/p' "$app/config.lua" | grep -q 'num_workers = "1"' ||
   fail "could not set one worker in $app/config.lua"
+
+# stopped from here on: its modules may be replaced, and a failure below
+# leaves it stopped, not running without them
+systemctl stop kittygram > /dev/null 2>&1 || true
 
 # kittygram's Lua modules at the pinned versions, again when the commit or
 # the pins changed
@@ -237,8 +242,8 @@ EOF
 mv -f "$units/kittygram.service.tmp" "$units/kittygram.service"
 systemctl daemon-reload || fail "systemctl daemon-reload failed"
 systemctl enable kittygram > /dev/null 2>&1 || fail "could not enable kittygram.service"
-systemctl stop kittygram > /dev/null 2>&1 || true
-if curl -fsS -o /dev/null --max-time 5 "http://127.0.0.1:$port/"; then
+# any answer at all (even an error page) means the port is taken
+if curl -sS -o /dev/null --max-time 5 "http://127.0.0.1:$port/" 2> /dev/null; then
   fail "another program answers on 127.0.0.1:$port; stop it or give this script another port"
 fi
 systemctl start kittygram || fail "could not start kittygram; see journalctl -u kittygram"

@@ -105,10 +105,11 @@ class Host:
              'export AS_KITTYGRAM=1\n'
              'exec "$@"\n')
         curl = ("#!/bin/sh\n" + rec +
-                'out=""; url=""\n'
+                'out=""; url=""; all=" $* "\n'
                 'while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; --max-time) shift 2;; -*) shift;; *) url=$1; shift;; esac; done\n'
                 'case "$url" in http://127.0.0.1:*)\n'
                 f'  if [ "${{FAKE_PORT_TAKEN:-}}" = 1 ]; then echo "<p>some other program</p>"; exit 0; fi\n'
+                f'  if [ "${{FAKE_PORT_TAKEN:-}}" = 404 ]; then case "$all" in *" -fsS "*) exit 22;; esac; exit 0; fi\n'
                 f'  [ -f "{up}" ] || exit 7; echo "<p>Kittygram is an anonymous Instagram frontend</p>"; exit 0;;\n'
                 'esac\n'
                 '[ -n "$out" ] && echo junk > "$out"\n')
@@ -131,7 +132,7 @@ class Host:
         _exe(lr / "luarocks", "#!/bin/sh\n" + rec + who +
              'if [ "$1" = --version ]; then echo "/x/luarocks 3.11.1"; exit 0; fi\n'
              'if [ "$1" = init ]; then printf \'#!/bin/sh\\necho "app-luarocks $*" >> "%s"\\nmkdir -p lua_modules\\n\' '
-             f'"{log}" > ./luarocks; chmod +x ./luarocks; fi\n')
+             f'"{log}" > ./luarocks; [ "${{FAKE_BUILD_FAIL:-}}" = 1 ] && echo "exit 1" >> ./luarocks; chmod +x ./luarocks; fi\n')
         if built:
             _exe(self.home / "openresty" / "bin" / "openresty",
                  "#!/bin/sh\n" + who + "echo 'nginx version: openresty/1.27.1.2' >&2\n")
@@ -325,3 +326,18 @@ def test_modules_are_installed_from_scratch(tmp_path):
     marker.write_text("an older lock\n")
     assert h.run().returncode == 0
     assert not newer.exists()
+
+
+def test_a_port_answering_with_an_error_page_is_taken_too(tmp_path):
+    h = Host(tmp_path)
+    r = h.run(FAKE_PORT_TAKEN="404")
+    assert r.returncode != 0 and "another program answers" in r.stderr
+
+
+def test_a_failed_module_build_leaves_kittygram_stopped_not_running_without_modules(tmp_path):
+    h = Host(tmp_path)
+    r = h.run(FAKE_BUILD_FAIL="1")
+    assert r.returncode != 0 and "Lua modules failed" in r.stderr
+    calls = h.calls()
+    assert "systemctl stop kittygram" in calls
+    assert calls.index("systemctl stop kittygram") < calls.index("app-luarocks build")
