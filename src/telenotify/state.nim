@@ -10,7 +10,7 @@
 ## | `processed` | every message judged: chat, id, verdict, role, reasons, when. Lets the bot skip messages it has already seen (restarts, the startup backlog overlapping live updates) and gives the numbers for `telenotify stats` (#12–#15) |
 ## | `published` | the text of what was published, for duplicate detection |
 ## | `reviews` | the review queue: unclear posts waiting for you to send or discard them (`telenotify review`). Your decisions double as labels for the test corpus |
-## | `meta` | small values: the last heartbeat (downtime alerts), the watched chats you lost access to (`chat_access:<chat>`) |
+## | `meta` | small values: the last heartbeat (downtime alerts), the watched chats you lost access to (`chat_access:<chat>`), your user id for your own bot (`notify_chat_id`) |
 ##
 ## You can open the file with any SQLite tool (`sqlite3 state.sqlite3`).
 
@@ -264,16 +264,17 @@ proc addAlert*(s: State, text: string) =
   s.db.exec(sql"INSERT INTO alerts (at, text) VALUES (?, ?)", now(), text)
   s.db.exec(sql"DELETE FROM alerts WHERE id <= (SELECT MAX(id) FROM alerts) - 500")
 
-proc markLoginNeeded*(s: State, alert: string) =
+proc markLoginNeeded*(s: State, alert: string): bool {.discardable.} =
   ## The account isn't logged in: the connection says so, and `alert` is kept
   ## once until `login_needed` is cleared. All or nothing, so a failure can't
-  ## skip the alert or add it twice.
+  ## skip the alert or add it twice. True when the alert was added now.
   s.db.exec(sql"BEGIN IMMEDIATE")
   try:
     s.setMeta("connection", "logged out")
     if s.getMeta("login_needed") != "1":
       s.addAlert(alert)
       s.setMeta("login_needed", "1")
+      result = true
     s.db.exec(sql"COMMIT")
   except CatchableError as e:
     s.db.exec(sql"ROLLBACK")

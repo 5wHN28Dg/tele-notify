@@ -1,7 +1,8 @@
 ## The whole bot against a fake Telegram: no account, no network.
 
 import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json, sequtils]
-import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup]
+import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup, notify]
+import db_connector/db_sqlite
 
 const target = -999'i64
 
@@ -21,6 +22,7 @@ type FakeTg = ref object
   unreadError: Table[int64, string]  # chats whose backlog read fails with this TDLib error
   access: Table[int64, ChatAccess]   # chatAccess answers; default: a member
   accessError: Table[int64, string]  # chats chatAccess fails for
+  linkCalls: int
 
 proc toTelegram(f: FakeTg): Telegram =
   result = Telegram()
@@ -55,6 +57,7 @@ proc toTelegram(f: FakeTg): Telegram =
       return true
   result.link = proc (chat, id: int64): Future[string] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
+      inc f.linkCalls
       if f.linkFails: raise newException(IOError, "no link")
     return "https://t.me/c/" & $(-chat) & "/" & $id
   result.sendText = proc (chat: int64, text: string): Future[void] {.async, closure, gcsafe.} =
@@ -687,56 +690,174 @@ suite "what the terminal screen reads":
       l.forgetOldTexts()
       check st.rawTextOf(-1, 1) == (if dry: "old" else: "")
 
+const tech = "We are hiring a junior network technician in Basra. Fresh graduates welcome."
+
+proc recorder(sent: ref seq[string], err = "", delayMs = 0): Notifier =
+  result = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+    if delayMs > 0: await sleepAsync(delayMs)
+    {.cast(gcsafe).}: sent[].add text
+    return err
+
+proc live(l: Listener, ms: varargs[TgMessage]) =
+  ## Messages that arrive after the backlog, handled at once.
+  for m in ms: l.enqueue m
+  waitFor l.processQueue()
+  waitFor l.flushNotifications()
+
 suite "notifications through your own bot (#122)":
-  test "a published post and a post for review each notify; a reject doesn't":
+  test "live: a published post and a post for review each notify; a reject doesn't":
     let f = FakeTg()
-    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear), msg(-1, 12, bad)]
     let (l, _) = setup(f)
-    var sent: seq[string]
-    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
-      {.cast(gcsafe).}: sent.add text
-      return ""
+    let sent = new seq[string]
+    l.notify = recorder(sent)
     waitFor l.bootstrap()
-    check sent.len == 2
+    l.live(msg(-1, 10, good), msg(-1, 11, unclear), msg(-1, 12, bad))
+    check sent[].len == 2
     check sent[0].startsWith("✅ Published") and "chat1" in sent[0] and "https://t.me/c/1/10" in sent[0]
     check sent[1].startsWith("🤔 For review") and "chat1" in sent[1] and "https://t.me/c/1/11" in sent[1]
 
+  test "the backlog after downtime sends one summary, then live posts notify one by one (review run 1)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear), msg(-1, 12, bad), msg(-1, 13, unclear & " 2")]
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    waitFor l.flushNotifications()
+    check sent[] == @["📥 While you were away: 1 published, 2 for review"]
+    l.live(msg(-1, 20, unclear & " 3"))
+    check sent[].len == 2 and sent[1].startsWith("🤔 For review")
+
+  test "a backlog with nothing to tell sends nothing (review run 1)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 12, bad)]
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    waitFor l.flushNotifications()
+    check sent[].len == 0
+
+  test "a slow bot never slows the posts or the alerts (review run 1)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear), msg(-1, 12, bad)]
+    let (l, st) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent, delayMs = 1500)
+    var t0 = epochTime()
+    waitFor l.alert("first")
+    check epochTime() - t0 < 0.5
+    check st.alertTexts() == @["first"]                     # recorded at once
+    check f.texts.len == 1                                   # and in Saved Messages
+    t0 = epochTime()
+    waitFor l.bootstrap()
+    l.enqueue msg(-2, 20, tech)
+    l.enqueue msg(-1, 21, unclear & " 3")
+    waitFor l.processQueue()
+    check epochTime() - t0 < 1.0
+    check f.forwarded.len == 2
+    waitFor l.flushNotifications()
+    check sent[].len == 4                                    # alert, summary, two live posts
+
   test "alerts go through the bot too, and a failing bot doesn't stop anything":
     let f = FakeTg()
-    f.chats[-1] = @[msg(-1, 10, good)]
     let (l, _) = setup(f)
     var lines: seq[string]
     l.log = proc (line: string) {.closure, gcsafe.} =
       {.cast(gcsafe).}: lines.add line
-    var sent: seq[string]
-    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
-      {.cast(gcsafe).}: sent.add text
-      return "HTTP 401"
+    let sent = new seq[string]
+    l.notify = recorder(sent, err = "HTTP 401: Unauthorized")
     waitFor l.alert("something")
     waitFor l.bootstrap()
+    l.live(msg(-1, 10, good))
     check f.forwarded == @[(-1'i64, 10'i64)]          # published anyway
-    check sent.len == 2 and sent[0].startsWith("⚠️ tele-notify: something")
+    check sent[].len == 2 and sent[0].startsWith("⚠️ tele-notify: something")
     check lines.anyIt("could not notify" in it and "HTTP 401" in it)
 
-  test "a dry run's notifications say so":
+  test "\"alerts\": false silences the bot's alerts too, not the posts (review run 1)":
     let f = FakeTg()
-    f.chats[-1] = @[msg(-1, 10, good)]
-    let (l, _) = setup(f, dryRun = true)
-    var sent: seq[string]
-    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
-      {.cast(gcsafe).}: sent.add text
-      return ""
+    let (l, st) = setup(f)
+    l.cfg.alerts = false
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.alert("something")
+    waitFor l.flushNotifications()
+    check sent[].len == 0 and f.texts.len == 0 and st.alertTexts() == @["something"]
     waitFor l.bootstrap()
-    check sent.len == 1 and sent[0].startsWith("✅ Would publish [dry run]")
+    l.live(msg(-1, 10, good))
+    check sent[].len == 1 and sent[0].startsWith("✅ Published")
+
+  test "a dry run sends no per-post notifications; its alerts say so (review run 1)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear)]
+    let (l, _) = setup(f, dryRun = true)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    l.live(msg(-2, 20, tech), msg(-1, 21, unclear & " 3"))
+    check sent[].len == 0
+    waitFor l.alert("something")
+    waitFor l.flushNotifications()
+    check sent[] == @["⚠️ tele-notify [dry run]: something"]
+
+  test "an album notifies once":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    var parts: seq[TgMessage]
+    for id in 30'i64 .. 32:
+      var m = msg(-1, id, if id == 30: good else: "")
+      m.albumId = 777
+      parts.add m
+    l.live(parts)
+    check f.forwarded.len == 3
+    check sent[].len == 1 and sent[0].startsWith("✅ Published")
+
+  test "a post that couldn't be queued for review isn't announced for review (review run 1)":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    let db = open(getTempDir() / ("tn-listener-" & $n) / "state.sqlite3", "", "", "")
+    db.exec(sql"DROP TABLE reviews")
+    db.close()
+    f.forwardFails = true                    # the error path, then addReview fails too
+    l.live(msg(-1, 10, good))
+    check sent[].allIt("For review" notin it)
+
+  test "a review post asks for its link once (review run 1)":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    l.live(msg(-1, 11, unclear))
+    check f.linkCalls == 1
+    check sent[].len == 1 and "https://t.me/c/1/11" in sent[0]
 
   test "a post you approved, once sent to your channel, notifies too":
     let f = FakeTg()
     let (l, st) = setup(f)
-    var sent: seq[string]
-    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
-      {.cast(gcsafe).}: sent.add text
-      return ""
+    let sent = new seq[string]
+    l.notify = recorder(sent)
     st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "https://t.me/c/1/7")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
     waitFor l.sendApproved()
-    check sent.len == 1 and sent[0].startsWith("✅ Published after your review") and "https://t.me/c/1/7" in sent[0]
+    waitFor l.flushNotifications()
+    check sent[].len == 1 and sent[0].startsWith("✅ Published after your review") and "https://t.me/c/1/7" in sent[0]
+
+  test "after review, the notification has the link the channel got, even if none was stored (review run 1)":
+    let f = FakeTg()
+    f.noForward.incl -1
+    let (l, st) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    st.addReview(-1, 8, "chat1", unclear, "no level", "مهندس كهرباء", "")
+    for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
+    waitFor l.sendApproved()
+    waitFor l.flushNotifications()
+    check f.texts.len == 1 and "https://t.me/c/1/8" in f.texts[0][1]
+    check sent[].len == 1 and "https://t.me/c/1/8" in sent[0]

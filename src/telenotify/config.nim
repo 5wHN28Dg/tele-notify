@@ -34,8 +34,13 @@
 ## * `notify_bot_token` (default none): your own bot's token from @BotFather.
 ##   Press Start in the bot's chat once; the bot then notifies you there (a
 ##   normal Telegram notification on phone and laptop) when a post goes to
-##   review, when one is published, and for every alert (#122). A secret:
-##   keep it out of anything you share.
+##   review, when one is published, and for every alert, the log-out alert
+##   included (#122). The backlog after downtime is one summary ("📥 While
+##   you were away: 3 published, 5 for review"), not a message per post. A
+##   dry run sends no per-post notifications, only its alerts, marked
+##   "[dry run]"; `"alerts": false` keeps alerts out of the bot too. A token
+##   that isn't `digits:letters` turns notifications off with one log line.
+##   A secret: keep it out of anything you share.
 ##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the

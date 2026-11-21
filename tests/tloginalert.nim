@@ -46,3 +46,17 @@ suite "login needed":
   test "TDLib closing by itself isn't a log-out":
     check not isLogOut("authorizationStateClosing")
     check isLogOut("authorizationStateLoggingOut")
+
+  test "the log-out alert also goes through your bot, once per log-out (review run 1)":
+    let st = openState(dir / "state3.sqlite3")
+    defer: st.close()
+    var told: seq[string]
+    let tell = proc (text: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: told.add text
+    for _ in 1 .. 3:                       # systemd restarts the bot again and again
+      recordLoginNeeded(st, "authorizationStateWaitPhoneNumber", dryRun = false, tell)
+    check told.len == 1
+    check told[0].startsWith("⚠️ tele-notify: Run `systemctl --user stop tele-notify`")
+    clearLoginNeeded(st)
+    recordLoginNeeded(st, "authorizationStateLoggingOut", dryRun = true, tell)
+    check told.len == 2 and told[1].startsWith("⚠️ tele-notify [dry run]: Run")

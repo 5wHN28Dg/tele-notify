@@ -98,6 +98,13 @@ suite "corpus ids":
     check corpusId(%*{"text": "x"}) == "?"
 
 suite "config":
+  test "notify_bot_token: none by default, spaces around it removed (#122)":
+    var j2 = parseFile(currentSourcePath.parentDir / "keywords.json")
+    check not j2.hasKey("notify_bot_token")
+    check parseConfig(j2).notifyBotToken == ""
+    j2["notify_bot_token"] = %"  123456:AAH-x_y9\n"
+    check parseConfig(j2).notifyBotToken == "123456:AAH-x_y9"
+
   test "an empty data_dir means the default folder (review)":
     var j2 = parseFile(currentSourcePath.parentDir / "keywords.json")
     j2["data_dir"] = %""
