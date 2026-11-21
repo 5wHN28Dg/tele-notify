@@ -81,6 +81,7 @@ class Host:
         log = self.log
         rec = f'echo "$(basename "$0") $*" >> "{log}"\n'
         _exe(self.fakes / "apt-get", "#!/bin/sh\n" + rec)
+        _exe(self.fakes / "apt-cache", '#!/bin/sh\n[ "${FAKE_NO_VALKEY:-}" != 1 ]\n')
         _exe(self.fakes / "systemctl", "#!/bin/sh\n" + rec)
         _exe(self.fakes / "id", "#!/bin/sh\n"
              f'if [ "$1" = -u ]; then echo {0 if root else 1000}; exit 0; fi\n'
@@ -88,9 +89,10 @@ class Host:
         _exe(self.fakes / "useradd", "#!/bin/sh\n" + rec +
              'for last; do :; done\n'
              f'touch "{self.users}/kittygram"; mkdir -p "{self.home}"\n')
-        # runuser -u kittygram -- CMD...: run CMD here, with the fakes still found
+        # runuser -u kittygram -- CMD...: run CMD here, marked as kittygram's
         _exe(self.fakes / "runuser", "#!/bin/sh\n"
              'while [ "$1" != -- ]; do shift; done; shift\n'
+             'export AS_KITTYGRAM=1\n'
              'exec "$@"\n')
         curl = ("#!/bin/sh\n" + rec +
                 'out=""; url=""\n'
@@ -111,17 +113,19 @@ class Host:
              '  checkout) echo "$3" > "$d/.git/HEAD_SHA";;\n'
              'esac\n')
         _exe(lr / "lapis", "#!/bin/sh\n" + rec)
-        _exe(lr / "luarocks", "#!/bin/sh\n" + rec +
+        # who ran a program in kittygram's folder: root never should
+        who = f'echo "ran $0 as ${{AS_KITTYGRAM:-root}}" >> "{log}"\n'
+        _exe(lr / "luarocks", "#!/bin/sh\n" + rec + who +
              'if [ "$1" = --version ]; then echo "/x/luarocks 3.11.1"; exit 0; fi\n'
              'if [ "$1" = init ]; then printf \'#!/bin/sh\\necho "app-luarocks $*" >> "%s"\\n\' '
              f'"{log}" > ./luarocks; chmod +x ./luarocks; fi\n')
         if built:
             _exe(self.home / "openresty" / "bin" / "openresty",
-                 "#!/bin/sh\necho 'nginx version: openresty/1.27.1.2' >&2\n")
+                 "#!/bin/sh\n" + who + "echo 'nginx version: openresty/1.27.1.2' >&2\n")
         else:
             (lr / "luarocks").unlink()
         self.env = dict(os.environ, PATH=f"{self.fakes}:{os.environ['PATH']}", KG_HOME=str(self.home),
-                        KG_UNITS=str(self.units), KG_WAIT_TRIES="2")
+                        KG_UNITS=str(self.units), KG_LIBEXEC=str(tmp / "libexec"), KG_WAIT_TRIES="2")
 
     def run(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
         return subprocess.run(["sh", str(SCRIPT), *args], env=dict(self.env, **extra), capture_output=True,
@@ -152,13 +156,21 @@ def test_a_first_install_sets_kittygram_up_for_the_bot(tmp_path):
     assert 'or "CHANGE_THIS!!"' in h.config()                               # the docker block's own
     assert stat.S_IMODE((h.home / "app" / "config.lua").stat().st_mode) == 0o600
     unit = (h.units / "kittygram.service").read_text()
-    assert f"ExecStart={h.home}/start.sh" in unit and "127.0.0.1:8430" in unit and "MemoryMax=300M" in unit
-    assert f"cd {h.home}/app" in (h.home / "start.sh").read_text()
+    start = tmp_path / "libexec" / "kittygram-start"
+    assert f"ExecStart={start}" in unit and "127.0.0.1:8430" in unit
+    for line in ("User=kittygram", "MemoryMax=300M", "NoNewPrivileges=yes", "ProtectSystem=strict",
+                 f"ReadWritePaths={h.home}/app", "ProtectHome=yes", "PrivateTmp=yes",
+                 "After=network-online.target valkey-server.service"):
+        assert line in unit.splitlines(), line
+    assert f"cd {h.home}/app" in start.read_text()
+    assert not (h.home / "start.sh").exists()                 # not where kittygram's user could change it
+    assert (h.home / "app" / "luarocks.lock").read_text() == (REPO / "deploy" / "kittygram-luarocks.lock").read_text()
     calls = h.calls()
     assert "useradd --system" in calls and "app-luarocks build" in calls and "lapis migrate production" in calls
     assert "systemctl enable kittygram" in calls and "systemctl restart kittygram" in calls
     assert "systemctl enable --now valkey-server" in calls
-    assert not list((h.home / "src").glob(".config-edits.*"))
+    assert "as root" not in calls                               # kittygram's programs ran as kittygram
+    assert "ran " in calls
 
 
 def test_running_it_again_keeps_the_secret_and_rebuilds_nothing(tmp_path):
@@ -214,3 +226,31 @@ def test_another_commit_is_checked_out_and_its_modules_built(tmp_path):
     assert f"checkout -q {COMMIT}" in h.calls()
     assert (h.home / "app" / ".git" / "HEAD_SHA").read_text().strip() == COMMIT
     assert "app-luarocks build" in h.calls()
+
+
+def test_redis_where_there_is_no_valkey(tmp_path):
+    """Debian 12 and Ubuntu 22.04 have no valkey package; redis speaks the same protocol on 6379."""
+    h = Host(tmp_path)
+    r = h.run(FAKE_NO_VALKEY="1")
+    assert r.returncode == 0, r.stderr
+    assert "redis-server" in h.calls() and "valkey" not in h.calls()
+    assert "After=network-online.target redis-server.service" in (h.units / "kittygram.service").read_text()
+
+
+def test_new_pins_rebuild_the_modules(tmp_path):
+    h = Host(tmp_path)
+    assert h.run().returncode == 0
+    marker = h.home / "app" / "lua_modules" / ".tele-notify-modules"
+    marker.write_text(marker.read_text().split()[0] + " an-older-lock\n")
+    h.log.unlink()
+    assert h.run().returncode == 0
+    assert "app-luarocks build" in h.calls()
+
+
+def test_the_lock_pins_every_module_running_with_the_bot():
+    text = (REPO / "deploy" / "kittygram-luarocks.lock").read_text()
+    pins = dict(re.findall(r'^\s+\[?"?([a-z0-9-]+)"?\]? = "([^"]+)",$', text, re.MULTILINE))
+    for name in ("lapis", "lua-resty-http", "lua-resty-openssl", "lua-resty-redis", "lapis-redis", "htmlparser",
+                 "lua-cjson", "lsqlite3", "luautf8"):                 # kittygram's own dependencies
+        assert name in pins, name
+    assert len(pins) == 18
