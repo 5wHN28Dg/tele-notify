@@ -1,7 +1,7 @@
 ## The commands that talk to Telegram: login, chats, run, review, stats.
 
 import std/[asyncdispatch, json, os, strutils, strformat, tables, times, posix, unicode]
-import config, td, session, telegram, state, listener, fetch, gather, compare
+import config, td, session, telegram, state, listener, fetch, gather, compare, instagram
 
 var stopRequested = new bool   # set by Ctrl-C or `systemctl stop` (SIGTERM)
 
@@ -167,6 +167,8 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
       else: discard))
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
+  l.instagram = instagramFor(cfg.instagramFrontend, defaultOcr())
+  if l.instagram != nil: l.log "instagram links: read through " & cfg.instagramFrontend
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
   await s.loadAllChats()
   for chat in cfg.chats:

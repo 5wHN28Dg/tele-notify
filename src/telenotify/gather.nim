@@ -15,7 +15,7 @@
 ## different jobs together. The post text has to speak for itself.
 
 import std/[asyncdispatch, strutils, uri]
-import boards, fetch, ocr
+import boards, fetch, ocr, instagram
 
 type
   Post* = object
@@ -69,7 +69,7 @@ proc follow(link: JobLink, fetcher: Fetcher, jobSites: seq[string]): Future[Foll
 
 proc gather*(post: Post, fetcher: Fetcher, ocr: Ocr,
              jobSites: seq[string] = @defaultJobPostingSites,
-             scrape = true): Future[Gathered] {.async.} =
+             scrape = true, instagram: Instagram = nil): Future[Gathered] {.async.} =
   ## Never raises: OCR and download problems end up in `notes`.
   var parts = @[post.text]
   var notes: seq[string]
@@ -80,6 +80,15 @@ proc gather*(post: Post, fetcher: Fetcher, ocr: Ocr,
       notes.add "read " & $r.text.len & " characters from an image"
     else:
       notes.add "OCR failed: " & r.error
+  if scrape and instagram != nil:
+    # Instagram posts the ad links to (#114): their pictures often hold the details
+    var n = 0
+    for code in instagramCodes((@[post.text] & post.buttons).join("\n")):
+      if n >= maxPosts: break
+      inc n
+      let r = await instagram(code)
+      notes.add r.notes
+      if r.text.len > 0: parts.add r.text
   let all = (parts & post.buttons).join("\n")
   let links = findJobLinks(all, jobSites)
   if scrape and links.len == 1:

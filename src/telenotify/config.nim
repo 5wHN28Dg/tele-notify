@@ -29,6 +29,9 @@
 ## * `keep_text_days` (default 90): how long the text of each judged post
 ##   is kept in the state database (for searching it in the terminal
 ##   screen); 0 keeps it forever. Verdicts and reasons are always kept.
+## * `instagram_frontend` (default none): the address of a kittygram
+##   (an Instagram front end, e.g. "http://127.0.0.1:8430") through which the
+##   pictures of Instagram posts linked in an ad are read (#114).
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
 ##
@@ -63,6 +66,7 @@ type
     alerts*: bool              ## send downtime alerts to Saved Messages
     alertAfterMinutes*: int    ## downtime shorter than this is only logged
     keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
+    instagramFrontend*: string ## a kittygram's address: read linked Instagram posts (#114)
     apiId*: int
     apiHash*: string
     chats*: seq[int64]
@@ -161,6 +165,7 @@ proc parseConfig*(j: JsonNode): Config =
   result.alerts = j{"alerts"}.getBool(true)
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
   result.keepTextDays = j{"keep_text_days"}.getInt(90)
+  result.instagramFrontend = j{"instagram_frontend"}.getStr("").strip
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)
