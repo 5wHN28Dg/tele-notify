@@ -95,11 +95,13 @@ async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
 # it gives way only where the box is too short, as at 80 x 24)
 LOGIN_LAYOUTS = {
     # (size, real service, dry-run service): (the line starts, the Service row shows; None: either,
-    # as long as Mode and the pending count stay in the box). Under 100 columns the Bot box has the
-    # whole width (#57); beside the Activity box it is 64 cells at 120 columns.
+    # as long as Mode and the pending count stay in the box). Under 100 window columns the Bot box has
+    # the whole width (#57); from 100 it is beside the Activity box, 64 cells at 120 columns.
     ((80, 24), "inactive", "active"): ("Not logged in to Telegram.", True),
     ((60, 24), "activating", "inactive"): ("Not logged in:", None),
-    ((100, 30), "activating", "inactive"): ("Not logged in to Telegram.", True),
+    ((99, 30), "activating", "inactive"): ("Not logged in to Telegram.", True),
+    ((100, 30), "activating", "inactive"): ("Not logged in:", False),   # a 2-row Service row: 7 rows, one too many
+    ((100, 30), "activating", "active"): ("Not logged in:", True),      # a 1-row Service row: 6 rows, it fits
     ((120, 40), "inactive", "active"): ("Not logged in:", True),
     ((120, 40), "unknown", "unknown"): ("Not logged in:", True),     # a 2-row Service row still fits
     ((160, 40), "inactive", "active"): ("Not logged in to Telegram.", True),
@@ -556,3 +558,142 @@ async def test_a_narrow_window_shows_one_top_box_at_a_time(paths):
         await pilot.press("v")                    # nothing to flip: both are shown
         await settle(app, pilot)
         assert bot_box.display and activity.display
+
+
+def shown(app, widget) -> bool:
+    """On screen: displayed, inside every displayed ancestor, with some area."""
+    return all(w.display for w in widget.ancestors_with_self
+               if hasattr(w, "display")) and widget.region.area > 0
+
+
+async def test_p_in_a_narrow_window_shows_the_activity_box_first(paths):
+    """Review run 1, finding 1: with the Bot box shown, p opened a picker in the hidden Activity box."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        activity, sel = app.query_one("#dash-activity"), app.query_one("#period", Select)
+        assert not activity.display
+        await pilot.press("p")
+        await settle(app, pilot)
+        assert activity.display and sel.expanded and app.focused is not None and shown(app, app.focused)
+        await pilot.press("down", "enter")
+        await settle(app, pilot)
+        assert app.query_one(DashboardPane).choice.kind != "7d"
+        assert activity.display and not app.query_one("#dash-bot").display   # the result stays in view
+        assert app.focused is not None and shown(app, app.focused)
+
+
+@pytest.mark.parametrize("answer", ["cancel", "submit"])
+async def test_d_in_a_narrow_window_shows_the_activity_box(paths, now, answer):
+    """Review run 1, findings 1 and 6: the dates form's result is in the Activity box, so it is shown
+    before the form opens and stays shown after it closes."""
+    from telenotify_tui.screens.dashboard import RangeScreen
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        activity = app.query_one("#dash-activity")
+        await pilot.press("d")
+        await settle(app, pilot)
+        assert isinstance(app.screen, RangeScreen)
+        assert activity.display and not app.query_one("#dash-bot").display
+        if answer == "cancel":
+            await pilot.press("escape")
+        else:
+            day = dd.today(now).isoformat()
+            app.screen.query_one("#range-from").value = day
+            app.screen.query_one("#range-to").value = day
+            await pilot.click("#range-ok")
+        await settle(app, pilot)
+        assert not isinstance(app.screen, RangeScreen)
+        assert activity.display and not app.query_one("#dash-bot").display
+        if answer == "submit":
+            assert app.query_one(DashboardPane).choice.kind == "custom"
+        assert app.focused is not None and shown(app, app.focused)
+
+
+@pytest.mark.parametrize("start", ["#svc-stop", "#period-range"])
+async def test_a_flip_never_leaves_focus_in_the_hidden_box(paths, fake_systemctl, start):
+    """Review run 1, finding 2: v hid the focused widget and Enter still pressed it."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        if start == "#period-range":
+            await pilot.press("v")
+            await settle(app, pilot)
+        app.query_one(start).focus()
+        await settle(app, pilot)
+        assert app.focused is app.query_one(start)
+        await pilot.press("v")
+        await settle(app, pilot)
+        focused = app.focused
+        assert focused is not None and focused is not app.query_one(start) and shown(app, focused)
+        box = "#dash-activity" if start == "#svc-stop" else "#dash-bot"
+        assert app.query_one(box) in focused.ancestors   # the box just shown
+        if start == "#svc-stop":
+            await pilot.press("enter")
+            await settle(app, pilot)
+            assert not isinstance(app.screen, ConfirmScreen)          # the hidden Stop wasn't pressed
+        assert not [c for c in fake_systemctl if c[0] == "action"]
+
+
+async def test_a_resize_never_leaves_focus_in_the_hidden_box(paths):
+    """Review run 1, finding 2: Dates… focused in a wide window, then the window narrows."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        app.query_one("#period-range").focus()
+        await settle(app, pilot)
+        await pilot.resize_terminal(80, 24)
+        await settle(app, pilot)
+        assert not app.query_one("#dash-activity").display
+        assert app.focused is not None and shown(app, app.focused)
+
+
+@pytest.mark.parametrize(("size", "narrow", "short"), [
+    ((100, 30), False, False), ((99, 30), True, False), ((120, 29), False, True)])
+async def test_the_thresholds_are_the_window_size(paths, size, narrow, short):
+    """Review run 1, finding 3: 100 columns and 30 rows of the window, as documented, not of the pane."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=size) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        assert pane.has_class("-narrow") == narrow and pane.has_class("-short") == short
+        assert app.query_one("#dash-activity").display != narrow
+
+
+async def test_v_does_nothing_in_a_wide_window(paths):
+    """Review run 1: both boxes fit, so v isn't offered and pressing it changes nothing."""
+    from textual.widgets._footer import FooterKey
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        assert not [k for k in app.query(FooterKey) if k.key == "v"]
+        assert pane.check_action("flip_top", ()) is False
+        await pilot.press("v")
+        await settle(app, pilot)
+        assert not pane.has_class("-show-activity")
+        assert app.query_one("#dash-bot").display and app.query_one("#dash-activity").display
+
+
+async def test_the_flipped_activity_box_is_full_width(paths):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v")
+        await settle(app, pilot)
+        top = app.query_one("#dash-top")
+        assert app.query_one("#dash-activity").outer_size.width == top.content_region.width
+
+
+async def test_the_footer_at_80_columns(paths):
+    """Review run 1, finding 5: a short label for v, so the tab keys still fit at 80 columns."""
+    from textual.widgets._footer import FooterKey
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        keys = {k.key: k for k in app.query(FooterKey)}
+        assert keys["v"].description == "Flip"
+        palette = keys["ctrl+p"].region.x   # "^p palette" is drawn over the footer's right end
+        for key in ("p", "d", "v", "1", "2", "3"):
+            assert keys[key].region.right <= palette, key

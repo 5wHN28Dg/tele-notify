@@ -31,6 +31,7 @@ from textual.binding import Binding, BindingType
 from textual.color import Color, ColorParseError
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     ContentSwitcher,
@@ -463,7 +464,7 @@ class DashboardPane(Vertical):
         Binding("a", "view('alerts')", "Alerts", show=False),
         Binding("p", "pick_period", "Period"),
         Binding("d", "custom_range", "Dates"),
-        Binding("v", "flip_top", "Bot/Activity"),
+        Binding("v", "flip_top", "Flip"),
     ]
 
     def __init__(self) -> None:
@@ -541,12 +542,15 @@ class DashboardPane(Vertical):
             self._show_activity(self.snapshot)
 
     def on_resize(self, event: events.Resize) -> None:
-        narrow = event.size.width < NARROW
+        # NARROW and SHORT are the window's size, as the README says, not this pane's (which is smaller)
+        window = self.app.size
+        narrow = window.width < NARROW
         if narrow != self.has_class("-narrow"):
             self.set_class(narrow, "-narrow")
             self._top_titles()
             self.refresh_bindings()
-        self.set_class(event.size.height < SHORT, "-short")
+            self._focus_shown_box()
+        self.set_class(window.height < SHORT, "-short")
         # the login line has a short and a long form: pick again once the new layout is in place
         self.call_after_refresh(self._show_status)
 
@@ -562,6 +566,32 @@ class DashboardPane(Vertical):
 
     def action_flip_top(self) -> None:
         self.toggle_class("-show-activity")
+        self._focus_shown_box()
+
+    def _show_top(self, which: str) -> None:
+        """In a narrow window, show the top box `which` ("bot" or "activity"); both show in a wide one."""
+        if self.has_class("-narrow"):
+            self.set_class(which == "activity", "-show-activity")
+            self._focus_shown_box()
+
+    def _focus_shown_box(self) -> None:
+        """If the focused widget is in a top box that is now hidden, move focus to the shown box's
+        first focusable widget, or else to the feed, so focus is never on something unseen (#57)."""
+        focused = self.screen.focused
+        if focused is None:
+            return
+        boxes = [self.query_one("#dash-bot"), self.query_one("#dash-activity")]
+        hidden = next((b for b in boxes if b in focused.ancestors and not self._top_box_shown(b)), None)
+        if hidden is None:
+            return
+        shown = next(b for b in boxes if b is not hidden)
+        target = next((w for w in shown.query("*") if w.focusable), None) if self._top_box_shown(shown) else None
+        (target or self.query_one("#feed", DataTable)).focus()
+
+    def _top_box_shown(self, box: Widget) -> bool:
+        if not self.has_class("-narrow"):
+            return True
+        return (box.id == "dash-activity") == self.has_class("-show-activity")
 
     def on_show(self) -> None:
         # Focus the feed when the tab is shown, so f / c / a and the arrow keys work at once.
@@ -892,12 +922,15 @@ class DashboardPane(Vertical):
         self.action_custom_range()
 
     def action_pick_period(self) -> None:
+        self._show_top("activity")   # in a narrow window the picker is in the box shown on the right
         sel = self.query_one("#period", Select)
         sel.focus()
         sel.expanded = True
 
     def action_custom_range(self) -> None:
-        """Ask for the days; the form starts with the period shown now."""
+        """Ask for the days; the form starts with the period shown now. The answer shows in the
+        Activity box, so a narrow window shows that box first and keeps it shown afterwards."""
+        self._show_top("activity")
         ps = self.snapshot.period if self.snapshot is not None else None
         if ps is not None:
             first, last = ps.period.first, ps.period.last
