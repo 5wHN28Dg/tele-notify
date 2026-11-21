@@ -204,6 +204,7 @@ suite "name lookups for your bot (#122, review run 2)":
   test "the bot's fetcher keeps it for 10 minutes":
     let f = botFetcher(allowPrivate = true)
     let before = addressLookups
-    for _ in 1 .. 3: check waitFor(f("http://localhost:" & $port & "/ok")).ok
+    # 127.0.0.1, not localhost: CI's localhost answers ::1 first, and the test server is IPv4 only
+    for _ in 1 .. 3: check waitFor(f("http://127.0.0.1:" & $port & "/ok")).ok
     check addressLookups == before + 1
     check keepBotAddressMs == 600_000
