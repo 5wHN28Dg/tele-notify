@@ -17,7 +17,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: jiro4989/setup-nim-action@v2
+      # pinned: what this job builds is installed on the server by itself
+      - uses: jiro4989/setup-nim-action@08957181dc5baf5f8446497598f798020a03e66a  # v2
         with:
           nim-version: '2.2.x'
           repo-token: ${{ secrets.GITHUB_TOKEN }}

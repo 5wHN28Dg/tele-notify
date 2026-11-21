@@ -33,9 +33,15 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/tn-update-XXXXXX")
 trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT TERM HUP
 
-curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" \
-  -o "$work/release.json" "$api/repos/$repo_slug/releases/latest" ||
-  fail "could not ask GitHub for the latest release; will try again tomorrow"
+# a few tries: after a reboot the timer's missed run can start before the
+# network is up (a user unit can't wait for network-online.target)
+tries=0
+until curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" \
+  -o "$work/release.json" "$api/repos/$repo_slug/releases/latest"; do
+  tries=$((tries + 1))
+  [ "$tries" -lt 3 ] || fail "could not ask GitHub for the latest release; will try again tomorrow"
+  sleep "${TN_RETRY_WAIT:-60}"
+done
 
 installed=$(cat "$lib/version" 2>/dev/null || true)
 
@@ -72,6 +78,12 @@ if [ "$(sed -n 4p "$work/release.txt")" != newer ]; then
   say "up to date (installed: $installed; latest release: $tag)"
   exit 0
 fi
+# a release that already failed here (it didn't stay up, say) isn't tried
+# again every night: the next release is
+if [ "$tag" = "$(cat "$lib/failed-version" 2>/dev/null || true)" ]; then
+  say "skipping $tag: installing it failed here before; waiting for the next release"
+  exit 0
+fi
 
 curl -fsSL --max-time 300 -o "$work/package.tar.gz" "$pkg_url" ||
   fail "could not download $tag; will try again tomorrow"
@@ -87,7 +99,9 @@ tar -xzOf "$work/package.tar.gz" ./install-staged.sh > "$work/install-staged.sh"
 
 say "installing $tag (installed: ${installed:-unknown})"
 if sh "$work/install-staged.sh" < "$work/package.tar.gz"; then
+  rm -f "$lib/failed-version"
   say "installed $tag"
 else
+  printf '%s\n' "$tag" > "$lib/failed-version" || true
   fail "installing $tag failed, so the previous version is kept (journalctl --user -u tele-notify-update)"
 fi

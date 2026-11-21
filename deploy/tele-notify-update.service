@@ -4,8 +4,8 @@
 
 [Unit]
 Description=tele-notify: install a new release if there is one
-Wants=network-online.target
-After=network-online.target
+# (network-online.target can't be waited for from a user unit: the script
+# tries GitHub a few times instead)
 
 [Service]
 Type=oneshot

@@ -11,7 +11,7 @@ say() {
   printf "%s\n" "$*" || true
 }
 warn() {
-  printf "push-to-server: %s\n" "$*" >&2 || true
+  printf "tele-notify install: %s\n" "$*" >&2 || true
 }
 # the version this install brings (a release tag, or a commit for a push), kept
 # once installed so deploy/self-update.sh knows what is here

@@ -43,16 +43,16 @@ class Github:
         # the bot's `alert` command: record the text
         _exe(self.home / ".local" / "bin" / "telenotify", f'#!/bin/sh\necho "alert: $2" >> "{self.log}"\n')
         self.env = dict(os.environ, HOME=str(self.home), PATH=f"{fakes}:{os.environ['PATH']}",
-                        TN_API="https://api.example", TMPDIR=str(tmp))
+                        TN_API="https://api.example", TMPDIR=str(tmp), TN_RETRY_WAIT="0")
 
     def release(self, tag: str, installer_ok: bool = True, bad_sum: bool = False, assets: bool = True) -> None:
         stage = self.web.parent / f"stage-{tag}"
         stage.mkdir()
         _exe(stage / "install-staged.sh", "#!/bin/sh\n"
                                           f'echo "installer ran" >> "{self.log}"\n'
-                                          'cat > /dev/null\n'
-                                          f'printf "%s\\n" {tag} > "$HOME/.local/lib/tele-notify/version"\n'
-                                          f'exit {0 if installer_ok else 1}\n')
+                                          'cat > /dev/null\n' +
+                                          (f'printf "%s\\n" {tag} > "$HOME/.local/lib/tele-notify/version"\n'
+                                           if installer_ok else "exit 1\n"))
         (stage / "version").write_text(tag + "\n")
         pkg = self.web / f"tele-notify-{tag}.tar.gz"
         with tarfile.open(pkg, "w:gz") as t:
@@ -166,3 +166,41 @@ def test_the_package_holds_what_the_installer_needs(tmp_path):
     tree = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD:tui"], capture_output=True, text=True,
                           check=True).stdout
     assert (stage / "tui-tree").read_text() == tree
+
+
+def test_a_release_that_failed_here_is_not_tried_every_night(tmp_path):
+    """A release that doesn't stay up here would restart the bot onto it and back every night."""
+    g = Github(tmp_path)
+    (g.lib / "version").write_text("v4.0.0\n")
+    g.release("v4.1.0", installer_ok=False)
+    assert g.run().returncode != 0
+    g.log.unlink()
+    r = g.run()                                                   # the next night
+    assert r.returncode == 0 and "skipping v4.1.0" in r.stdout
+    assert "installer ran" not in g.calls() and "tar.gz" not in g.calls()
+
+
+def test_the_next_release_after_a_failed_one_is_installed(tmp_path):
+    g = Github(tmp_path)
+    (g.lib / "version").write_text("v4.0.0\n")
+    (g.lib / "failed-version").write_text("v4.1.0\n")
+    g.release("v4.1.1")
+    assert g.run().returncode == 0 and "installer ran" in g.calls()
+    assert not (g.lib / "failed-version").exists()
+
+
+def test_github_is_asked_again_before_giving_up(tmp_path):
+    """After a reboot the network may not be up yet: three tries, then an alert."""
+    g = Github(tmp_path)
+    r = g.run()
+    assert r.returncode != 0
+    assert g.calls().count("releases/latest") == 3
+
+
+def test_a_release_without_its_checksum_is_not_installed(tmp_path):
+    g = Github(tmp_path)
+    g.release("v4.1.0")
+    (g.web / "tele-notify-v4.1.0.tar.gz.sha256").unlink()
+    r = g.run()
+    assert r.returncode != 0
+    assert "installer ran" not in g.calls() and "alert: Self-update: could not download v4.1.0's checksum" in g.calls()
