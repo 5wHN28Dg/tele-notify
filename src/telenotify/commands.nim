@@ -355,6 +355,40 @@ proc cmdCompare*(cfg: Config, days: int) =
          st.publishedText(x.nim.chatId, x.nim.msgId).short(90)
     echo "    why: ", x.nim.reasons.short(160)
 
+proc parseDays*(val: string): int =
+  ## `--days:N`: a whole number from 1 to 3650 (ten years), or ValueError
+  ## with the message to show.
+  try: result = parseInt(val)
+  except ValueError: raise newException(ValueError, "--days needs a number")
+  if result notin 1 .. 3650: raise newException(ValueError, "--days must be between 1 and 3650")
+
+proc duration(secs: int64): string =
+  ## 45s, 3m 05s, 2h 07m, 3d 4h
+  if secs < 60: fmt"{secs}s"
+  elif secs < 3600: fmt"{secs div 60}m {secs mod 60:02}s"
+  elif secs < 86400: fmt"{secs div 3600}h {secs mod 3600 div 60:02}m"
+  else: fmt"{secs div 86400}d {secs mod 86400 div 3600}h"
+
+proc latencyLines*(l: tuple[live, caughtUp, reviewed: Latency], days: int,
+                   dryRun = false): seq[string] =
+  ## How long forwarded posts took to reach your channel, from when they
+  ## went up (or, for an edit judged again, from the edit) (#74). Posts
+  ## judged before their date was kept are left out.
+  proc line(what: string, x: Latency): string =
+    let posts = if x.count == 1: "post" else: "posts"
+    &"  {what}: typically within {duration(x.median)} (half are faster), " &
+      &"95 of 100 within {duration(x.p95)} ({x.count} {posts})"
+  if l.live.count == 0 and l.caughtUp.count == 0 and l.reviewed.count == 0:
+    return @[if dryRun: &"Forwarding time: no post would have been forwarded in the last {days} days " &
+                        "(or none with a known Telegram date)"
+             else: &"Forwarding time: no post was forwarded in the last {days} days " &
+                   "(or none with a known Telegram date)"]
+  result.add(if dryRun: "Forwarding time (dry run), from when a post went up to when it would have reached your channel:"
+             else: "Forwarding time, from when a post went up to when it reached your channel:")
+  if l.live.count > 0: result.add line("live", l.live)
+  if l.caughtUp.count > 0: result.add line("caught up after downtime", l.caughtUp)
+  if l.reviewed.count > 0: result.add line("after your review", l.reviewed)
+
 proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
   let st = openState(statePath(cfg, dryRun))
   let rows = st.stats(days)
@@ -367,4 +401,5 @@ proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
     tot[3] += r.forwarded
   echo &"{\"total\":<44}{tot[0]:>9}{tot[1]:>8}{tot[2]:>8}{tot[3]:>11}"
   echo &"pending reviews: {st.pendingReviews().len}"
+  for line in latencyLines(st.latency(days), days, dryRun): echo line
   st.close()

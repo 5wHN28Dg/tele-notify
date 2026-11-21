@@ -79,6 +79,39 @@ suite "session":
     check fitColumn("وظائف العراق للشباب والبنات", 10).validateUtf8 == -1
     check fitColumn("Jobs", 6) == "Jobs  "
 
+  test "stats show forwarding time in plain words, or say there's none in those days (#74)":
+    check latencyLines((Latency(), Latency(), Latency()), 7) ==
+      @["Forwarding time: no post was forwarded in the last 7 days (or none with a known Telegram date)"]
+    check latencyLines((Latency(), Latency(), Latency()), 30, dryRun = true) ==
+      @["Forwarding time: no post would have been forwarded in the last 30 days " &
+        "(or none with a known Telegram date)"]
+    check latencyLines((Latency(count: 20, median: 100, p95: 3700), Latency(), Latency()), 7) ==
+      @["Forwarding time, from when a post went up to when it reached your channel:",
+        "  live: typically within 1m 40s (half are faster), 95 of 100 within 1h 01m (20 posts)"]
+    let all = latencyLines((Latency(count: 1, median: 45, p95: 45),
+                            Latency(count: 3, median: 600, p95: 7200),
+                            Latency(count: 2, median: 90000, p95: 200000)), 7, dryRun = true)
+    check all == @[
+      "Forwarding time (dry run), from when a post went up to when it would have reached your channel:",
+      "  live: typically within 45s (half are faster), 95 of 100 within 45s (1 post)",
+      "  caught up after downtime: typically within 10m 00s (half are faster), 95 of 100 within 2h 00m (3 posts)",
+      "  after your review: typically within 1d 1h (half are faster), 95 of 100 within 2d 7h (2 posts)"]
+
+  test "--days is a number from 1 to 3650 (#74)":
+    check parseDays("1") == 1 and parseDays("7") == 7 and parseDays("3650") == 3650
+    for bad in ["0", "-3", "3651", "99999999999999"]:
+      try:
+        discard parseDays(bad)
+        check false
+      except ValueError as e:
+        check e.msg == "--days must be between 1 and 3650" or
+              (bad == "99999999999999" and e.msg == "--days needs a number")
+    try:
+      discard parseDays("week")
+      check false
+    except ValueError as e:
+      check e.msg == "--days needs a number"
+
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"
     check statePath(cfg, true).endsWith "state-dryrun.sqlite3"
