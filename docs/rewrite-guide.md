@@ -454,7 +454,7 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 | `telenotify login` | Once: phone number, the code Telegram sends, your 2FA password. Prints your chats with their IDs (it replaces `get_chat_ids.py`). The login is saved in `data_dir/tdlib` |
 | `telenotify run [--dry-run]` | The bot. `--dry-run` (or `"dry_run": true`) judges and records everything but forwards nothing and marks nothing read |
 | `telenotify review [--dry-run]` | Goes through the review queue: shows the post, its link and why it's unclear; `s` approves it, `d` discards it, `n` skips it, `q` quits |
-| `telenotify stats [--days:N] [--dry-run]` | Per chat: how many messages got each verdict, how many were forwarded, and how many reviews are waiting |
+| `telenotify stats [--days:N] [--dry-run]` | Per chat: how many messages got each verdict, how many were forwarded, and how many reviews are waiting. Then the forwarding time (#74): from each published post's own Telegram date to its publishing in your channel, the median and the time 95% of posts were published within, separately for posts published right away and posts sent after your review (your wait included). Posts judged before the date was kept are left out |
 
 **Why `review` doesn't send anything itself.** TDLib locks its database, so only one program can use your login at a time. If `review` opened Telegram, you'd have to stop the bot first. So `review` only writes your decision (status `to_send`) to SQLite, and the running bot sends approved posts within about five seconds (`sendApproved`). If one can't be sent, it goes back to the queue with the reason. A post can only be approved while it's pending, so two `review` windows can't send it twice. Text is shown without control characters, so a post or a scraped job page can't clear or fake your terminal screen. `login` still needs the bot stopped, but you only run it once.
 
@@ -464,12 +464,14 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 
 | Table | Holds |
 |---|---|
-| `processed` | every judged message with verdict, role, reasons and action |
+| `processed` | every judged message with verdict, role, reasons and action, and `posted_at`: the post's own Telegram date in Unix seconds (#74), empty for posts judged before it was kept |
 | `published` | what was published, for duplicate checks |
 | `reviews` | the queue and your decisions (`pending` → `to_send` → `sent`, or `discarded`, or `kept`: a match the terminal screen marked "don't send", because it already reached the channel; the bot never sends it or counts it as forwarded). Those decisions are labels for the corpus: stage 5 adds an export |
 | `meta` | the heartbeat, and which watched chats you lost access to (`chat_access:<chat id>`) |
 
 `config.json` is now only *read*. The old bot rewrote it on every forward, which could throw away your edits.
+
+**Schema versions and the copy kept before an upgrade (#74).** The file's schema version is SQLite's `user_version` (`PRAGMA user_version`); files from before versions existed read as 0, and `schemaVersion` in `state.nim` is the current one (1: `processed.posted_at`). When the bot, or any command, opens an existing file older than that, it first copies it to `state.sqlite3.bak-<old version>` beside it (so `state.sqlite3.bak-0` for the first upgrade), private to you like the file itself. The copy is made with SQLite's `VACUUM INTO`, not a file copy: while the bot runs, recent writes are still in the write-ahead log (`state.sqlite3-wal`), which a plain copy of `state.sqlite3` would miss. It's written under a temporary name and renamed when done, so a half-written copy never looks like the backup. If a copy with that name exists already, it's kept and not made again. If the copy fails (a full disk, say), the file is left unchanged and the command stops with the reason; the next start tries again. A new, empty file needs no copy. To undo an upgrade, stop the bot and put the copy back in place of `state.sqlite3` (removing `state.sqlite3-wal` and `state.sqlite3-shm`). Adding a column later: add it to the list in `openState`, raise `schemaVersion`, and the copy comes with it.
 
 Open it with `sqlite3 ~/.local/share/tele-notify/state.sqlite3`. For example, `SELECT chat_title, verdict, action, reasons FROM processed ORDER BY at DESC LIMIT 20;`
 

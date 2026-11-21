@@ -300,7 +300,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       for y in group:      # parts not recorded yet belong to the handled post
         if not l.state.seen(y.chatId, y.id):
           l.state.markProcessed(y.chatId, y.id, y.chatTitle, "", "", "part of a post already handled",
-                                prev.action, prev.textHash, albumId = y.albumId)
+                                prev.action, prev.textHash, albumId = y.albumId, postedAt = y.date)
       return
     l.say &"✏️  {m.chatTitle} #{m.id} was edited: judging it again"
   var verdict, role, reasons, postLink = ""
@@ -377,7 +377,8 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
     try:
       l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
                             rawText = x.text,   # compare; search in the terminal screen
-                            albumId = x.albumId)
+                            albumId = x.albumId,
+                            postedAt = x.date)  # its Telegram date: forwarding latency (#74)
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 

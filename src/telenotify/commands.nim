@@ -355,6 +355,25 @@ proc cmdCompare*(cfg: Config, days: int) =
          st.publishedText(x.nim.chatId, x.nim.msgId).short(90)
     echo "    why: ", x.nim.reasons.short(160)
 
+proc duration(secs: int64): string =
+  ## 45s, 3m 05s, 2h 07m, 3d 4h
+  if secs < 60: fmt"{secs}s"
+  elif secs < 3600: fmt"{secs div 60}m {secs mod 60:02}s"
+  elif secs < 86400: fmt"{secs div 3600}h {secs mod 3600 div 60:02}m"
+  else: fmt"{secs div 86400}d {secs mod 86400 div 3600}h"
+
+proc latencyLines*(l: tuple[direct, reviewed: Latency]): seq[string] =
+  ## How long published posts took from their own Telegram date to your
+  ## channel (#74). Posts judged before their date was kept are left out.
+  proc line(what: string, x: Latency): string =
+    let posts = if x.count == 1: "post" else: "posts"
+    &"{what}: median {duration(x.median)}, 95% within {duration(x.p95)} ({x.count} {posts})"
+  if l.direct.count == 0 and l.reviewed.count == 0:
+    return @["forwarding time: no published posts with a known Telegram date yet"]
+  result.add "forwarding time, from the post's Telegram date to your channel:"
+  if l.direct.count > 0: result.add line("  published right away", l.direct)
+  if l.reviewed.count > 0: result.add line("  sent after your review", l.reviewed)
+
 proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
   let st = openState(statePath(cfg, dryRun))
   let rows = st.stats(days)
@@ -367,4 +386,5 @@ proc cmdStats*(cfg: Config, days: int, dryRun: bool) =
     tot[3] += r.forwarded
   echo &"{\"total\":<44}{tot[0]:>9}{tot[1]:>8}{tot[2]:>8}{tot[3]:>11}"
   echo &"pending reviews: {st.pendingReviews().len}"
+  for line in latencyLines(st.latency(days)): echo line
   st.close()

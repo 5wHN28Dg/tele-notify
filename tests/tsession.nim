@@ -79,6 +79,17 @@ suite "session":
     check fitColumn("وظائف العراق للشباب والبنات", 10).validateUtf8 == -1
     check fitColumn("Jobs", 6) == "Jobs  "
 
+  test "stats show forwarding time, or say there's none yet (#74)":
+    check latencyLines((Latency(), Latency())) ==
+      @["forwarding time: no published posts with a known Telegram date yet"]
+    check latencyLines((Latency(count: 20, median: 100, p95: 3700), Latency())) ==
+      @["forwarding time, from the post's Telegram date to your channel:",
+        "  published right away: median 1m 40s, 95% within 1h 01m (20 posts)"]
+    check latencyLines((Latency(count: 1, median: 45, p95: 45),
+                        Latency(count: 2, median: 90000, p95: 200000)))[1 .. 2] ==
+      @["  published right away: median 45s, 95% within 45s (1 post)",
+        "  sent after your review: median 1d 1h, 95% within 2d 7h (2 posts)"]
+
   test "dry runs keep their own state":
     check statePath(cfg, false).endsWith "state.sqlite3"
     check statePath(cfg, true).endsWith "state-dryrun.sqlite3"

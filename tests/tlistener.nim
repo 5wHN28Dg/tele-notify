@@ -211,6 +211,22 @@ suite "listener":
     waitFor l.processQueue()
     check f.forwarded.len == 1
 
+  test "each post's own Telegram date is recorded, and stats get its forwarding time (#74)":
+    let f = FakeTg()
+    let posted = getTime().toUnix - 120
+    var a = msg(-1, 1, good)
+    a.date = posted
+    var r = msg(-1, 2, bad)
+    r.date = posted - 5
+    f.chats[-1] = @[a, r]
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 1'i64)]
+    check st.postedAt(-1, 1) == posted and st.postedAt(-1, 2) == posted - 5
+    let lat = st.latency(1)
+    check lat.direct.count == 1 and lat.direct.median in 120'i64 .. 130
+    check lat.reviewed.count == 0
+
   test "dry run: judged and recorded, nothing forwarded or marked read":
     let f = FakeTg()
     f.chats[-1] = @[msg(-1, 1, good), msg(-1, 2, unclear)]
