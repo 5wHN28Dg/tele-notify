@@ -64,18 +64,20 @@ TEMP_LEFT_OUT = (*SECRET_KEYS, "notify_bot_token")
 NOTIFY_KEYS = ("notify_published", "notify_review")
 
 
-def notify_note(cfg: dict) -> str:
+def notify_note(cfg: dict, dry_run_flag: bool = False) -> str:
     """Why the notification switches do nothing in this config, or "" (they work).
 
     The bot sends through your notification bot only with `notify_bot_token`, and a dry run sends
-    no per-post messages (only its alerts)."""
+    no per-post messages (only its alerts). `dry_run_flag`: the screen was opened for a dry run
+    started with --dry-run, whatever the config says."""
     token = cfg.get("notify_bot_token", "")
-    if token is None or (isinstance(token, str) and not token.strip()):
+    ascii_space = " \t\v\r\n\f"     # what the bot's strip removes: not NBSP or other Unicode spaces
+    if token is None or (isinstance(token, str) and not token.strip(ascii_space)):
         return "Sends nothing now: no notify_bot_token in config.json"
     # as the bot checks it (notify.nim validToken): digits, a colon, then letters, digits, _ or -
-    if not (isinstance(token, str) and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token.strip())):
+    if not (isinstance(token, str) and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token.strip(ascii_space))):
         return "Sends nothing now: notify_bot_token isn't a bot token"
-    if cfg.get("dry_run") is True:
+    if cfg.get("dry_run") is True or dry_run_flag:
         return "Sends nothing now: a dry run"
     return ""
 

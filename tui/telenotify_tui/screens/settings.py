@@ -497,6 +497,9 @@ class SettingsPane(Vertical):
     /* focused too: Textual's focus border would fill the one-row box and hide the switch; the
        highlighted label still shows which one has focus */
     SettingsPane Checkbox:focus { border: none; }
+    /* and the focused label in the theme's own text pair, reversed: Textual's focus pair is 3.78:1
+       in textual-dark (#131 run 3) */
+    SettingsPane Checkbox:focus > .toggle--label { background: $foreground; color: $background; }
     SettingsPane #chat-table { height: 1fr; }
     SettingsPane #chat-ids { height: 1fr; }
     SettingsPane .hidden { display: none; }
@@ -609,7 +612,9 @@ class SettingsPane(Vertical):
         for key in sd.BOOL_KEYS:
             for box in self.query(f"#f-{key}").results(Checkbox):
                 box.label = "on" if box.value else "off"
-        note = sd.notify_note(self.edited)
+        # the --dry-run flag (not the config's dry_run, which the edits may change)
+        flag = self.paths.dry_run and (self.original or {}).get("dry_run") is not True
+        note = sd.notify_note(self.edited, dry_run_flag=flag)
         for key in sd.NOTIFY_KEYS:
             for help_ in self.query(f"#help-{key}").results(Static):
                 help_.update(FORM_HELP[key] + (f". {note}" if note else ""))

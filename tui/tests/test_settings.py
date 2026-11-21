@@ -861,6 +861,8 @@ async def test_each_kind_of_bot_notification_can_be_switched_off(paths, cfg_path
     ({"notify_bot_token": 12345}, "Sends nothing now: notify_bot_token isn't a bot token"),
     ({"notify_bot_token": "1:abc", "dry_run": True}, "Sends nothing now: a dry run"),
     ({"notify_bot_token": " 1:abc_-Z "}, ""),
+    ({"notify_bot_token": "123:abc\u00a0"}, "Sends nothing now: notify_bot_token isn't a bot token"),   # the bot's
+    ({"notify_bot_token": "\u2003123:abc"}, "Sends nothing now: notify_bot_token isn't a bot token"),   # strip: ASCII
 ])
 async def test_the_notification_switches_say_when_they_cant_do_anything(paths, cfg_path, extra, note):
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -907,3 +909,29 @@ async def test_a_focused_switch_still_shows_on_or_off(paths, cfg_path):
         after = row(app, "dry_run")
         assert app.focused is box
         assert {"on", "off"} == {before.split()[2], after.split()[2]}, (before, after)
+
+
+
+@pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
+async def test_a_focused_switch_is_readable(paths, cfg_path, theme):
+    """Run 3 of #131: with the focus border gone, Textual's focus pair on the label was 3.78:1 in
+    textual-dark. The drawn cells of the focused "on"/"off" must reach 4.5:1 (text contrast, A1)."""
+    from audit import svg
+
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.theme = theme
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        pane.query_one("#f-dry_run", Checkbox).focus()
+        await pilot.pause()
+        w, h = app.size
+        grid = svg.parse(app.export_screenshot(), w, h)
+        row = next(r for r, line in enumerate(grid.text()) if line.lstrip().startswith("dry_run"))
+        line = grid.text()[row]
+        start = line.index("\u258c") + 1                    # after the box's ▌
+        word = [c for c in grid.cells[row][start:start + 5] if c.ch.strip()]
+        assert "".join(c.ch for c in word) in ("on", "off")
+        for c in word:
+            assert svg.contrast(c.fg, c.bg) >= 4.5, (theme, c)
