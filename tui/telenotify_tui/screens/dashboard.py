@@ -49,7 +49,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy
+from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy, unreadable_note
 from . import dashboard_data as dd
 from . import search_data
 from .armed import Armed
@@ -75,6 +75,10 @@ STAT_COLUMNS = ("chat", "total", "publish", "review", "reject", "forwarded")
 # Said once, in the Bot box; the other boxes only point to it.
 BUSY_ELSEWHERE = "Not shown while the state file is busy (see Bot)."
 UNREADABLE_NOTE = "Not shown: the state file can't be read (see Bot)."
+# the Alerts & health view after a failed read: the rows read last stay (#96)
+KEPT_ALERTS = "Alerts, as last read (see Bot)"
+KEPT_HEALTH = "Chat health, as last read"
+NOT_SHOWN_NOTE = "Not shown (see Bot)"   # nothing read yet
 
 
 # ------------------------------------------------------------- helpers
@@ -480,6 +484,8 @@ class DashboardPane(Vertical):
         self._reading = False
         self._read_again = False   # asked for a fresh read while one was running
         self._feed: dict[str, Judged] = {}
+        self._feed_keep: str | None = None   # the feed row selected before a failed read emptied it (#97)
+        self._problems_shown = 0   # chats in the health table
 
     # ------------------------------------------------------------ layout
 
@@ -517,10 +523,10 @@ class DashboardPane(Vertical):
                 yield DataTable(id="chat-stats", cursor_type="row", zebra_stripes=True)
             with Horizontal(id="view-alerts"):
                 with Vertical():
-                    yield Label("Alerts", classes="section")
+                    yield Label("Alerts", id="alerts-title", classes="section")
                     yield DataTable(id="alerts", cursor_type="row")
                 with Vertical(id="health-box"):
-                    yield Label("Chat health", classes="section")
+                    yield Label("Chat health", id="health-title", classes="section")
                     yield DataTable(id="health", cursor_type="row")
 
     def on_mount(self) -> None:
@@ -683,7 +689,7 @@ class DashboardPane(Vertical):
             self._show_feed(snap)
         if old is None or old.stats != snap.stats:
             self._show_stats(snap)
-        if old is None or old.alerts != snap.alerts or old.problems != snap.problems:
+        if old is None or old.alerts != snap.alerts or old.problems != snap.problems or old.error != snap.error:
             self._show_alerts(snap)
 
     def _show_status(self) -> None:
@@ -744,7 +750,7 @@ class DashboardPane(Vertical):
         elif snap.busy:
             out.append(BUSY_NOTE, style="bold")   # words, theme colours: readable in both themes
         elif snap.error:
-            out.append(f"can't read the state file: {snap.error}", style="red")
+            out.append(unreadable_note(bot.SERVICES[self.mode]), style="red")   # words, not the exception (#98)
         elif not snap.exists:
             out.append(f"No state file yet ({clean(self.paths.state.name)}).\n", style="dim")
             out.append("Start the bot in this mode to see it here.", style="dim")
@@ -819,6 +825,9 @@ class DashboardPane(Vertical):
                 keep = table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value
             except CellDoesNotExist:
                 keep = None
+        if keep is None:   # emptied by a failed read: the row selected before it
+            keep = self._feed_keep
+        self._feed_keep = keep if snap.error else None
         table.clear()
         self._feed = {}
         for j in snap.feed:
@@ -950,6 +959,17 @@ class DashboardPane(Vertical):
         self.app.push_screen(RangeScreen(first, last), answered)
 
     def _show_alerts(self, snap: Snapshot) -> None:
+        note = self.query_one("#dash-note", Static)
+        alerts_title = self.query_one("#alerts-title", Label)
+        health_title = self.query_one("#health-title", Label)
+        if snap.error:   # a failed read keeps the rows read last and says they are from then (#96)
+            alerts_title.update(KEPT_ALERTS)
+            health_title.update(KEPT_HEALTH)
+            if not self._problems_shown and not self.query_one("#alerts", DataTable).row_count:
+                note.update(NOT_SHOWN_NOTE)   # short: the note shares its row with the buttons (80 columns)
+            return
+        alerts_title.update("Alerts")
+        health_title.update("Chat health")
         alerts = self.query_one("#alerts", DataTable)
         alerts.clear()
         for a in snap.alerts:
@@ -959,7 +979,7 @@ class DashboardPane(Vertical):
         for p in snap.problems:
             style = "dim" if p.status == "silent" else "red"
             health.add_row(Text(visual(p.title)), Text(visual(p.status), style=style), Text(visual(p.detail)))
-        note = self.query_one("#dash-note", Static)
+        self._problems_shown = len(snap.problems)
         bits = []
         if snap.problems:
             bits.append(f"{len(snap.problems)} chat(s) need a look")

@@ -733,3 +733,98 @@ async def test_the_login_line_is_right_after_flipping_back(paths, now):
         await pilot.press("v")                      # Bot again, full width
         await settle(app, pilot)
         assert " ".join(text(app, "#status").split()).startswith("Not logged in to Telegram.")
+
+
+def _failed_read(app, busy: bool):
+    """A snapshot like load_snapshot's when the read fails (locked, or not a database)."""
+    from telenotify_tui.screens import dashboard as dash
+    old = app.query_one(DashboardPane).snapshot
+    snap = dash.Snapshot(now=old.now, exists=True)
+    if busy:
+        snap.error, snap.busy = "OperationalError: database is locked", True
+    else:
+        snap.error = "DatabaseError: file is not a database"
+    return snap
+
+
+@pytest.mark.parametrize("busy", [True, False])
+async def test_a_failed_read_keeps_the_alerts_and_health_rows(paths, busy):
+    """#96: a locked or unreadable file used to empty both tables and drop the
+    "chat(s) need a look" note, with nothing said. The rows read last stay, the
+    note too, and the titles say the rows are from the last read."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        await pilot.press("a")
+        await settle(app, pilot)
+        alerts, health = rows(app.query_one("#alerts", DataTable)), rows(app.query_one("#health", DataTable))
+        assert alerts and health
+        note = text(app, "#dash-note")
+        assert note == f"{len(health)} chat(s) need a look"
+        good = pane.snapshot
+        pane._apply(_failed_read(app, busy))
+        await pilot.pause()
+        assert rows(app.query_one("#alerts", DataTable)) == alerts
+        assert rows(app.query_one("#health", DataTable)) == health
+        assert text(app, "#dash-note") == note
+        for title in ("#alerts-title", "#health-title"):   # said, and whole at 80 x 24
+            shown = text(app, title)
+            assert "last read" in shown
+            assert app.query_one(title).content_region.width >= len(shown), title
+        assert "see Bot" in text(app, "#alerts-title")
+        pane._apply(good)                         # readable again: the usual titles
+        await pilot.pause()
+        assert text(app, "#alerts-title") == "Alerts" and text(app, "#health-title") == "Chat health"
+        assert text(app, "#dash-note") == note
+
+
+async def test_a_failed_read_before_any_rows_says_so(paths):
+    """#96: nothing was read before the failure: the note says the view isn't shown."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        snap = pane.snapshot
+        snap.alerts, snap.problems = [], []
+        pane._show_alerts(snap)
+        assert text(app, "#dash-note") == ""
+        pane._apply(_failed_read(app, True))
+        await pilot.pause()
+        assert text(app, "#dash-note") == "Not shown (see Bot)"
+
+
+async def test_the_feed_keeps_its_selection_across_a_failed_read(paths):
+    """#97: after the state file was locked for a moment, the feed's cursor went back to the first row."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        feed = app.query_one("#feed", DataTable)
+        feed.focus()
+        await pilot.press("down", "down")
+        await settle(app, pilot)
+        assert feed.cursor_row == 2 and "publish" in text(app, "#feed-detail")
+        good = pane.snapshot
+        for _ in range(2):                    # two failed reads in a row
+            pane._apply(_failed_read(app, True))
+            await pilot.pause()
+        assert "see Bot" in text(app, "#feed-detail")
+        pane._apply(good)
+        await settle(app, pilot)
+        assert feed.cursor_row == 2
+        assert "publish" in text(app, "#feed-detail")
+
+
+async def test_an_unreadable_state_file_is_said_in_words_with_a_next_step(paths, state):
+    """#98: the Bot box showed "can't read the state file: DatabaseError: file is not a database"."""
+    state.write_bytes(b"this is not a database" * 100)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        assert app.query_one(DashboardPane).snapshot.error
+        status = text(app, "#status")
+        assert "DatabaseError" not in status and "not a database" not in status
+        assert "Can't read the state file." in status
+        service = bot.SERVICES[app.query_one(DashboardPane).mode]
+        assert f"journalctl --user -u {service}" in status

@@ -112,7 +112,13 @@ _DIGITS = re.compile(r"[0-9]+")
 
 
 # One wording for "another program has the state file locked", on every tab.
-BUSY_NOTE = "The state file is busy (another program has it locked); retrying…"
+BUSY = "The state file is busy (another program has it locked)"
+BUSY_NOTE = f"{BUSY}; retrying…"   # where the tab reads again by itself (Dashboard, Review)
+
+
+def unreadable_note(service: str) -> str:
+    """The state file can't be read for another reason (damaged, no permission): plain words and where to look."""
+    return f"Can't read the state file. Check the bot's log: journalctl --user -u {service}"
 
 
 def is_busy(e: BaseException) -> bool:
