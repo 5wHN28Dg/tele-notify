@@ -1,7 +1,7 @@
 ## The commands that talk to Telegram: login, chats, run, review, stats.
 
 import std/[asyncdispatch, json, os, strutils, strformat, tables, times, posix, unicode]
-import config, td, session, telegram, state, listener, fetch, gather, compare
+import config, td, session, telegram, state, listener, fetch, gather, compare, notify
 
 var stopRequested = new bool   # set by Ctrl-C or `systemctl stop` (SIGTERM)
 
@@ -168,6 +168,12 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
+  if cfg.notifyBotToken != "":
+    # your private chat with your bot has your user id, as Saved Messages does in TDLib
+    let tg = l.tg
+    l.notify = botNotifier(cfg.notifyBotToken,
+      proc (): Future[int64] {.closure, gcsafe.} = tg.selfChat(), defaultFetcher())
+    l.log "notifications: through your own bot (notify_bot_token)"
   await s.loadAllChats()
   for chat in cfg.chats:
     try:

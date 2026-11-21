@@ -31,6 +31,11 @@
 ##   screen); 0 keeps it forever. Verdicts and reasons are always kept.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
+## * `notify_bot_token` (default none): your own bot's token from @BotFather.
+##   Press Start in the bot's chat once; the bot then notifies you there (a
+##   normal Telegram notification on phone and laptop) when a post goes to
+##   review, when one is published, and for every alert (#122). A secret:
+##   keep it out of anything you share.
 ##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the
@@ -62,6 +67,7 @@ type
     dryRun*: bool              ## judge and record, but forward nothing
     alerts*: bool              ## send downtime alerts to Saved Messages
     alertAfterMinutes*: int    ## downtime shorter than this is only logged
+    notifyBotToken*: string    ## your own bot's token (@BotFather): notifications (#122)
     keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
     apiId*: int
     apiHash*: string
@@ -160,6 +166,7 @@ proc parseConfig*(j: JsonNode): Config =
   result.dryRun = j{"dry_run"}.getBool(false)
   result.alerts = j{"alerts"}.getBool(true)
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
+  result.notifyBotToken = j{"notify_bot_token"}.getStr("").strip
   result.keepTextDays = j{"keep_text_days"}.getInt(90)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")

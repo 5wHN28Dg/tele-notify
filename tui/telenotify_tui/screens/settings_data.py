@@ -56,6 +56,8 @@ BOOL_KEYS: dict[str, bool] = {"publish_when_unsure": False, "dry_run": False, "a
 STR_KEYS: dict[str, str] = {"data_dir": "", "tdlib_path": ""}
 CHAT_KEYS = ("chats", "target_chat")
 SECRET_KEYS = ("api_id", "api_hash")
+# never handed to `telenotify` for the corpus test either: your notification bot's token (#122)
+TEMP_LEFT_OUT = (*SECRET_KEYS, "notify_bot_token")
 
 ROLE_KEYS = ("entry_level_role_en", "entry_level_role_ar", "mid_level_general_role_en",
              "mid_level_general_role_ar", "field_keywords_en", "field_keywords_ar")
@@ -405,8 +407,9 @@ def save(path: Path, cfg: dict, now: float | None = None) -> Path | None:
 
 def write_temp(cfg: dict) -> Path:
     """`cfg` in a private temp file for the corpus test; the caller deletes it.
-    The secrets (api_id / api_hash) are left out: judging posts doesn't need them."""
-    clean = {k: v for k, v in cfg.items() if k not in SECRET_KEYS}
+    The secrets (api_id / api_hash, the notification bot's token) are left out: judging posts
+    doesn't need them."""
+    clean = {k: v for k, v in cfg.items() if k not in TEMP_LEFT_OUT}
     fd, tmp = tempfile.mkstemp(prefix="telenotify-config-", suffix=".json")   # mode 0600
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(dumps(clean))

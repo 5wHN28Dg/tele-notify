@@ -686,3 +686,57 @@ suite "what the terminal screen reads":
       st.ageProcessed(-1, 200)
       l.forgetOldTexts()
       check st.rawTextOf(-1, 1) == (if dry: "old" else: "")
+
+suite "notifications through your own bot (#122)":
+  test "a published post and a post for review each notify; a reject doesn't":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear), msg(-1, 12, bad)]
+    let (l, _) = setup(f)
+    var sent: seq[string]
+    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: sent.add text
+      return ""
+    waitFor l.bootstrap()
+    check sent.len == 2
+    check sent[0].startsWith("✅ Published") and "chat1" in sent[0] and "https://t.me/c/1/10" in sent[0]
+    check sent[1].startsWith("🤔 For review") and "chat1" in sent[1] and "https://t.me/c/1/11" in sent[1]
+
+  test "alerts go through the bot too, and a failing bot doesn't stop anything":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    let (l, _) = setup(f)
+    var lines: seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines.add line
+    var sent: seq[string]
+    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: sent.add text
+      return "HTTP 401"
+    waitFor l.alert("something")
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 10'i64)]          # published anyway
+    check sent.len == 2 and sent[0].startsWith("⚠️ tele-notify: something")
+    check lines.anyIt("could not notify" in it and "HTTP 401" in it)
+
+  test "a dry run's notifications say so":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    let (l, _) = setup(f, dryRun = true)
+    var sent: seq[string]
+    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: sent.add text
+      return ""
+    waitFor l.bootstrap()
+    check sent.len == 1 and sent[0].startsWith("✅ Would publish [dry run]")
+
+  test "a post you approved, once sent to your channel, notifies too":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    var sent: seq[string]
+    l.notify = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: sent.add text
+      return ""
+    st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "https://t.me/c/1/7")
+    for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
+    waitFor l.sendApproved()
+    check sent.len == 1 and sent[0].startsWith("✅ Published after your review") and "https://t.me/c/1/7" in sent[0]

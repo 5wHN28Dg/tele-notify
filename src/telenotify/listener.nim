@@ -38,7 +38,7 @@
 ##   to your Saved Messages.
 
 import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
-import config, classify, gather, fetch, telegram, state, dedup, boards
+import config, classify, gather, fetch, telegram, state, dedup, boards, notify
 
 type
   Listener* = ref object
@@ -58,6 +58,7 @@ type
     retryChats: seq[int64]        # chats whose backlog couldn't be read yet (#5)
     retryEveryTicks*: int         # worker ticks (~0.1 s) between retries; backs off
     log*: proc (line: string) {.closure, gcsafe.}
+    notify*: Notifier               ## your own bot (#122); nil: off
     downSince: int64
     selfChat: int64
     titles*: Table[int64, string]   # watched chats' titles, for alerts
@@ -81,9 +82,16 @@ proc duration(seconds: int64): string =
   let m = (seconds mod 3600) div 60
   if h > 0: &"{h}h {m}m" else: &"{m}m"
 
+proc tell(l: Listener, text: string) {.async.} =
+  ## Through your own bot, if there is one (#122). Never raises; a failure is logged.
+  if l.notify == nil: return
+  let err = await l.notify(text)
+  if err != "": l.say "   (could not notify you through your bot: " & err & ")"
+
 proc alert*(l: Listener, text: string) {.async.} =
-  ## Log loudly and, if alerts are on, tell you in Saved Messages.
+  ## Log loudly and, if alerts are on, tell you in Saved Messages (and through your bot).
   l.say "⚠️  " & text
+  await l.tell("⚠️ tele-notify" & (if l.dryRun: " [dry run]" else: "") & ": " & text)
   try: l.state.addAlert(text)        # for the terminal screen
   except CatchableError as e: l.say "   (could not record the alert: " & e.msg & ")"
   if not l.cfg.alerts: return
@@ -315,6 +323,17 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 
+  if action in ["forwarded", "linked", "would publish", "queued for review", "error, queued for review"]:
+    var link = ""
+    try: link = await l.tg.link(m.chatId, m.id)
+    except CatchableError: discard
+    let head = case action
+      of "forwarded", "linked": "✅ Published"
+      of "would publish": "✅ Would publish"
+      else: "🤔 For review"
+    let tag = if l.dryRun: " [dry run]" else: ""
+    await l.tell(head & tag & ": " & (if role != "": role else: "a post") & "\n" & m.chatTitle &
+                 (if link != "": "\n" & link else: ""))
   let mark = case action
     of "forwarded", "linked", "would publish": "✅"
     of "queued for review", "error, queued for review": "🤔"
@@ -459,6 +478,8 @@ proc sendApproved*(l: Listener) {.async.} =
       l.state.addPublished(r.chatId, r.msgId, r.text)
       discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
+      await l.tell("✅ Published after your review: " & (if r.role != "": r.role else: "a post") & "\n" &
+                   r.chatTitle & (if r.link != "": "\n" & r.link else: ""))
     except CatchableError as e:
       l.say &"   could not send reviewed {r.chatTitle} #{r.msgId}: {e.msg}"
       try: l.state.reopenReview(r.id, e.msg)
