@@ -423,3 +423,4 @@ suite "instagram review fixes, round 2 (PR #126)":
     check not unreadable("ب".repeat(101) & " https://www.instagram.com/p/W1/")
     check unreadable("ب".repeat(100) & " instagram.com/p/W1/")                    # a bare link isn't counted
     check unreadable("ب".repeat(90) & " #وظائف_البصرة #وظائف @basrajobs https://www.instagram.com/p/W1/")
+    check unreadable("ب".repeat(100) & " @basrajobs https://www.instagram.com/p/W1/")   # a mention isn't counted either
