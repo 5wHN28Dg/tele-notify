@@ -892,8 +892,8 @@ async def test_y_copies_what_a_selection_gives_without_bidi_controls(paths, stat
 
 
 async def test_y_and_the_selection_drop_direction_marks(paths, state, now):
-    """Review run 2 (I5): direction marks and invisible characters (LRM, RLM, ALM, ZWSP, BOM) came
-    along: a link with an RLM glued on pasted with it. y and the mouse selection both drop them, and
+    """Review run 2 (I5): direction marks and invisible characters (LRM, RLM, ALM, ZWSP, BOM; run 3:
+    the soft hyphen and the word joiner) came along: a link with an RLM glued on pasted with it. y and the mouse selection both drop them, and
     Arabic still copies in reading order."""
     from textual.selection import Selection
 
@@ -901,7 +901,8 @@ async def test_y_and_the_selection_drop_direction_marks(paths, state, now):
     db.execute("UPDATE reviews SET status = 'discarded'")
     db.commit()
     db.close()
-    marked = "\u200f" + UNCLEAR.replace(" ", " \u200b", 1) + "\u061c\nhttps://example.com/apply\u200f\ufeff \u200emore"
+    marked = ("\u200f" + UNCLEAR.replace(" ", " \u200b", 1) + "\u061c\nhttps://example.com/ap\u00adply\u2060\u200f\ufeff"
+              " \u200emore")
     add_pending(state, 78, marked, now)
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(120, 40)) as pilot:

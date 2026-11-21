@@ -3,7 +3,11 @@ this machine's desktop, OSC 52 always, and a note that says "Copied" only when i
 
 from __future__ import annotations
 
+import contextlib
+import os
+import signal
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -192,3 +196,35 @@ exec /bin/sleep 30
             break
         await asyncio.sleep(0.05)
     assert not _alive(second)
+
+
+async def test_a_clipboard_program_that_leaves_a_child_says_copied_at_once(paths, tmp_path, monkeypatch):
+    """Review run 3: xclip forks a child that keeps serving the clipboard with stdout still open; with
+    stdout on a pipe the copy waited the whole timeout, then said it failed. It says "Copied" at once."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    prog = bin_dir / "xclip"
+    prog.write_text(f"""#!/bin/sh
+/bin/cat > "{bin_dir}/xclip.stdin"
+/bin/sleep 5 &
+echo $! > "{bin_dir}/child"
+exit 0
+""")
+    prog.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("DISPLAY", ":1")
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_review(pilot)
+            start = time.monotonic()
+            await pilot.press("y")
+            await app.workers.wait_for_complete()
+            took = time.monotonic() - start
+            assert toast(app).startswith("Copied the post's text ("), toast(app)
+            assert took < 1.0, took
+    finally:
+        child = bin_dir / "child"
+        if child.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(child.read_text()), signal.SIGKILL)

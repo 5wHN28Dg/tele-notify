@@ -983,11 +983,11 @@ async def test_the_status_says_no_problems_whole_at_80x24(paths, cfg_path, edit)
         assert shown.cell_length <= status.content_region.width, (str(shown), status.content_region.width)
 
 
-@pytest.mark.parametrize("drop, keys", [(("api_id", "api_hash"), "API keys"), (("api_hash",), "api_hash")])
-@pytest.mark.parametrize("edit", [False, True])
-async def test_missing_api_keys_are_a_problem_whole_at_80x24(paths, cfg_path, edit, drop, keys):
+@pytest.mark.parametrize("drop, what", [(("api_id", "api_hash"), "api_id and api_hash are"),
+                                        (("api_hash",), "api_hash is")])
+async def test_missing_api_keys_are_a_problem_listed_under_bot(paths, cfg_path, drop, what):
     """Review run 2: "no problems · API keys missing" told a first-time user the opposite of the truth
-    (the bot can't log in without them). Missing keys count as a problem, and the line fits at 80 x 24."""
+    (the bot can't log in without them). They count as a problem in the bar and are listed under Bot."""
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     sd.dedupe_all(cfg)
     for k in drop:
@@ -996,24 +996,50 @@ async def test_missing_api_keys_are_a_problem_whole_at_80x24(paths, cfg_path, ed
     app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
     async with app.run_test(size=(80, 24)) as pilot:
         pane = await open_settings(pilot)
-        if edit:
-            await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
         await pilot.pause()
-        status = pane.query_one("#settings-status", Static)
-        shown = status.render()
-        assert "no problems" not in str(shown)
-        assert f"1 problem: {keys} missing" in str(shown)
-        assert shown.cell_length <= status.content_region.width, (str(shown), status.content_region.width)
-
-
-async def test_missing_api_keys_add_to_the_other_problems(paths, config):
-    """With the keys missing and other errors (no location keywords), the count adds them up."""
-    app = TeleNotifyApp(paths, refresh_seconds=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        pane = await open_settings(pilot)
-        for k in sd.LOCATION_KEYS:
-            pane._put(k, [])
-        await pilot.pause()
-        errs = len(sd.errors(pane.problems))
         shown = str(pane.query_one("#settings-status", Static).render())
-        assert f"{errs + 1} problems to fix" in shown and "API keys missing" in shown and "no problems" not in shown
+        assert shown == "saved · 1 problem"
+        listed = str(pane.query_one("#problems-bot", Static).render())
+        assert f"{what} missing from config.json" in listed
+
+
+COUNTS = [0, 1, 12]
+
+
+async def test_the_status_is_whole_at_80x24_in_every_combination(paths, cfg_path):
+    """Review run 3: "1 problem: API keys missing" pushed the warning count off the 50-column bar.
+    The bar holds counts only; every mix of unsaved changes, errors, warnings and missing keys (both,
+    one, none) is whole at 80 x 24, as the screen draws it."""
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    sd.dedupe_all(cfg)
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        status = pane.query_one("#settings-status", Static)
+        base_original, base_edited = pane.original, dict(pane.edited)
+        lists = list(sd.LIST_KEYS)[:12]
+        assert len(lists) == 12
+        for changes in COUNTS:
+            for errs in COUNTS:
+                for warns in COUNTS:
+                    for drop in ((), ("api_hash",), ("api_id", "api_hash")):
+                        pane.original = {k: v for k, v in base_original.items() if k not in drop}
+                        pane.edited = dict(base_edited)
+                        for k in lists[:changes]:
+                            pane.edited[k] = [*sd.value(base_edited, k), "zz-new"]
+                        pane.problems = ([sd.Problem("max_experience_years", "bad", True)] * errs
+                                         + [sd.Problem("certifications", "twice", False)] * warns)
+                        pane.update_status()
+                        await pilot.pause()
+                        full = str(status.render())
+                        drawn = status.render_line(0).text.rstrip()
+                        case = (changes, errs, warns, drop)
+                        assert len(sd.changed_keys(pane.original, pane.edited)) == changes, case
+                        assert drawn == full, (case, full, drawn)
+                        problems = errs + (1 if drop else 0)
+                        assert ("no problems" in full) == (problems == 0 and warns == 0), case
+                        if problems:
+                            assert f"{problems} problem" in full, case
+                        if warns:
+                            assert f"{warns} warning" in full, case

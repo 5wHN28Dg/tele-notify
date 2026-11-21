@@ -92,11 +92,12 @@ class PostView(Static):
 
 # direction marks and invisible characters: they shape how a line is drawn, so the drawing keeps
 # them, but a copy without them pastes what was read (a link with an RLM glued on works, I5)
-INVISIBLE = dict.fromkeys(map(ord, "\u200e\u200f\u061c\u200b\ufeff"))
+INVISIBLE = dict.fromkeys(map(ord, "\u200e\u200f\u061c\u200b\ufeff\u00ad\u2060"))
 
 
 def without_invisible(text: str) -> str:
-    """`text` without LRM, RLM, ALM, the zero-width space and the BOM (ZWJ and ZWNJ stay: they
+    """`text` without LRM, RLM, ALM, the zero-width space, the BOM, the soft hyphen and the word
+    joiner (the bot's normalize.nim treats them as invisible too; ZWJ and ZWNJ stay: they
     change how emoji and Persian words read)."""
     return text.translate(INVISIBLE)
 
@@ -126,13 +127,16 @@ def clipboard_command() -> list[str] | None:
     return None
 
 
-async def _run(command: list[str], data: bytes | None = None) -> tuple[int | None, bytes]:
+async def _run(command: list[str], data: bytes | None = None, read: bool = False) -> tuple[int | None, bytes]:
     """Run `command` (`data`, if any, on stdin only: it may be untrusted, so never in argv) for at most
-    COPY_TIMEOUT. (exit status, stdout); status None if it couldn't run or was too slow. The program is
-    killed if it is too slow or the copy is cancelled (a second y, quitting), so none is left behind."""
+    COPY_TIMEOUT. (exit status, stdout if `read`); status None if it couldn't run or was too slow. The
+    program is killed if it is too slow or the copy is cancelled (a second y, quitting), so none is left
+    behind. Without `read` stdout goes nowhere: xclip and wl-copy leave a child serving the clipboard,
+    which would hold a pipe open until the timeout."""
     try:
         proc = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
-                                                    stdout=asyncio.subprocess.PIPE,
+                                                    stdout=asyncio.subprocess.PIPE if read
+                                                    else asyncio.subprocess.DEVNULL,
                                                     stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return None, b""
@@ -144,17 +148,18 @@ async def _run(command: list[str], data: bytes | None = None) -> tuple[int | Non
         if proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-    return proc.returncode, out
+    return proc.returncode, out or b""
 
 
 async def attached_from_here() -> bool | None:
     """Whether the user's terminal is on this machine. Outside tmux: yes (SSH_CONNECTION is checked
     first). Inside tmux the pane keeps the environment it started with, so ask tmux what the last
     attached client brought (update-environment sets SSH_CONNECTION, or "-SSH_CONNECTION" when that
-    client had none). None: tmux couldn't say."""
+    client had none). None: tmux couldn't say. With two clients attached at once (one here, one over
+    ssh), the one that attached last decides."""
     if not os.environ.get("TMUX"):
         return True
-    status, out = await _run(["tmux", "show-environment", "SSH_CONNECTION"])
+    status, out = await _run(["tmux", "show-environment", "SSH_CONNECTION"], read=True)
     line = out.decode("utf-8", "replace").strip()
     if status == 0 and line == "-SSH_CONNECTION":
         return True

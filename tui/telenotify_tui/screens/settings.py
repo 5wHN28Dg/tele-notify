@@ -713,28 +713,26 @@ class SettingsPane(Vertical):
         n = len(sd.changed_keys(self.original, self.edited))
         errs = len(sd.errors(self.problems))
         warns = len(self.problems) - errs
-        sec = sd.secret_status(self.original)
         t = Text()
         t.append(f"{n} unsaved change{'s' if n != 1 else ''}" if n else "saved",
                  style="bold yellow" if n else "green")
-        # missing API keys stop the bot logging in: a problem too, never beside "no problems" (#58)
-        missing = [k for k, v in sec.items() if v == "missing"]
-        keys = "API keys" if len(missing) == len(sec) else (missing[0] if missing else "")
-        total = errs + (1 if missing else 0)
-        if total == 1 and missing:   # short, to fit the 50 columns the bar has at 80 x 24
-            t.append(f" · 1 problem: {keys} missing", style="bold red")
-        elif total:
-            t.append(f" · {total} problem{'s' if total != 1 else ''} to fix", style="bold red")
+        # counts only, so the line is whole in the 50 columns the bar has at 80 x 24 (#58); what the
+        # problems are is listed in each section. Missing API keys stop the bot logging in: a problem
+        # too, listed under Bot, so "no problems" is never said beside them
+        total = errs + (1 if self.missing_keys() else 0)
+        if total:
+            t.append(f" · {total} problem{'s' if total != 1 else ''}", style="bold red")
         if warns:
             t.append(f" · {warns} warning{'s' if warns != 1 else ''}", style="yellow")
-        if not total and not warns:   # said, not left out: the count is always in view (#58)
+        if not total and not warns:   # said, not left out: the count is always in view
             t.append(" · no problems")
-        # the secrets last and short: what gets cut at 80 x 24 is these
-        if not missing:
-            t.append(" · API keys set", style="dim")
-        elif errs:
-            t.append(f" · {keys} missing", style="dim")
         self.query_one("#settings-status", Static).update(t)
+
+    def missing_keys(self) -> str:
+        """"API keys", or the one of api_id / api_hash missing from the file as opened; "" if both are set."""
+        sec = sd.secret_status(self.original or {})
+        missing = [k for k, v in sec.items() if v == "missing"]
+        return "" if not missing else "API keys" if len(missing) == len(sec) else missing[0]
 
     def update_problems(self) -> None:
         for sec, _title, keys in sd.SECTIONS:
@@ -743,6 +741,12 @@ class SettingsPane(Vertical):
                 if p.key in keys:
                     grouped.setdefault((p.error, p.message), []).append(p.key)
             t = Text()
+            missing = self.missing_keys() if sec == "bot" and self.original is not None else ""
+            if missing:   # counted in the status bar; not a save error: this screen never writes them
+                both = missing == "API keys"
+                what = "api_id and api_hash are" if both else f"{missing} is"
+                t.append(f"problem: {what} missing from config.json, so the bot can't log in; "
+                         f"add {'them' if both else 'it'} there (this screen never changes them)\n", style="red")
             for (error, message), ks in sorted(grouped.items(), key=lambda x: not x[0][0]):
                 t.append(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}") + "\n",
                          style="red" if error else "yellow")
