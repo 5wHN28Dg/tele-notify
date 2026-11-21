@@ -45,14 +45,14 @@ class Github:
         self.env = dict(os.environ, HOME=str(self.home), PATH=f"{fakes}:{os.environ['PATH']}",
                         TN_API="https://api.example", TMPDIR=str(tmp), TN_RETRY_WAIT="0")
 
-    def release(self, tag: str, installer_ok: bool = True, bad_sum: bool = False, assets: bool = True) -> None:
+    def release(self, tag: str, installer_exit: int = 0, bad_sum: bool = False, assets: bool = True) -> None:
         stage = self.web.parent / f"stage-{tag}"
         stage.mkdir()
         _exe(stage / "install-staged.sh", "#!/bin/sh\n"
                                           f'echo "installer ran" >> "{self.log}"\n'
                                           'cat > /dev/null\n' +
                                           (f'printf "%s\\n" {tag} > "$HOME/.local/lib/tele-notify/version"\n'
-                                           if installer_ok else "exit 1\n"))
+                                           if installer_exit == 0 else f"exit {installer_exit}\n"))
         (stage / "version").write_text(tag + "\n")
         pkg = self.web / f"tele-notify-{tag}.tar.gz"
         with tarfile.open(pkg, "w:gz") as t:
@@ -107,7 +107,7 @@ def test_a_package_that_doesnt_match_its_checksum_is_not_installed(tmp_path):
 
 def test_a_failed_install_is_reported(tmp_path):
     g = Github(tmp_path)
-    g.release("v4.1.0", installer_ok=False)
+    g.release("v4.1.0", installer_exit=1)
     r = g.run()
     assert r.returncode != 0
     assert "installer ran" in g.calls()
@@ -169,11 +169,13 @@ def test_the_package_holds_what_the_installer_needs(tmp_path):
 
 
 def test_a_release_that_failed_here_is_not_tried_every_night(tmp_path):
-    """A release that doesn't stay up here would restart the bot onto it and back every night."""
+    """A release that doesn't stay up here (the installer's exit 3) would restart the bot onto it and
+    back every night."""
     g = Github(tmp_path)
     (g.lib / "version").write_text("v4.0.0\n")
-    g.release("v4.1.0", installer_ok=False)
+    g.release("v4.1.0", installer_exit=3)
     assert g.run().returncode != 0
+    assert "alert: Self-update: v4.1.0 doesn't work on this server" in g.calls()
     g.log.unlink()
     r = g.run()                                                   # the next night
     assert r.returncode == 0 and "skipping v4.1.0" in r.stdout
@@ -204,3 +206,25 @@ def test_a_release_without_its_checksum_is_not_installed(tmp_path):
     r = g.run()
     assert r.returncode != 0
     assert "installer ran" not in g.calls() and "alert: Self-update: could not download v4.1.0's checksum" in g.calls()
+
+
+def test_a_failure_that_may_pass_next_time_is_tried_again(tmp_path):
+    """Another push running, pip or the network at 4am: the installer's other exits."""
+    g = Github(tmp_path)
+    (g.lib / "version").write_text("v4.0.0\n")
+    g.release("v4.1.0", installer_exit=1)
+    assert g.run().returncode != 0
+    assert not (g.lib / "failed-version").exists()
+    g.log.unlink()
+    g.run()
+    assert "installer ran" in g.calls()
+
+
+def test_an_older_release_without_a_package_is_just_up_to_date(tmp_path):
+    """The repository's latest release may be an old hand-made one without files: no nightly alert."""
+    g = Github(tmp_path)
+    (g.lib / "version").write_text("v4.0-130-gabcdef1\n")
+    (g.web / "latest").write_text('{"tag_name": "v4.0", "assets": []}')
+    r = g.run()
+    assert r.returncode == 0 and "up to date" in r.stdout
+    assert "alert:" not in g.calls()

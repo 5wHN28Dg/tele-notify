@@ -11,3 +11,7 @@ Description=tele-notify: install a new release if there is one
 Type=oneshot
 ExecStart=/bin/sh %h/.local/lib/tele-notify/self-update.sh
 Nice=10
+# a hung download or pip mustn't block every later night
+TimeoutStartSec=45min
+# a stop (shutdown) while it swaps waits for the swap and its rollback
+TimeoutStopSec=5min

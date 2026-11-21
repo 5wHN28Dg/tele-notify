@@ -128,11 +128,15 @@ proc main() =
   var scrape = true
   var showText, dryRun = false
   var days = 7
+  var nargs = 0
   configPath = ""
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
-      if cmd == "": cmd = key else: arg = key
+      if cmd == "": cmd = key
+      else:
+        arg = key
+        inc nargs
     of cmdLongOption, cmdShortOption:
       case key
       of "config", "c": configPath = val
@@ -158,7 +162,7 @@ proc main() =
     if arg == "" or not fileExists(arg): quit "eval needs a corpus file\n" & usage
     cmdEval(cfg, arg, show, outPath)
   of "alert":
-    if arg == "": quit "alert needs a text\n" & usage
+    if nargs != 1 or arg == "": quit "alert needs one text, in quotes\n" & usage
     try: waitFor cmdAlert(cfg, arg)
     except CatchableError as e: quit "error: " & e.msg
   of "login", "run", "review", "stats", "compare":

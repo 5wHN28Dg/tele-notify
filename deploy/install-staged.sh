@@ -20,9 +20,12 @@ record_version() {
     cp "$d/version" "$lib/version.tmp" && mv -f "$lib/version.tmp" "$lib/version" || warn "could not record the version"
   fi
 }
+# exit 3: this package doesn't work on this machine (the new bot doesn't start,
+# or doesn't stay up), so deploy/self-update.sh won't try it again; any other
+# failure (another push running, pip or the network, systemctl) may pass next time
 fail() {
-  warn "$*"
-  exit 1
+  warn "$1"
+  exit "${2:-1}"
 }
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -51,7 +54,7 @@ tmps=$d
 tar -xzf - -C "$d"
 
 # 1. everything that can fail; nothing installed changes here
-"$d/telenotify" --help >/dev/null || fail "the new bot does not start on this server (glibc, libssl, libsqlite3?); nothing was changed"
+"$d/telenotify" --help >/dev/null || fail "the new bot does not start on this server (glibc, libssl, libsqlite3?); nothing was changed" 3
 if [ -f "$d/libtdjson.so" ]; then
   libs=$(ldd "$d/libtdjson.so") || fail "ldd cannot read the new TDLib; nothing was changed"
   case $libs in
@@ -108,12 +111,19 @@ if [ -f "$d/self-update.sh" ]; then
     done
     if ! systemctl --user daemon-reload; then
       warn "could not reload the self-update's units"
+      first_update=2
     elif [ "$first_update" = 1 ]; then
       if systemctl --user enable --now tele-notify-update.timer; then
         say "nightly self-update is on"
       else
-        warn "could not turn the nightly self-update on"
+        first_update=2
       fi
+    fi
+    # turning it on the first time failed: without the timer file the next
+    # install tries again
+    if [ "$first_update" = 2 ] && [ ! -e "$units/timers.target.wants/tele-notify-update.timer" ]; then
+      rm -f "$units/tele-notify-update.timer"
+      warn "could not turn the nightly self-update on; the next install tries again"
     fi
   else
     warn "could not install self-update.sh"
@@ -218,7 +228,7 @@ rollback() {
     systemctl --user reset-failed tele-notify || true
     systemctl --user restart tele-notify || warn "restarting the previous bot failed too"
   fi
-  fail "rolled back to the previous bot, TDLib, screen and unit; see journalctl --user -u tele-notify"
+  fail "rolled back to the previous bot, TDLib, screen and unit; see journalctl --user -u tele-notify" "${2:-1}"
 }
 put_prev() {
   if [ -n "$1" ]; then
@@ -282,4 +292,4 @@ if [ "$state" = active ] && [ "$after" = "$before" ]; then
   record_version
   exit 0
 fi
-rollback "the new bot did not stay up (state $state, restarts $before -> $after)"
+rollback "the new bot did not stay up (state $state, restarts $before -> $after)" 3

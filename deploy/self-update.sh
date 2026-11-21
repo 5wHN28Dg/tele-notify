@@ -55,16 +55,17 @@ r = json.load(open(sys.argv[1]))
 tag = r.get("tag_name") or ""
 if not re.fullmatch(r"v[0-9]+(\.[0-9]+)*", tag):
     sys.exit("no release tag")
-urls = {a.get("name"): a.get("browser_download_url") or "" for a in r.get("assets") or []}
-pkg = urls.get(f"tele-notify-{tag}.tar.gz", "")
-sha = urls.get(f"tele-notify-{tag}.tar.gz.sha256", "")
-if not (pkg.startswith("https://") and sha.startswith("https://")):
-    sys.exit("the release has no package")
 def parts(t):
     return tuple(int(x) for x in t[1:].split("."))
 m = re.fullmatch(r"(v[0-9]+(?:\.[0-9]+)*)(-[0-9]+-g[0-9a-f]+)?(-dirty)?", sys.argv[2].strip())
 # nothing installed yet, or a build from before the first release: install
 newer = m is None or parts(tag) > parts(m.group(1))
+urls = {a.get("name"): a.get("browser_download_url") or "" for a in r.get("assets") or []}
+pkg = urls.get(f"tele-notify-{tag}.tar.gz", "")
+sha = urls.get(f"tele-notify-{tag}.tar.gz.sha256", "")
+# a release that isn't newer needn't have a package (an old hand-made one)
+if newer and not (pkg.startswith("https://") and sha.startswith("https://")):
+    sys.exit("the release has no package")
 print(tag)
 print(pkg)
 print(sha)
@@ -98,10 +99,15 @@ tar -xzOf "$work/package.tar.gz" ./install-staged.sh > "$work/install-staged.sh"
   fail "the $tag package has no installer; nothing was installed"
 
 say "installing $tag (installed: ${installed:-unknown})"
-if sh "$work/install-staged.sh" < "$work/package.tar.gz"; then
+rc=0
+sh "$work/install-staged.sh" < "$work/package.tar.gz" || rc=$?
+if [ "$rc" = 0 ]; then
   rm -f "$lib/failed-version"
   say "installed $tag"
-else
+elif [ "$rc" = 3 ]; then
+  # it doesn't work on this machine: not again every night
   printf '%s\n' "$tag" > "$lib/failed-version" || true
+  fail "$tag doesn't work on this server, so the previous version is kept and $tag won't be tried again (journalctl --user -u tele-notify-update)"
+else
   fail "installing $tag failed, so the previous version is kept (journalctl --user -u tele-notify-update)"
 fi

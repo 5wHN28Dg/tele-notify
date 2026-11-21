@@ -432,3 +432,22 @@ def test_a_self_update_turned_off_stays_off(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "enable --now tele-notify-update.timer" not in s.calls()
     assert (s.units / "tele-notify-update.timer").read_text() != "old timer\n"   # but brought up to date
+
+
+def test_turning_the_self_update_on_is_tried_again_after_a_failure(tmp_path):
+    """If enabling the timer fails at its first install, the next install tries again (the timer file
+    isn't left behind to make it look installed)."""
+    s = Server(tmp_path, active=True)
+    r = s.run(fail="enable")
+    assert r.returncode == 0, r.stderr
+    assert "the next install tries again" in r.stderr
+    assert not (s.units / "tele-notify-update.timer").exists()
+    s.log.unlink()
+    assert s.run().returncode == 0
+    assert "enable --now tele-notify-update.timer" in s.calls()
+
+
+def test_a_bot_that_does_not_start_here_exits_3(tmp_path):
+    """Exit 3 tells self-update.sh not to try this package again; a busy lock is an ordinary failure."""
+    s = Server(tmp_path, active=True)
+    assert s.run(fail="bot").returncode == 3
