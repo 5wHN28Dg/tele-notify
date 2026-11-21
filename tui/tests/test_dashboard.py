@@ -696,4 +696,6 @@ async def test_the_footer_at_80_columns(paths):
         assert keys["v"].description == "Flip"
         palette = keys["ctrl+p"].region.x   # "^p palette" is drawn over the footer's right end
         for key in ("p", "d", "v", "1", "2", "3"):
-            assert keys[key].region.right <= palette, key
+            k = keys[key]
+            pad = k.get_component_styles("footer-key--description").padding.right   # a blank cell
+            assert k.region.right - pad <= palette, key   # the label itself is clear of it
