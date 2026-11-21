@@ -29,6 +29,10 @@
 ##       Stage 4: what the dry run would have published next to what the
 ##       Python bot did publish, over the last N days (default 7).
 ##
+##   telenotify alert [--config:FILE] TEXT
+##       Keep TEXT as an alert for the terminal screen and send it through
+##       your own bot (used by the nightly self-update).
+##
 ##   Dry runs keep their own state (state-dryrun.sqlite3); add --dry-run to
 ##   review or stats to look at it.
 
@@ -44,6 +48,7 @@ usage:
   telenotify review [--config:FILE] [--dry-run]
   telenotify stats [--config:FILE] [--days:N] [--dry-run]
   telenotify compare [--config:FILE] [--days:N]
+  telenotify alert [--config:FILE] TEXT
 
 Without --config, the config is $TELENOTIFY_CONFIG, else ~/.config/tele-notify/config.json,
 else ./config.json.
@@ -123,11 +128,15 @@ proc main() =
   var scrape = true
   var showText, dryRun = false
   var days = 7
+  var nargs = 0
   configPath = ""
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
-      if cmd == "": cmd = key else: arg = key
+      if cmd == "": cmd = key
+      else:
+        arg = key
+        inc nargs
     of cmdLongOption, cmdShortOption:
       case key
       of "config", "c": configPath = val
@@ -152,6 +161,10 @@ proc main() =
   of "eval":
     if arg == "" or not fileExists(arg): quit "eval needs a corpus file\n" & usage
     cmdEval(cfg, arg, show, outPath)
+  of "alert":
+    if nargs != 1 or arg == "": quit "alert needs one text, in quotes\n" & usage
+    try: waitFor cmdAlert(cfg, arg)
+    except CatchableError as e: quit "error: " & e.msg
   of "login", "run", "review", "stats", "compare":
     try:
       case cmd

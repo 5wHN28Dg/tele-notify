@@ -1,0 +1,49 @@
+# A release for the nightly self-update (#123): a v* tag builds the bot,
+# stages the same set deploy/push-to-server.sh installs (deploy/make-package.sh),
+# and attaches tele-notify-<tag>.tar.gz and its .sha256 to a GitHub release.
+# Built on the oldest Ubuntu runner, so the bot runs on servers with an older
+# glibc than the newest Ubuntu's. TDLib isn't in the package: the server's is kept.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      # pinned: what this job builds is installed on the server by itself
+      - uses: jiro4989/setup-nim-action@08957181dc5baf5f8446497598f798020a03e66a  # v2
+        with:
+          nim-version: '2.2.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag format
+        env:
+          TAG: ${{ github.ref_name }}
+        run: printf '%s\n' "$TAG" | grep -Eqx 'v[0-9]+(\.[0-9]+)*'
+      - name: Build
+        run: |
+          nimble install -y --depsOnly
+          nimble build -y -d:release
+          ./telenotify --help > /dev/null
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          install -D -m 755 telenotify stage/telenotify
+          sh deploy/make-package.sh stage "$TAG"
+          tar -C stage -czf "tele-notify-$TAG.tar.gz" .
+          sha256sum "tele-notify-$TAG.tar.gz" > "tele-notify-$TAG.tar.gz.sha256"
+          tar -tzf "tele-notify-$TAG.tar.gz" | grep -qx './install-staged.sh'
+      - name: Release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes \
+            "tele-notify-$TAG.tar.gz" "tele-notify-$TAG.tar.gz.sha256"

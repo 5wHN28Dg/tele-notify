@@ -1,0 +1,17 @@
+# systemd *user* service: install a newer tele-notify release if there is one
+# (#123). Started by tele-notify-update.timer; installed by deploy/install-staged.sh.
+# Logs: journalctl --user -u tele-notify-update
+
+[Unit]
+Description=tele-notify: install a new release if there is one
+# (network-online.target can't be waited for from a user unit: the script
+# tries GitHub a few times instead)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh %h/.local/lib/tele-notify/self-update.sh
+Nice=10
+# a hung download or pip mustn't block every later night
+TimeoutStartSec=45min
+# a stop (shutdown) while it swaps waits for the swap and its rollback
+TimeoutStopSec=5min
