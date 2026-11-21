@@ -40,7 +40,7 @@ from textual.widgets.option_list import Option
 from .. import bot
 from ..clean import clean
 from ..rtl import visual
-from ..store import BUSY, is_busy
+from ..store import BUSY, is_busy, unreadable_note
 from . import settings_data as sd
 from .armed import Armed
 
@@ -523,6 +523,7 @@ class SettingsPane(Vertical):
         self.problems: list[sd.Problem] = []
         self.has_chat_table = False
         self.store_chats: list = []
+        self._chats_warned = False   # the chat list's read failed, and was said, in this tab opening
         self.chat_filter = ""
         self._tab_label: str | None = None
         self.has_dups = False   # some list has an entry twice: "Remove duplicates" is offered
@@ -647,11 +648,19 @@ class SettingsPane(Vertical):
                 self.store_chats = s.chats()
         except (sqlite3.Error, OSError, ValueError) as e:  # a locked or broken state file mustn't break settings
             self.has_chat_table, self.store_chats = False, []
-            if is_busy(e):   # the Dashboard's words for a lock (#105)
-                self.notify(f"{BUSY}, so the chat list wasn't read. Opening this tab again retries.",
-                            severity="warning", markup=False)
+            if self._chats_warned:   # one tab opening reads the list more than once: say it once
+                return
+            self._chats_warned = True
+            if is_busy(e):   # the Dashboard's words (#105)
+                said = f"{BUSY}, so the chat list wasn't read. Opening this tab again retries."
             else:
-                self.notify(f"Couldn't read the chat list: {e}", severity="warning", markup=False)
+                said = f"The chat list wasn't read. {unreadable_note(bot.service(self.paths.dry_run))}"
+            self.notify(said, severity="warning", markup=False)
+            return
+        self._chats_warned = False
+
+    def on_hide(self) -> None:
+        self._chats_warned = False   # opening the tab again says it again
 
     def reload(self) -> None:
         """Called by the app when the tab is shown and on ctrl+r."""

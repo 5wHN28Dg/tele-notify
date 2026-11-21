@@ -993,3 +993,38 @@ async def test_holding_ctrl_q_asks_once(paths, cfg_path):
         await pilot.press("n")
         await pilot.pause()
         assert not isinstance(app.screen, ConfirmModal) and app.is_running and pane.dirty
+
+
+async def test_ctrl_q_over_another_question_still_asks_to_quit(paths, cfg_path):
+    """#92 review run 1: only the quit question itself stops a second one; over the revert
+    question (or any other), ctrl+q opens the quit question as before."""
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "roles", "level_keywords_en", "new grad")
+        await pilot.press("ctrl+r")                       # "Discard your unsaved settings changes…?"
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmModal)
+        depth = len(app.screen_stack)
+        await pilot.press("ctrl+q", "ctrl+q")
+        await pilot.pause()
+        assert len(app.screen_stack) == depth + 1
+        assert isinstance(app.screen, ConfirmModal) and app.screen.yes == "Quit"   # the quit question, once
+
+
+async def test_an_unreadable_state_file_is_said_once_in_plain_words(paths, cfg_path):
+    """Review run 1 (C2, W3): Settings said "Couldn't read the chat list: file is not a database",
+    several times for one opening of the tab. Now once, in the Dashboard's words."""
+    paths.state.write_bytes(b"this is not a database" * 100)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_settings(pilot)
+        await pilot.pause()
+        said = [n.message for n in app._notifications if "chat list" in n.message]
+        assert said == [("The chat list wasn't read. Can't read the state file. "
+                         "Check the bot's log: journalctl --user -u tele-notify-dryrun")]
+        await pilot.press("1")                            # another opening says it again
+        await pilot.pause()
+        await open_settings(pilot)
+        await pilot.pause()
+        assert len([n for n in app._notifications if "chat list" in n.message]) == 2

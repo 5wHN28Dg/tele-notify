@@ -307,7 +307,7 @@ async def test_corrupt_state_file_is_a_note_not_a_crash(paths, state):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test() as pilot:
         await open_review(pilot)
-        assert "can't read the state file" in note(app)   # said once, in the note (#106)
+        assert "Can't read the state file" in note(app)   # said once, in the note (#106)
         assert "Nothing to show" in str(app.query_one("#review-empty", Static).content)
         await pilot.press("h")
         await pilot.pause()
@@ -536,7 +536,7 @@ async def test_a_value_error_from_the_data_is_a_note_not_a_crash(paths, monkeypa
     async with app.run_test(size=(140, 40)) as pilot:
         await open_review(pilot)
         assert app.is_running
-        assert "can't read the state file" in note(app)
+        assert "Can't read the state file" in note(app)
 
 
 # ------------------------------------- "match, don't send" (already sent elsewhere)
@@ -873,3 +873,14 @@ async def test_a_read_error_is_said_once(paths, state, monkeypatch, history_mode
         assert BUSY_NOTE in note(app)
         assert "busy" not in body and "locked" not in body
         assert "Nothing to show" in body
+
+
+async def test_an_unreadable_state_file_is_worded_as_on_the_dashboard(paths, state):
+    """Review run 1 (C2, W3): Review said "can't read the state file: file is not a database"."""
+    from telenotify_tui.store import unreadable_note
+    state.write_bytes(b"not a database" * 100)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        assert note(app) == unreadable_note("tele-notify-dryrun")
+        assert "not a database" not in note(app)

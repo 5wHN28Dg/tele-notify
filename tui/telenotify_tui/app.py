@@ -175,14 +175,16 @@ class TeleNotifyApp(App):
         if not settings.dirty:
             self.exit()
             return
-        if isinstance(self.screen, ConfirmModal):   # a held ctrl+q: one question is enough (#92)
+        if getattr(self.screen, "quit_question", False):   # a held ctrl+q: one question is enough (#92)
             return
 
         def done(yes: bool | None) -> None:
             if yes:
                 self.exit()
 
-        self.push_screen(ConfirmModal("Settings has unsaved changes. Quit and lose them?", "Quit"), done)
+        question = ConfirmModal("Settings has unsaved changes. Quit and lose them?", "Quit")
+        question.quit_question = True   # other questions (revert, restart) may still have it on top
+        self.push_screen(question, done)
 
     def action_show(self, tab: str) -> None:
         # Hand focus to the tab bar first: if a widget inside the old tab kept

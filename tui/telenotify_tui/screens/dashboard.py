@@ -963,9 +963,12 @@ class DashboardPane(Vertical):
         alerts_title = self.query_one("#alerts-title", Label)
         health_title = self.query_one("#health-title", Label)
         if snap.error:   # a failed read keeps the rows read last and says they are from then (#96)
-            alerts_title.update(KEPT_ALERTS)
-            health_title.update(KEPT_HEALTH)
-            if not self._problems_shown and not self.query_one("#alerts", DataTable).row_count:
+            if self._problems_shown or self.query_one("#alerts", DataTable).row_count:
+                alerts_title.update(KEPT_ALERTS)
+                health_title.update(KEPT_HEALTH)
+            else:   # no rows to keep (nothing read yet): the titles don't promise any
+                alerts_title.update("Alerts")
+                health_title.update("Chat health")
                 note.update(NOT_SHOWN_NOTE)   # short: the note shares its row with the buttons (80 columns)
             return
         alerts_title.update("Alerts")

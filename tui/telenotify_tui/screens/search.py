@@ -322,7 +322,7 @@ class SearchPane(Vertical):
             return found, search_data.search(s, query, verdict, chat_id, limit=LIMIT), ""
 
     def _service(self) -> str:
-        return bot.SERVICES["dry-run" if self.app.paths.dry_run else "real"]
+        return bot.service(self.app.paths.dry_run)
 
     def _apply(self, generation: int, chats: list[tuple[int, str]] | None, rows: list[Judged], problem: str,
                focus_results: bool, note: str = "") -> None:

@@ -792,6 +792,7 @@ async def test_a_failed_read_before_any_rows_says_so(paths):
         pane._apply(_failed_read(app, True))
         await pilot.pause()
         assert text(app, "#dash-note") == "Not shown (see Bot)"
+        assert text(app, "#alerts-title") == "Alerts" and text(app, "#health-title") == "Chat health"   # no "as last read"
 
 
 async def test_the_feed_keeps_its_selection_across_a_failed_read(paths):
