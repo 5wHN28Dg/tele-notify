@@ -111,6 +111,12 @@ proc forgetAddress(host: string, port: Port, allowPrivate: bool) =
       let k = keptAddresses[key]
       keptAddresses[key] = (k[0], k[1], 0.0)
 
+proc keepAddressExpired*(host: string, port: Port, allowPrivate: bool, ip: string) =
+  ## Tests: an address kept before, now expired (as after a failed connect).
+  {.cast(gcsafe).}:
+    keptAddresses[addressKey(host, port, allowPrivate)] =
+      (ip, (if ':' in ip: Domain.AF_INET6 else: Domain.AF_INET), 0.0)
+
 proc keptAddressFor*(host: string, port: Port, allowPrivate: bool): string =
   ## Tests: the address kept for this host, expired or not ("" for none).
   {.cast(gcsafe).}: keptAddresses.getOrDefault(addressKey(host, port, allowPrivate))[0]
@@ -127,8 +133,12 @@ proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string,
       if k[0] != "" and epochTime() < k[2]: return (k[0], k[1])
       # a lookup that failed a moment ago fails again at once: a resolver that
       # times out would otherwise block the program once per message (review run 3)
+      # (with an address known before, that one is used, expired or not: no
+      # lookup until the minute is over, whatever happens to the address)
       let f = failedLookups.getOrDefault(key)
-      if f[0] != "" and epochTime() < f[1]: raise newException(FetchError, f[0])
+      if f[0] != "" and epochTime() < f[1]:
+        if k[0] != "": return (k[0], k[1])
+        raise newException(FetchError, f[0])
   {.cast(gcsafe).}: inc addressLookups
   var info: ptr AddrInfo
   try:
@@ -137,12 +147,12 @@ proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string,
     let why = "cannot resolve " & host & ": " & e.msg.splitLines[0]
     if keepMs > 0:
       {.cast(gcsafe).}:
+        failedLookups[key] = (why, epochTime() + 60)
         let k = keptAddresses.getOrDefault(key)
         if k[0] != "":
           # the address found before still works more often than not: keep using it a minute
           keptAddresses[key] = (k[0], k[1], epochTime() + 60)
           return (k[0], k[1])
-        failedLookups[key] = (why, epochTime() + 60)
     raise newException(FetchError, why)
   defer: freeAddrInfo(info)
   var first = ""

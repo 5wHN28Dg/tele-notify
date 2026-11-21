@@ -258,3 +258,17 @@ suite "kept addresses (#127)":
     check not waitFor(fetch("http://127.0.0.1:" & $closed & "/x", allowPrivate = true,
                             keepAddressMs = 600_000)).ok
     check keptAddressFor("127.0.0.1", closed, allowPrivate = true) == "127.0.0.1"   # kept, only expired
+
+
+  test "while lookups fail, the address known before is used, with one lookup a minute (an outage)":
+    forgetKeptAddresses()
+    let name = "tn-gone.invalid"           # its lookup always fails
+    keepAddressExpired(name, Port(port), allowPrivate = true, "127.0.0.1")
+    let url = "http://" & name & ":" & $port & "/ok"
+    let before = addressLookups
+    check waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok   # the fallback reached it
+    check addressLookups == before + 1
+    # the address stops answering (a failed connect marks it expired): still no new lookup this minute
+    keepAddressExpired(name, Port(port), allowPrivate = true, "127.0.0.1")
+    for _ in 1 .. 3: discard waitFor fetch(url, allowPrivate = true, keepAddressMs = 600_000)
+    check addressLookups == before + 1
