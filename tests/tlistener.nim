@@ -4,6 +4,8 @@ import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json, se
 import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup, notify, instagram]
 import db_connector/db_sqlite
 
+notifyPaceMs = 0   # no pacing between messages to your bot here (tnotify tests it)
+
 const target = -999'i64
 
 type FakeTg = ref object

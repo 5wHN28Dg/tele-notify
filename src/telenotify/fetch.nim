@@ -95,11 +95,20 @@ proc forgetKeptAddresses*() =
     keptAddresses.clear()
     failedLookups.clear()
 
+proc addressKey(host: string, port: Port, allowPrivate: bool): string =
+  ## Kept per host, port and whether private addresses were allowed: one kept
+  ## for kittygram on 127.0.0.1 is never used by a fetch that refuses them.
+  host & ":" & $port.int & (if allowPrivate: ":private" else: "")
+
+proc forgetAddress(host: string, port: Port, allowPrivate: bool) =
+  {.cast(gcsafe).}: keptAddresses.del(addressKey(host, port, allowPrivate))
+
 proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
   ## `keepMs` > 0: reuse the address found for this host for that long (the
-  ## lookup is synchronous, so a slow resolver then blocks once per period).
-  let key = host & ":" & $port.int & (if allowPrivate: ":private" else: "")
+  ## lookup is synchronous, so a slow resolver then blocks once per period),
+  ## unless connecting to it fails (the name may point elsewhere now).
+  let key = addressKey(host, port, allowPrivate)
   if keepMs > 0:
     {.cast(gcsafe).}:
       let k = keptAddresses.getOrDefault(key)
@@ -192,7 +201,11 @@ proc getOnce(live: Live, url: string, allowPrivate: bool, keepMs = 0): Future[(i
   let (ip, domain) = resolve(host, Port(port), allowPrivate, keepMs)
   let sock = newAsyncSocket(domain, SockType.SOCK_STREAM, Protocol.IPPROTO_TCP, buffered = true)
   live.sock = sock
-  await sock.connect(ip, Port(port))
+  try:
+    await sock.connect(ip, Port(port))
+  except CatchableError as e:
+    if keepMs > 0: forgetAddress(host, Port(port), allowPrivate)   # look it up again next time
+    raise e
   if scheme == "https":
     when defined(ssl):
       let ctx = newContext(verifyMode = CVerifyPeer)

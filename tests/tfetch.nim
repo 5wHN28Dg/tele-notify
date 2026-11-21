@@ -209,3 +209,32 @@ suite "name lookups for your bot (#122, review run 2)":
     for _ in 1 .. 3: check waitFor(f("http://127.0.0.1:" & $port & "/ok")).ok
     check addressLookups == before + 1
     check keepBotAddressMs == 600_000
+
+suite "kept addresses (#127)":
+  test "a kept address expires":
+    forgetKeptAddresses()
+    let before = addressLookups
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 150)).ok
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 150)).ok
+    check addressLookups == before + 1
+    sleep 300
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 150)).ok
+    check addressLookups == before + 2
+
+  test "an address kept for a fetch that allows local ones isn't used by one that refuses them":
+    forgetKeptAddresses()
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 600_000)).ok
+    let r = waitFor fetch("http://127.0.0.1:" & $port & "/ok", keepAddressMs = 600_000)
+    check not r.ok and "private" in r.error
+
+  test "a kept address that can't be connected to is looked up again next time":
+    forgetKeptAddresses()
+    let probe = newSocket()
+    probe.bindAddr(Port(0), "127.0.0.1")
+    let closed = probe.getLocalAddr()[1]
+    probe.close()                                    # nothing listens there now
+    let url = "http://127.0.0.1:" & $closed & "/x"
+    check not waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok
+    let before = addressLookups
+    check not waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok
+    check addressLookups == before + 1

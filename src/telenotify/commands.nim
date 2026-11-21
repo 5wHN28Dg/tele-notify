@@ -53,12 +53,17 @@ proc isLogOut*(authState: string): bool =
                 "authorizationStateClosed"]
 
 proc finishNotifying*(l: Listener, st: State, sessionLost: string, dryRun: bool,
-                      tell: proc (text: string) {.closure, gcsafe.}) {.async.} =
+                      tell: proc (text: string) {.closure, gcsafe.},
+                      stopFlushMs = 2 * sendTimeoutMs, afterLogOutMs = logOutFlushMs) {.async.} =
   ## At a stop: a log-out is one alert (screen, and your bot through `tell`),
-  ## then what's still queued for your bot is sent, for at most 10 s.
+  ## then what's still queued for your bot is sent: for at most 10 s, or
+  ## after a log-out long enough for a send waiting out a 429 and then the
+  ## alert (`logOutFlushMs`, under systemd's 90 s stop limit).
   if sessionLost.isLogOut:
     recordLoginNeeded(st, sessionLost, dryRun, tell)   # before closing the state: the screen shows it
-  await l.flushNotifications(2 * sendTimeoutMs)
+    await l.flushNotifications(afterLogOutMs)
+  else:
+    await l.flushNotifications(stopFlushMs)
 
 proc clearLoginNeeded*(st: State) =
   ## Logged in again: a later log-out alerts again. Never raises.
@@ -227,7 +232,9 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l.stop = stopRequested
   l.outbox = outbox     # your private chat with your bot has your user id
   # "notifications are on", once (and after another account logs in)
-  if notifier != nil: asyncCheck announceOn(st, notifier, chatId, dry)
+  if notifier != nil:
+    asyncCheck announceOn(st, notifier, chatId, dry,
+                          anyOn = cfg.notifyPublished or cfg.notifyReview or cfg.alerts)
   l.instagram = instagramFor(cfg.instagramFrontend, defaultOcr())
   if l.instagram != nil: l.log "instagram links: read through " & cfg.instagramFrontend
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
