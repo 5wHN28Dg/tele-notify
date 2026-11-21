@@ -23,6 +23,7 @@ type FakeTg = ref object
   access: Table[int64, ChatAccess]   # chatAccess answers; default: a member
   accessError: Table[int64, string]  # chats chatAccess fails for
   linkCalls: int
+  linkHangs: bool                    # link never answers
 
 proc toTelegram(f: FakeTg): Telegram =
   result = Telegram()
@@ -58,6 +59,7 @@ proc toTelegram(f: FakeTg): Telegram =
   result.link = proc (chat, id: int64): Future[string] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}:
       inc f.linkCalls
+      if f.linkHangs: await newFuture[void]("hangs")
       if f.linkFails: raise newException(IOError, "no link")
     return "https://t.me/c/" & $(-chat) & "/" & $id
   result.sendText = proc (chat: int64, text: string): Future[void] {.async, closure, gcsafe.} =
@@ -714,7 +716,11 @@ suite "notifications through your own bot (#122)":
     l.live(msg(-1, 10, good), msg(-1, 11, unclear), msg(-1, 12, bad))
     check sent[].len == 2
     check sent[0].startsWith("✅ Published") and "chat1" in sent[0] and "https://t.me/c/1/10" in sent[0]
-    check sent[1].startsWith("🤔 For review") and "chat1" in sent[1] and "https://t.me/c/1/11" in sent[1]
+    check sent[1].startsWith("🔎 For review") and "chat1" in sent[1] and "https://t.me/c/1/11" in sent[1]
+    # the role isolated from the English around it; what to do next last (review run 2)
+    check sent[0] == "✅ Published: \u2068مهندس كهرباء\u2069\nchat1\nhttps://t.me/c/1/10"
+    check sent[1] == "🔎 For review: \u2068مهندس كهرباء\u2069\nchat1\nhttps://t.me/c/1/11\n" & reviewHint
+    check reviewHint == "Review: telenotify review, or the screen's Review tab (2)"
 
   test "the backlog after downtime sends one summary, then live posts notify one by one (review run 1)":
     let f = FakeTg()
@@ -724,9 +730,9 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     waitFor l.bootstrap()
     waitFor l.flushNotifications()
-    check sent[] == @["📥 While you were away: 1 published, 2 for review"]
+    check sent[] == @["📥 Since the bot started: 1 published, 2 for review\n" & reviewHint]
     l.live(msg(-1, 20, unclear & " 3"))
-    check sent[].len == 2 and sent[1].startsWith("🤔 For review")
+    check sent[].len == 2 and sent[1].startsWith("🔎 For review")
 
   test "a backlog with nothing to tell sends nothing (review run 1)":
     let f = FakeTg()
@@ -861,3 +867,66 @@ suite "notifications through your own bot (#122)":
     waitFor l.flushNotifications()
     check f.texts.len == 1 and "https://t.me/c/1/8" in f.texts[0][1]
     check sent[].len == 1 and "https://t.me/c/1/8" in sent[0]
+
+  test "a chat read on retry is one summary too, not a ping per post (review run 2)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    f.chats[-2] = @[msg(-2, 5, tech), msg(-2, 6, unclear), msg(-2, 7, unclear & " 2"), msg(-2, 8, bad)]
+    f.unreadFails.incl -2
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    waitFor l.flushNotifications()
+    check sent[] == @["📥 Since the bot started: 1 published, 0 for review"]
+    f.unreadFails.clear
+    waitFor l.retryFailedChats()
+    waitFor l.processQueue()
+    waitFor l.flushNotifications()
+    check sent[].len == 2 and sent[1] == "📥 Since the bot started: 1 published, 2 for review\n" & reviewHint
+    check (-2'i64, 8'i64) in f.read                     # marked read once handled
+    l.live(msg(-1, 20, unclear & " 3"))                 # live again: one by one
+    check sent[].len == 3 and sent[2].startsWith("🔎 For review")
+
+  test "notify_published and notify_review turn each kind off (review run 2)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good), msg(-1, 11, unclear)]
+    let (l, st) = setup(f)
+    l.cfg.notifyPublished = false
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    l.live(msg(-2, 20, tech), msg(-1, 21, unclear & " 3"))
+    st.addReview(-1, 7, "chat1", unclear, "no level", "role", "https://t.me/c/1/7")
+    for r in st.pendingReviews():
+      if r.msgId == 7: check st.decideReview(r.id, "to_send")
+    waitFor l.sendApproved()
+    waitFor l.flushNotifications()
+    check sent[] == @["📥 Since the bot started: 1 for review\n" & reviewHint,
+                      "🔎 For review: \u2068مهندس كهرباء\u2069\nchat1\nhttps://t.me/c/1/21\n" & reviewHint]
+    waitFor l.alert("still on")                         # alerts follow "alerts"
+    waitFor l.flushNotifications()
+    check sent[].len == 3 and sent[2].startsWith("⚠️ tele-notify: still on")
+    let f2 = FakeTg()
+    let (l2, _) = setup(f2)
+    l2.cfg.notifyReview = false
+    let sent2 = new seq[string]
+    l2.notify = recorder(sent2)
+    waitFor l2.bootstrap()
+    l2.live(msg(-1, 30, good), msg(-1, 31, unclear))
+    check sent2[].len == 1 and sent2[0].startsWith("✅ Published")
+
+  test "a published post's link lookup that hangs gives up after 5 s (review run 2)":
+    let f = FakeTg()
+    let (l, _) = setup(f)
+    let sent = new seq[string]
+    l.notify = recorder(sent)
+    waitFor l.bootstrap()
+    f.linkHangs = true
+    let t0 = epochTime()
+    l.enqueue msg(-1, 10, good)
+    waitFor l.processQueue()
+    check epochTime() - t0 < 1.0                         # the post didn't wait
+    waitFor l.flushNotifications()
+    check sent[] == @["✅ Published: \u2068مهندس كهرباء\u2069\nchat1"]
+    check epochTime() - t0 >= 4.5 and epochTime() - t0 < 7

@@ -61,6 +61,7 @@ type
     notify*: Notifier               ## your own bot (#122); nil: off (or `outbox`)
     outbox*: NotifyQueue            ## sends `notify`'s messages in the background
     awayPublished, awayReview: int  # the backlog's posts, for one summary
+    retrying: bool                  # handling a backlog read on retry (summarized too)
     downSince: int64
     selfChat: int64
     titles*: Table[int64, string]   # watched chats' titles, for alerts
@@ -113,6 +114,24 @@ proc flushNotifications*(l: Listener, timeoutMs = 10_000) {.async.} =
   ## Wait (at most `timeoutMs`) until the queued notifications are sent: at
   ## a stop, and in tests.
   if l.outbox != nil: await l.outbox.flush(timeoutMs)
+
+const reviewHint* = "Review: telenotify review, or the screen's Review tab (2)"
+  ## the last line of a review message: what to do next
+
+proc isolated(role: string): string =
+  ## A role (often Arabic) inside an English line, isolated so neither
+  ## reorders the other; "a post" when there's none.
+  if role == "": "a post" else: "\u2068" & role & "\u2069"
+
+proc tellSummary(l: Listener) =
+  ## One message for a backlog (at start-up, or read on retry), instead of
+  ## one per post. Only the kinds you get notified about.
+  if l.awayPublished + l.awayReview == 0: return
+  var parts: seq[string]
+  if l.cfg.notifyPublished: parts.add &"{l.awayPublished} published"
+  if l.cfg.notifyReview: parts.add &"{l.awayReview} for review"
+  l.tell "📥 Since the bot started: " & parts.join(", ") &
+         (if l.awayReview > 0: "\n" & reviewHint else: "")
 
 proc alertText*(text: string, dryRun: bool): string =
   ## An alert as sent to you. Two bots (a dry run beside the real one) both
@@ -358,18 +377,20 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
 
   # Your bot (#122): not in a dry run (it changes nothing); the backlog
   # after downtime is one summary at its end, not a ping per post.
+  # Each kind can be turned off (notify_published, notify_review).
   let published = action in ["forwarded", "linked"]
-  if (published or queued) and not l.dryRun:
-    if l.bootstrapping:
+  let wanted = (published and l.cfg.notifyPublished) or (queued and l.cfg.notifyReview)
+  if wanted and not l.dryRun:
+    if l.bootstrapping or l.retrying:
       if published: inc l.awayPublished
       else: inc l.awayReview
+    elif published:
+      let text = "✅ Published: " & isolated(role) & "\n" & m.chatTitle
+      if postLink == "": l.tellWithLink(text, m.chatId, m.id)   # a forward: its link is asked aside
+      else: l.tell text & "\n" & postLink
     else:
-      let text = (if published: "✅ Published" else: "🤔 For review") & ": " &
-                 (if role != "": role else: "a post") & "\n" & m.chatTitle
-      if published and postLink == "":
-        l.tellWithLink(text, m.chatId, m.id)   # a forward: its link is asked aside
-      else:
-        l.tell text & (if postLink != "": "\n" & postLink else: "")
+      l.tell "🔎 For review: " & isolated(role) & "\n" & m.chatTitle &
+             (if postLink != "": "\n" & postLink else: "") & "\n" & reviewHint
   let mark = case action
     of "forwarded", "linked", "would publish": "✅"
     of "queued for review", "error, queued for review": "🤔"
@@ -467,8 +488,7 @@ proc bootstrap*(l: Listener) {.async.} =
     l.awayPublished = 0
     l.awayReview = 0
     await l.processQueue()
-    if l.awayPublished + l.awayReview > 0:
-      l.tell &"📥 While you were away: {l.awayPublished} published, {l.awayReview} for review"
+    l.tellSummary()
   finally:
     l.bootstrapping = false
     for m in l.held: l.queue.addLast m
@@ -480,6 +500,7 @@ proc retryFailedChats*(l: Listener) {.async.} =
   ## timeout). Without this, their unread messages waited for the next
   ## restart. Messages already handled live meanwhile are skipped as seen.
   var still: seq[int64]
+  var read = 0
   for chat in l.retryChats:
     if l.stop[]:
       still.add chat
@@ -494,6 +515,7 @@ proc retryFailedChats*(l: Listener) {.async.} =
         await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
                       "messages; only the newest were checked.")
       for m in u.messages: l.queue.addLast m
+      read += u.messages.len
     except CatchableError as e:
       l.say &"   could not read chat {chat} again: {e.msg}"
       still.add chat
@@ -503,6 +525,15 @@ proc retryFailedChats*(l: Listener) {.async.} =
   if still.len > 0 and still.len == l.retryChats.len:
     l.retryEveryTicks = min(l.retryEveryTicks * 2, 18_000)
   l.retryChats = still
+  if read > 0:
+    # that backlog now: one summary for it, not a ping per post (live
+    # messages queued meanwhile are counted in it too)
+    l.retrying = true
+    l.awayPublished = 0
+    l.awayReview = 0
+    try: await l.processQueue()
+    finally: l.retrying = false
+    l.tellSummary()
 
 proc sendApproved*(l: Listener) {.async.} =
   ## Send the posts you approved in `telenotify review`. A failure puts the
@@ -518,8 +549,9 @@ proc sendApproved*(l: Listener) {.async.} =
       l.state.addPublished(r.chatId, r.msgId, r.text)
       discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
-      l.tell "✅ Published after your review: " & (if r.role != "": r.role else: "a post") & "\n" &
-             r.chatTitle & (if link != "": "\n" & link else: "")
+      if l.cfg.notifyPublished:
+        l.tell "✅ Published after your review: " & isolated(r.role) & "\n" &
+               r.chatTitle & (if link != "": "\n" & link else: "")
     except CatchableError as e:
       l.say &"   could not send reviewed {r.chatTitle} #{r.msgId}: {e.msg}"
       try: l.state.reopenReview(r.id, e.msg)

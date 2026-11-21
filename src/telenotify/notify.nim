@@ -13,10 +13,16 @@
 ##
 ## Sending never holds the bot up: messages wait in a small queue
 ## (`NotifyQueue`) that one background loop sends, each with a 5 s time
-## limit. Your user id is looked up once, and kept in the state database, so
-## the log-out alert still reaches you when Telegram can't tell it any more.
+## limit; api.telegram.org's address is looked up at most every 10 minutes.
+## Your user id is looked up once, and kept in the state database, so the
+## log-out alert still reaches you when Telegram can't tell it any more.
+##
+## A 429 (too many messages) is tried once more after Telegram's
+## `retry_after` (at most 30 s). A 401 or 403 (wrong token, or Start not
+## pressed) is one alert for the terminal screen, repeated only after a send
+## has worked again.
 
-import std/[asyncdispatch, deques, json, strutils, uri, unicode]
+import std/[asyncdispatch, deques, json, strutils, strformat, uri, unicode]
 import fetch, state
 
 const
@@ -24,6 +30,12 @@ const
   maxText* = 1000        ## ours: these messages are short, and so are the URLs
   sendTimeoutMs* = 5000  ## one send's time limit
   chatIdKey* = "notify_chat_id"   ## your user id, in the state's meta table
+  keepBotAddressMs* = 600_000     ## api.telegram.org's address is looked up this often at most
+  maxRetryAfterMs* = 30_000       ## the longest wait after a 429
+  unreachableKey = "notify_unreachable"
+  onKey = "notify_on_for"         ## the user id told "notifications are on"
+  unreachableAlert* = "Your notification bot can't reach you: press Start in its chat, " &
+                      "or check notify_bot_token"
 
 type
   Notifier* = proc (text: string): Future[string] {.closure, gcsafe.}
@@ -71,17 +83,43 @@ proc reason(r: Fetched): string =
   except CatchableError: discard
   if result == "": result = "unknown error"
 
-proc botNotifier*(token: string, chatId: ChatId, fetcher: Fetcher): Notifier =
+proc retryAfterMs(r: Fetched, cap: int): int =
+  ## How long Telegram asks to wait after a 429 (`parameters.retry_after`,
+  ## seconds), at most `cap`.
+  result = 1000
+  try:
+    let s = parseJson(r.body){"parameters", "retry_after"}.getInt(1)
+    result = max(s, 0) * 1000
+  except CatchableError: discard
+  result = min(result, cap)
+
+proc botNotifier*(token: string, chatId: ChatId, fetcher: Fetcher, st: State = nil,
+                  retryCapMs = maxRetryAfterMs): Notifier =
   ## Sends through the Bot API. Your user id is asked once, after that it's
-  ## kept. Never raises.
+  ## kept. `st`: where a bot that can't reach you is recorded as an alert
+  ## (nil: nowhere). Never raises.
   var chat = 0'i64
   result = proc (text: string): Future[string] {.async, closure, gcsafe.} =
     try:
       if chat == 0: chat = await chatId()
       let url = "https://api.telegram.org/bot" & token & "/sendMessage?" &
         encodeQuery({"chat_id": $chat, "text": clip(text), "disable_web_page_preview": "true"})
-      let r = await fetcher(url)
-      if r.ok: return ""
+      var r = await fetcher(url)
+      if r.status == 429:
+        await sleepAsync(retryAfterMs(r, retryCapMs))
+        r = await fetcher(url)
+      if r.ok:
+        if st != nil:
+          try:
+            if st.getMeta(unreachableKey) != "": st.setMeta(unreachableKey, "")
+          except CatchableError: discard
+        return ""
+      if r.status in [401, 403] and st != nil:
+        try:
+          if st.getMeta(unreachableKey) == "":
+            st.addAlert(unreachableAlert)     # for the terminal screen
+            st.setMeta(unreachableKey, "1")
+        except CatchableError: discard
       return hide(reason(r), token)
     except CatchableError as e:
       return hide(e.msg.splitLines()[0], token)
@@ -90,9 +128,10 @@ proc botFetcher*(allowPrivate = false): Fetcher =
   ## Downloads with the 5 s time limit. (A slow name lookup can't be cut
   ## short: see fetch.nim.)
   result = proc (url: string): Future[Fetched] {.closure, gcsafe.} =
-    fetch(url, timeoutMs = sendTimeoutMs, allowPrivate = allowPrivate)
+    fetch(url, timeoutMs = sendTimeoutMs, allowPrivate = allowPrivate, keepAddressMs = keepBotAddressMs)
 
-proc notifierFor*(token: string, chatId: ChatId, fetcher: Fetcher, log: LogProc): Notifier =
+proc notifierFor*(token: string, chatId: ChatId, fetcher: Fetcher, log: LogProc,
+                  st: State = nil): Notifier =
   ## The notifier for `notify_bot_token`, or nil: no token, or one that
   ## can't be a bot token (said once, without the token).
   if token == "": return nil
@@ -100,7 +139,7 @@ proc notifierFor*(token: string, chatId: ChatId, fetcher: Fetcher, log: LogProc)
     log "⚠️  notify_bot_token in config.json doesn't look like a bot token " &
         "(digits, a colon, then letters, as @BotFather gives it): notifications are off"
     return nil
-  botNotifier(token, chatId, fetcher)
+  botNotifier(token, chatId, fetcher, st)
 
 proc storedChatId*(st: State, lookup: ChatId, timeoutMs = sendTimeoutMs): ChatId =
   ## Your user id from Telegram (`lookup`, TDLib's getMe), kept in the state
@@ -179,9 +218,36 @@ proc push*(q: NotifyQueue, text: string) =
   ## Queue `text` and return at once.
   q.pushLater proc (): Future[string] {.async, closure, gcsafe.} = return text
 
+proc pushFirst*(q: NotifyQueue, text: string) =
+  ## Queue `text` before everything waiting (the log-out alert), and return
+  ## at once.
+  if q.pending.len >= q.cap:
+    discard q.pending.popLast     # the newest goes: the front is what's urgent
+    if not q.dropped:
+      q.dropped = true
+      q.log "   (notifications are piling up: the oldest ones are being dropped)"
+  q.pending.addFirst proc (): Future[string] {.async, closure, gcsafe.} = return text
+  if not q.sending: asyncCheck q.drain()
+
 proc flush*(q: NotifyQueue, timeoutMs = 10_000) {.async.} =
-  ## Wait until everything queued is sent, at most `timeoutMs`.
+  ## Wait until everything queued is sent, at most `timeoutMs`. Gives up
+  ## with one log line saying how many weren't sent.
   var waited = 0
   while not q.idle and waited < timeoutMs:
     await sleepAsync(20)
     waited += 20
+  if not q.idle:
+    let left = q.pending.len + (if q.sending: 1 else: 0)
+    q.log &"   ({left} notifications not sent: stopped waiting for your bot)"
+
+proc announceOn*(st: State, send: Notifier, chatId: ChatId, dryRun: bool) {.async.} =
+  ## "Notifications are on", once: at the first start with a working token,
+  ## and again when your user id changes (another account). Kept in the
+  ## state database only once sent, so a failed send (Start not pressed yet)
+  ## is tried at the next start. Never raises.
+  try:
+    let id = await chatId()
+    if st.getMeta(onKey) == $id: return
+    if await(send("🔔 tele-notify" & (if dryRun: " [dry run]" else: "") & " notifications are on")) == "":
+      st.setMeta(onKey, $id)
+  except CatchableError: discard

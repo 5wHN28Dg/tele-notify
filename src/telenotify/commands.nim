@@ -13,19 +13,20 @@ proc sessionEnded*(authState: string, stopping: bool): bool =
   ## Closed too).
   authState != "" and authState != "authorizationStateReady" and not stopping
 
+proc isLogOut*(authState: string): bool
+
 proc loginAlert*(why: string, dryRun: bool): string =
-  ## What to run first, then why, in plain words. `why` is "not logged in" (the
-  ## bot started without a login) or a TDLib authorization state.
+  ## The cause first (a phone's lock screen shows only the start), then the
+  ## commands, in plain text (no markup: it's shown as typed). `why` is "not
+  ## logged in" (the bot started without a login) or a TDLib authorization state.
   let service = if dryRun: "tele-notify-dryrun" else: "tele-notify"
-  let cause = case why
-    of "not logged in": "this account isn't logged in to Telegram (yet, or any more)"
-    of "authorizationStateLoggingOut", "authorizationStateClosed":
-      "Telegram logged this account out (from another device, or Telegram ended the session)"
-    else: "Telegram ended this account's session"
+  let cause =
+    if why == "not logged in": "Not logged in to Telegram. To log in"
+    elif why.isLogOut: "Logged out of Telegram. To log in again"
+    else: "Telegram ended this session. To log in again"
   # stopped first: `telenotify login` can't share TDLib's folder with the
   # bot that systemd keeps restarting
-  &"Run `systemctl --user stop {service}`, then `telenotify login`, then " &
-    &"`systemctl --user start {service}`: {cause}, so the bot can't read or forward anything."
+  &"{cause}: systemctl --user stop {service}; telenotify login; systemctl --user start {service}"
 
 proc recordLoginNeeded*(st: State, why: string, dryRun: bool,
                         tell: proc (text: string) {.closure, gcsafe.} = nil): bool {.discardable.} =
@@ -39,11 +40,25 @@ proc recordLoginNeeded*(st: State, why: string, dryRun: bool,
   except CatchableError: discard
   if result and tell != nil: tell(alertText(text, dryRun))
 
+proc loginTeller*(q: NotifyQueue, alerts: bool): proc (text: string) {.closure, gcsafe.} =
+  ## How the log-out alert reaches your bot: at the front of its queue. nil
+  ## (not at all) without a bot, or with `"alerts": false`.
+  if q == nil or not alerts: return nil
+  result = proc (text: string) {.closure, gcsafe.} = q.pushFirst text
+
 proc isLogOut*(authState: string): bool =
   ## A lost session that means the login is gone (not TDLib closing by itself).
   authState in ["authorizationStateLoggingOut", "authorizationStateWaitPhoneNumber",
                 "authorizationStateWaitCode", "authorizationStateWaitPassword",
                 "authorizationStateClosed"]
+
+proc finishNotifying*(l: Listener, st: State, sessionLost: string, dryRun: bool,
+                      tell: proc (text: string) {.closure, gcsafe.}) {.async.} =
+  ## At a stop: a log-out is one alert (screen, and your bot through `tell`),
+  ## then what's still queued for your bot is sent, for at most 10 s.
+  if sessionLost.isLogOut:
+    recordLoginNeeded(st, sessionLost, dryRun, tell)   # before closing the state: the screen shows it
+  await l.flushNotifications(2 * sendTimeoutMs)
 
 proc clearLoginNeeded*(st: State) =
   ## Logged in again: a later log-out alerts again. Never raises.
@@ -121,20 +136,17 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   # and that needs no login. Your user id comes from TDLib once it's there,
   # else the one kept in the state database.
   var outbox: NotifyQueue
-  let notifier = notifierFor(cfg.notifyBotToken,
-    storedChatId(st, proc (): Future[int64] {.async, closure, gcsafe.} =
+  let chatId = storedChatId(st, proc (): Future[int64] {.async, closure, gcsafe.} =
       if l == nil: raise newException(IOError, "Telegram isn't connected yet")
-      return await l.tg.selfChat()),
-    botFetcher(), proc (line: string) {.closure, gcsafe.} = echo line)
+      return await l.tg.selfChat())
+  let notifier = notifierFor(cfg.notifyBotToken, chatId, botFetcher(),
+                             (proc (line: string) {.closure, gcsafe.} = echo line), st)
   if notifier != nil:
     outbox = newNotifyQueue(notifier, proc (line: string) {.closure, gcsafe.} =
       if l != nil: l.log line
       else: echo line)
     echo "notifications: through your own bot (notify_bot_token)"
-  # alerts: false keeps alerts out of your bot too
-  var tellAlert: proc (text: string) {.closure, gcsafe.} = nil
-  if outbox != nil and cfg.alerts:
-    tellAlert = proc (text: string) {.closure, gcsafe.} = outbox.push text
+  let tellAlert = loginTeller(outbox, cfg.alerts)   # alerts: false keeps them out of your bot too
   var titles = initTable[int64, string]()
   let watched = cfg.chats
   var accessReady = false   # the start-up check reads the current state first
@@ -198,6 +210,8 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
   l.outbox = outbox     # your private chat with your bot has your user id
+  # "notifications are on", once (and after another account logs in)
+  if notifier != nil: asyncCheck announceOn(st, notifier, chatId, dry)
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
   await s.loadAllChats()
   for chat in cfg.chats:
@@ -227,10 +241,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l.log "stopping"
   try: st.setMeta("connection", "stopped")
   except CatchableError: discard
-  if sessionLost.isLogOut:
-    recordLoginNeeded(st, sessionLost, dry, tellAlert)   # before closing the state: the screen shows it
-  # what's still queued for your bot (the log-out alert, a last post), briefly
-  await l.flushNotifications(2 * sendTimeoutMs)
+  await finishNotifying(l, st, sessionLost, dry, tellAlert)
   await s.client.close()
   st.close()
   if sessionLost != "":

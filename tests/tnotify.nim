@@ -166,3 +166,123 @@ suite "bot notifier":
     let r = waitFor botFetcher(allowPrivate = true)("http://127.0.0.1:" & $port & "/x")
     check not r.ok and r.error == "timed out after 5 s"
     check epochTime() - t0 < 7
+
+suite "failures, retries and the queue (review run 2)":
+  test "a bot that can't reach you (401, 403) is one alert for the screen, again only after a send worked":
+    let dir = getTempDir() / "tn-notify-unreachable"
+    removeDir(dir)
+    let st = openState(dir / "state.sqlite3")
+    defer: st.close()
+    var status = 403
+    let fake: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if status == 200: return Fetched(ok: true, status: 200, body: """{"ok":true}""")
+        return Fetched(ok: false, status: status, error: "HTTP " & $status,
+          body: """{"ok":false,"description":"Forbidden: bot can't initiate conversation with a user"}""")
+    let n = botNotifier("1:t", fixedId(42), fake, st)
+    for _ in 1 .. 3: check waitFor(n("x")) != ""
+    check st.alertTexts() == @[unreachableAlert]
+    status = 401
+    discard waitFor n("x")
+    check st.alertTexts().len == 1
+    status = 200
+    check waitFor(n("x")) == ""
+    status = 403
+    discard waitFor n("x")
+    check st.alertTexts().len == 2
+    check "press Start" in unreachableAlert and "notify_bot_token" in unreachableAlert
+
+  test "429: tried once more after retry_after, capped (review run 2)":
+    var calls = 0
+    var always = false
+    let fake: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        inc calls
+        if calls == 1 or always:
+          return Fetched(ok: false, status: 429, error: "HTTP 429",
+            body: """{"ok":false,"description":"Too Many Requests: retry after 100","parameters":{"retry_after":100}}""")
+      return Fetched(ok: true, status: 200)
+    let n = botNotifier("1:t", fixedId(42), fake, retryCapMs = 300)
+    var t0 = epochTime()
+    check waitFor(n("x")) == ""
+    check calls == 2 and epochTime() - t0 >= 0.25 and epochTime() - t0 < 2
+    always = true
+    calls = 0
+    check "429" in waitFor(n("x"))
+    check calls == 2                                     # once more, not forever
+
+  test "the cap on retry_after is 30 s":
+    check maxRetryAfterMs == 30_000
+
+  test "an urgent message goes to the front of the queue (review run 2)":
+    var sent: seq[string]
+    let slow: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      await sleepAsync(50)
+      {.cast(gcsafe).}: sent.add text
+      return ""
+    let q = newNotifyQueue(slow, proc (line: string) {.closure, gcsafe.} = discard)
+    for t in ["1", "2", "3"]: q.push t
+    q.pushFirst "logged out"
+    q.waitIdle()
+    check sent == @["1", "logged out", "2", "3"]       # "1" was already being sent
+
+  test "a flush that gives up says how many messages are left (review run 2)":
+    var lines: seq[string]
+    let log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines.add line
+    let slow: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      await sleepAsync(300)
+      return ""
+    let q = newNotifyQueue(slow, log)
+    for t in ["1", "2", "3"]: q.push t
+    waitFor q.flush(100)
+    check lines.len == 1 and "3" in lines[0] and "not sent" in lines[0]
+    q.waitIdle()
+
+  test "each burst past the cap says so once (review run 2)":
+    var lines: seq[string]
+    let log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines.add line
+    let slow: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      await sleepAsync(20)
+      return ""
+    let q = newNotifyQueue(slow, log, cap = 2)
+    for i in 1 .. 6: q.push $i
+    q.waitIdle()
+    for i in 1 .. 6: q.push $i
+    q.waitIdle()
+    check lines.len == 2 and lines.allIt("dropped" in it)
+
+  test "a user id lookup that hangs gives up after 5 s and uses the kept id (review run 2)":
+    let dir = getTempDir() / "tn-notify-id-hang"
+    removeDir(dir)
+    let st = openState(dir / "state.sqlite3")
+    defer: st.close()
+    st.setMeta("notify_chat_id", "42")
+    let hang: ChatId = proc (): Future[int64] {.closure, gcsafe.} = newFuture[int64]("hangs")
+    let t0 = epochTime()
+    check waitFor(storedChatId(st, hang)()) == 42
+    check epochTime() - t0 >= 4.5 and epochTime() - t0 < 7
+
+  test "\"notifications are on\" once, again when your user id changes or the send failed (review run 2)":
+    let dir = getTempDir() / "tn-notify-on"
+    removeDir(dir)
+    let st = openState(dir / "state.sqlite3")
+    defer: st.close()
+    var sent: seq[string]
+    var err = "HTTP 403"
+    let send: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        sent.add text
+        return err
+    var id = 42'i64
+    let who: ChatId = proc (): Future[int64] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: return id
+    waitFor announceOn(st, send, who, dryRun = false)       # Start not pressed yet: failed
+    err = ""
+    waitFor announceOn(st, send, who, dryRun = false)
+    waitFor announceOn(st, send, who, dryRun = false)       # a restart: already said
+    check sent == @["🔔 tele-notify notifications are on", "🔔 tele-notify notifications are on"]
+    id = 43                                                 # another account
+    waitFor announceOn(st, send, who, dryRun = true)
+    check sent.len == 3 and sent[2] == "🔔 tele-notify [dry run] notifications are on"

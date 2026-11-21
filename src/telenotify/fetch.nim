@@ -27,7 +27,7 @@
 ## so a very slow DNS server can pause the bot; the time limit can't cut
 ## a lookup short.
 
-import std/[asyncdispatch, asyncnet, net, uri, strutils, nativesockets, openssl]
+import std/[asyncdispatch, asyncnet, net, uri, strutils, nativesockets, openssl, tables, times]
 
 const
   userAgent* = "tele-notify (+https://github.com/5wHN28Dg/tele-notify)"
@@ -84,8 +84,20 @@ proc isPrivateIp*(ip: IpAddress): bool =
       return isPrivateV4([a[2], a[3], a[4], a[5]])   # 2002:aabb:ccdd:: (6to4)
     (a[0] and 0xFE) == 0xFC or (a[0] == 0xFE and (a[1] and 0x80) == 0x80) or a[0] == 0xFF
 
-proc resolve(host: string, port: Port, allowPrivate: bool): (string, Domain) =
+var
+  addressLookups* = 0   ## name lookups made (tests count them)
+  keptAddresses: Table[string, (string, Domain, float)]   # key: address, domain, kept until
+
+proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
+  ## `keepMs` > 0: reuse the address found for this host for that long (the
+  ## lookup is synchronous, so a slow resolver then blocks once per period).
+  let key = host & ":" & $port.int & (if allowPrivate: ":private" else: "")
+  if keepMs > 0:
+    {.cast(gcsafe).}:
+      let k = keptAddresses.getOrDefault(key)
+      if k[0] != "" and epochTime() < k[2]: return (k[0], k[1])
+  {.cast(gcsafe).}: inc addressLookups
   var info: ptr AddrInfo
   try:
     info = getAddrInfo(host, port, Domain.AF_UNSPEC)
@@ -105,6 +117,8 @@ proc resolve(host: string, port: Port, allowPrivate: bool): (string, Domain) =
         domain = if ip.family == IpAddressFamily.IPv4: Domain.AF_INET else: Domain.AF_INET6
     it = it.ai_next
   if first == "": raise newException(FetchError, "no address for " & host)
+  if keepMs > 0:
+    {.cast(gcsafe).}: keptAddresses[key] = (first, domain, epochTime() + keepMs / 1000)
   (first, domain)
 
 # ------------------------------------------------------------ one request
@@ -140,7 +154,7 @@ proc recvExactly(sock: AsyncSocket, n: int): Future[string] {.async.} =
     if more.len == 0: raise newException(FetchError, "connection closed early")
     result.add more
 
-proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, string)] {.async.} =
+proc getOnce(live: Live, url: string, allowPrivate: bool, keepMs = 0): Future[(int, string, string)] {.async.} =
   ## One GET without following redirects: (status, location header, body).
   let u = parseUri(url)
   let scheme = u.scheme.toLowerAscii
@@ -153,7 +167,7 @@ proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, 
     try: port = parseInt(u.port)
     except ValueError: raise newException(FetchError, "bad port " & u.port)
     if port notin 1 .. 65535: raise newException(FetchError, "bad port " & u.port)
-  let (ip, domain) = resolve(host, Port(port), allowPrivate)
+  let (ip, domain) = resolve(host, Port(port), allowPrivate, keepMs)
   let sock = newAsyncSocket(domain, SockType.SOCK_STREAM, Protocol.IPPROTO_TCP, buffered = true)
   live.sock = sock
   await sock.connect(ip, Port(port))
@@ -228,11 +242,11 @@ proc getOnce(live: Live, url: string, allowPrivate: bool): Future[(int, string, 
       if body.len > maxBytes: raise newException(FetchError, "page too large")
   return (status, "", body)
 
-proc fetchWith(live: Live, url: string, allowPrivate: bool): Future[Fetched] {.async.} =
+proc fetchWith(live: Live, url: string, allowPrivate: bool, keepMs: int): Future[Fetched] {.async.} =
   live.current = url
   try:
     for hop in 0 .. 5:
-      let (status, location, body) = await getOnce(live, live.current, allowPrivate)
+      let (status, location, body) = await getOnce(live, live.current, allowPrivate, keepMs)
       live.closeQuietly()
       if location != "":
         live.current = $(parseUri(live.current).combine(parseUri(location)))
@@ -246,10 +260,10 @@ proc fetchWith(live: Live, url: string, allowPrivate: bool): Future[Fetched] {.a
     live.closeQuietly()
     return Fetched(ok: false, finalUrl: live.current, error: e.msg.splitLines[0])
 
-proc fetch*(url: string, timeoutMs = 20_000, allowPrivate = false): Future[Fetched] {.async.} =
-  ## Download `url`. Never raises; check `ok`.
+proc fetch*(url: string, timeoutMs = 20_000, allowPrivate = false, keepAddressMs = 0): Future[Fetched] {.async.} =
+  ## Download `url`. Never raises; check `ok`. `keepAddressMs`: see `resolve`.
   let live = Live()
-  let fut = fetchWith(live, url, allowPrivate)
+  let fut = fetchWith(live, url, allowPrivate, keepAddressMs)
   if await withTimeout(fut, timeoutMs):
     return fut.read
   live.closeQuietly()   # cancels a connect or read in progress
