@@ -18,6 +18,7 @@ import copy
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -68,11 +69,14 @@ def notify_note(cfg: dict) -> str:
 
     The bot sends through your notification bot only with `notify_bot_token`, and a dry run sends
     no per-post messages (only its alerts)."""
-    token = cfg.get("notify_bot_token")
-    if not (isinstance(token, str) and token.strip()):
-        return "off for now: no notify_bot_token in config.json"
+    token = cfg.get("notify_bot_token", "")
+    if token is None or (isinstance(token, str) and not token.strip()):
+        return "Sends nothing now: no notify_bot_token in config.json"
+    # as the bot checks it (notify.nim validToken): digits, a colon, then letters, digits, _ or -
+    if not (isinstance(token, str) and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token.strip())):
+        return "Sends nothing now: notify_bot_token isn't a bot token"
     if cfg.get("dry_run") is True:
-        return "off for now: a dry run sends none"
+        return "Sends nothing now: a dry run"
     return ""
 
 

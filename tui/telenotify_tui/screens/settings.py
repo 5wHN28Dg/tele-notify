@@ -50,7 +50,7 @@ FORM_HELP = {
     "dry_run": "Judge and record, but forward nothing",
     "alerts": "Tell you about problems (downtime, lost access, log-out) in Saved Messages and through your notification bot",
     "alert_after_minutes": "Downtime shorter than this is only logged (default 10)",
-    "notify_published": "Each post published to your channel, through your notification bot (default on)",
+    "notify_published": "Each published post, through your notification bot (default on)",
     "notify_review": "Each post sent to review, through your notification bot (default on)",
     "data_dir": "TDLib login and state (default ~/.local/share/tele-notify); empty = default",
     "tdlib_path": "Path to libtdjson.so if it isn't found automatically; empty = automatic",
@@ -494,6 +494,9 @@ class SettingsPane(Vertical):
     SettingsPane .form-row Input.short { width: 10; }
     SettingsPane .form-row .help { width: 1fr; padding-left: 2; }
     SettingsPane Checkbox { border: none; padding: 0; height: 1; width: 10; background: transparent; }
+    /* focused too: Textual's focus border would fill the one-row box and hide the switch; the
+       highlighted label still shows which one has focus */
+    SettingsPane Checkbox:focus { border: none; }
     SettingsPane #chat-table { height: 1fr; }
     SettingsPane #chat-ids { height: 1fr; }
     SettingsPane .hidden { display: none; }
@@ -609,7 +612,7 @@ class SettingsPane(Vertical):
         note = sd.notify_note(self.edited)
         for key in sd.NOTIFY_KEYS:
             for help_ in self.query(f"#help-{key}").results(Static):
-                help_.update(FORM_HELP[key] + (f". {note[0].upper()}{note[1:]}" if note else ""))
+                help_.update(FORM_HELP[key] + (f". {note}" if note else ""))
 
     @property
     def dirty(self) -> bool:

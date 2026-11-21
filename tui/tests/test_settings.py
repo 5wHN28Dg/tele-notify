@@ -854,9 +854,13 @@ async def test_each_kind_of_bot_notification_can_be_switched_off(paths, cfg_path
 
 
 @pytest.mark.parametrize(("extra", "note"), [
-    ({}, "Off for now: no notify_bot_token in config.json"),
-    ({"notify_bot_token": "1:abc", "dry_run": True}, "Off for now: a dry run sends none"),
-    ({"notify_bot_token": "1:abc"}, ""),
+    ({}, "Sends nothing now: no notify_bot_token in config.json"),
+    ({"notify_bot_token": "  "}, "Sends nothing now: no notify_bot_token in config.json"),
+    ({"notify_bot_token": "garbage"}, "Sends nothing now: notify_bot_token isn't a bot token"),
+    ({"notify_bot_token": "123:ab cd"}, "Sends nothing now: notify_bot_token isn't a bot token"),
+    ({"notify_bot_token": 12345}, "Sends nothing now: notify_bot_token isn't a bot token"),
+    ({"notify_bot_token": "1:abc", "dry_run": True}, "Sends nothing now: a dry run"),
+    ({"notify_bot_token": " 1:abc_-Z "}, ""),
 ])
 async def test_the_notification_switches_say_when_they_cant_do_anything(paths, cfg_path, extra, note):
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -868,11 +872,38 @@ async def test_the_notification_switches_say_when_they_cant_do_anything(paths, c
         for key in ("notify_published", "notify_review"):
             text = str(pane.query_one(f"#help-{key}", Static).render())
             assert "(default on)" in text
-            assert (note in text) if note else ("Off for now" not in text)
+            assert (note in text) if note else ("Sends nothing" not in text)
         if extra.get("dry_run"):                       # switching the dry run off updates it at once
             pane.query_one("#sections", TabbedContent).active = "sec-bot"
             await pilot.pause()
             await pilot.click(pane.query_one("#f-dry_run", Checkbox))
             await pilot.pause()
-            assert "Off for now" not in str(pane.query_one("#help-notify_review", Static).render())
+            assert "Sends nothing" not in str(pane.query_one("#help-notify_review", Static).render())
             assert str(pane.query_one("#f-dry_run", Checkbox).label) == "off"
+
+
+
+async def test_a_focused_switch_still_shows_on_or_off(paths, cfg_path):
+    """Run 2 of #131: Textual's focus border filled the one-row switch and hid its state. What is
+    drawn is checked (the screen's text, as the audit harness reads it), not the label property."""
+    from audit import svg
+
+    def row(app, key: str) -> str:
+        w, h = app.size
+        lines = svg.text(app.export_screenshot(), w, h).splitlines()
+        return next(line for line in lines if line.lstrip().startswith(key))
+
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        box = pane.query_one("#f-dry_run", Checkbox)
+        box.focus()
+        await pilot.pause()
+        before = row(app, "dry_run")
+        await pilot.press("space")
+        await pilot.pause()
+        after = row(app, "dry_run")
+        assert app.focused is box
+        assert {"on", "off"} == {before.split()[2], after.split()[2]}, (before, after)
