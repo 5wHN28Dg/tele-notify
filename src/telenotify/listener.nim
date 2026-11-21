@@ -300,7 +300,8 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       for y in group:      # parts not recorded yet belong to the handled post
         if not l.state.seen(y.chatId, y.id):
           l.state.markProcessed(y.chatId, y.id, y.chatTitle, "", "", "part of a post already handled",
-                                prev.action, prev.textHash, albumId = y.albumId, postedAt = y.date)
+                                prev.action, prev.textHash, albumId = y.albumId, postedAt = y.date,
+                                caughtUp = y.caughtUp)
       return
     l.say &"✏️  {m.chatTitle} #{m.id} was edited: judging it again"
   var verdict, role, reasons, postLink = ""
@@ -378,7 +379,10 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       l.state.markProcessed(x.chatId, x.id, x.chatTitle, verdict, role, reasons, action, fp,
                             rawText = x.text,   # compare; search in the terminal screen
                             albumId = x.albumId,
-                            postedAt = x.date)  # its Telegram date: forwarding latency (#74)
+                            # forwarding time (#74): from when the post went up or, for
+                            # an edit judged again, from the edit (unknown: left out)
+                            postedAt = (if m.edited: x.editDate else: x.date),
+                            caughtUp = group.anyIt(it.caughtUp))
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 
@@ -485,7 +489,10 @@ proc bootstrap*(l: Listener) {.async.} =
         if u.cut:
           await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
                         "messages; only the newest were checked.")
-        for m in u.messages: l.queue.addLast m
+        for m in u.messages:
+          var m = m
+          m.caughtUp = true           # a backlog: its forwarding time is counted apart (#74)
+          l.queue.addLast m
       except CatchableError as e:
         l.say &"   could not read chat {chat}: {e.msg} (will try again every minute)"
         l.retryChats.add chat
@@ -521,7 +528,10 @@ proc retryFailedChats*(l: Listener) {.async.} =
       if u.cut:
         await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
                       "messages; only the newest were checked.")
-      for m in u.messages: l.queue.addLast m
+      for m in u.messages:
+        var m = m
+        m.caughtUp = true
+        l.queue.addLast m
       read += u.messages.len
     except CatchableError as e:
       l.say &"   could not read chat {chat} again: {e.msg}"

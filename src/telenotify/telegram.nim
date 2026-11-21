@@ -22,6 +22,8 @@ type
     chatTitle*: string
     albumId*: int64      ## same non-zero id for every picture of one album
     edited*: bool        ## comes from an edit, not a new message
+    editDate*: int64     ## when it was last edited (Unix seconds); 0 = never
+    caughtUp*: bool      ## read from a backlog (start-up, or a retried chat), not live
     outgoing*: bool      ## sent by this account (e.g. by the Python bot)
     originChat*, originMsg*: int64  ## for a forward from a channel: where it came from
 
@@ -78,6 +80,7 @@ proc parseMessage*(m: JsonNode): TgMessage =
   result.chatId = m{"chat_id"}.getBiggestInt
   result.id = m{"id"}.getBiggestInt
   result.date = m{"date"}.getBiggestInt
+  result.editDate = m{"edit_date"}.getBiggestInt
   result.outgoing = m{"is_outgoing"}.getBool
   let origin = m{"forward_info", "origin"}
   if origin{"@type"}.getStr == "messageOriginChannel":

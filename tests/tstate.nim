@@ -1,6 +1,9 @@
 import std/[unittest, os, tables, strutils, times]
 import telenotify/state
 import db_connector/db_sqlite
+from std/posix import nil
+
+proc flock(fd, operation: cint): cint {.importc, header: "<sys/file.h>".}
 
 let dir = getTempDir() / "tn-state-test"
 removeDir(dir)
@@ -191,6 +194,9 @@ suite "state":
     for i in 1 .. 20:
       ls.markProcessed(-1, i, "A", "publish", "", "", "forwarded", postedAt = t - 10 * i)
       ls.addPublished(-1, i, "post " & $i)
+    # read from a backlog after downtime, half an hour after the post
+    ls.markProcessed(-5, 1, "E", "publish", "", "", "forwarded", postedAt = t - 1800, caughtUp = true)
+    ls.addPublished(-5, 1, "caught up")
     # sent after your review, an hour after the post
     ls.markProcessed(-2, 1, "B", "review", "", "", "queued for review", postedAt = t - 3600)
     ls.addPublished(-2, 1, "reviewed")
@@ -204,9 +210,10 @@ suite "state":
     db.exec(sql"UPDATE published SET at = ?", t)
     db.close()
     let l = ls.latency(7)
-    check l.direct.count == 20 and l.direct.median == 100 and l.direct.p95 == 190
+    check l.live.count == 20 and l.live.median == 100 and l.live.p95 == 190
+    check l.caughtUp.count == 1 and l.caughtUp.median == 1800
     check l.reviewed.count == 1 and l.reviewed.median == 3600 and l.reviewed.p95 == 3600
-    check ls.latency(0).direct.count == 0          # outside the window
+    check ls.latency(0).live.count == 0            # outside the window
 
   test "an old state file is upgraded with a copy kept first, and only once (#74)":
     let old = dir / "v0.sqlite3"
@@ -228,7 +235,7 @@ suite "state":
     check getFilePermissions(backupPath(old, 0)) == {fpUserRead, fpUserWrite}
     # the data is kept, old posts have no date and are left out of latency
     check up.seen(-1, 5) and up.rawTextOf(-1, 5) == "the old text" and up.postedAt(-1, 5) == 0
-    check up.latency(100000).direct.count == 0
+    check up.latency(100000).live.count == 0
     up.markProcessed(-1, 6, "Jobs", "publish", "", "", "forwarded", postedAt = 1_700_000_000)
     check up.postedAt(-1, 6) == 1_700_000_000
     up.close()
@@ -279,13 +286,76 @@ suite "state":
       check db.getValue(sql"PRAGMA user_version") == "0"
       var cols: seq[string]
       for r in db.fastRows(sql"PRAGMA table_info(processed)"): cols.add r[1]
-      check "posted_at" notin cols and "text_hash" notin cols
+      check "posted_at" notin cols and "text_hash" notin cols and "caught_up" notin cols
       check db.getValue(sql"SELECT COUNT(*) FROM sqlite_master WHERE name = 'reviews'") == "0"
     removeDir(backupPath(old, 0))
     let ok = openState(old)                  # the next start, once the copy can be made
     check ok.seen(-1, 5)
     ok.close()
     check fileExists(backupPath(old, 0))
+
+  proc oldFile(name: string): string =
+    ## A version-0 state file with one judged post.
+    result = dir / name
+    let raw = open(result, "", "", "")
+    raw.exec(sql"""CREATE TABLE processed (chat_id INTEGER, msg_id INTEGER, chat_title TEXT,
+      verdict TEXT, role TEXT, reasons TEXT, action TEXT, at INTEGER, PRIMARY KEY (chat_id, msg_id))""")
+    raw.exec(sql"INSERT INTO processed VALUES (-1, 5, 'Jobs', 'publish', 'r', 'x', 'forwarded', 100)")
+    raw.close()
+
+  test "an old copy from before a rollback is replaced by a fresh one (#74)":
+    let old = oldFile("stale.sqlite3")
+    # e.g. an earlier upgrade's copy, then a rollback to the old bot, which
+    # kept writing to the version-0 file; or a broken copy from a power cut
+    writeFile(backupPath(old, 0), "stale")
+    let up = openState(old)
+    up.close()
+    let bak = open(backupPath(old, 0), "", "", "")
+    defer: bak.close()
+    check bak.getValue(sql"SELECT chat_title FROM processed WHERE msg_id = 5") == "Jobs"
+    check getFilePermissions(backupPath(old, 0)) == {fpUserRead, fpUserWrite}
+
+  test "a half-made copy left by a process that died is removed (#74)":
+    let old = oldFile("leftover.sqlite3")
+    let leftover = backupPath(old, 0) & ".tmp-999999999"
+    writeFile(leftover, "half a copy, with post texts")
+    let up = openState(old)
+    up.close()
+    check not fileExists(leftover)
+    check fileExists(backupPath(old, 0))
+
+  test "while another process holds the upgrade lock, nothing is copied or changed (#74)":
+    let old = oldFile("locked.sqlite3")
+    let fd = posix.open(cstring(old & ".lock"), posix.O_RDWR or posix.O_CREAT, 0o600)
+    check fd >= 0
+    check flock(fd, 2) == 0                       # LOCK_EX: another telenotify is upgrading
+    let saved = upgradeLockWaitMs
+    upgradeLockWaitMs = 300
+    defer: upgradeLockWaitMs = saved
+    try:
+      discard openState(old)
+      check false                                 # it must not go on without the lock
+    except IOError as e:
+      check "still upgrading" in e.msg
+    check not fileExists(backupPath(old, 0))
+    block:
+      let db = open(old, "", "", "")
+      defer: db.close()
+      check db.getValue(sql"PRAGMA user_version") == "0"
+    discard posix.close(fd)                       # the other process is done
+    let up = openState(old)
+    up.close()
+    check fileExists(backupPath(old, 0))
+
+  test "the copy-failure message says what to do next (#74)":
+    let old = oldFile("hint.sqlite3")
+    createDir(backupPath(old, 0))
+    defer: removeDir(backupPath(old, 0))
+    try:
+      discard openState(old)
+      check false
+    except IOError as e:
+      check "left as it was" in e.msg and "Free some disk space" in e.msg
 
 st.close()
 removeDir(dir)
