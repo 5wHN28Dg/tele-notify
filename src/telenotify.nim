@@ -148,8 +148,8 @@ proc main() =
       of "show-text": showText = true
       of "dry-run": dryRun = true
       of "days":
-        try: days = parseInt(val)
-        except ValueError: quit "--days needs a number"
+        try: days = parseDays(val)
+        except ValueError as e: quit e.msg
       of "help", "h": echo usage; quit 0
       else: quit "unknown option --" & key & "\n" & usage
     of cmdEnd: discard
