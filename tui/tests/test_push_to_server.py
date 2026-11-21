@@ -45,6 +45,9 @@ def _repo(tmp_path: Path) -> Path:
     (repo / "tui" / "telenotify_tui").mkdir(parents=True)
     (repo / "tui" / "pyproject.toml").write_text('[project]\nname = "telenotify-tui"\n')
     (repo / "tui" / "telenotify_tui" / "__init__.py").write_text("")
+    (repo / "src").mkdir()
+    (repo / "src" / "telenotify.nim").write_text("echo 1\n")
+    (repo / "telenotify.nimble").write_text('bin = @["telenotify"]\n')
     _git(repo, "init", "-q")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "test commit")
@@ -52,10 +55,12 @@ def _repo(tmp_path: Path) -> Path:
 
 
 class Server:
-    def __init__(self, tmp_path: Path, active: bool = True, health: str = "ok"):
+    def __init__(self, tmp_path: Path, active: bool = True, health: str = "ok",
+                 tdlib: bool = True, tui_link: bool = True):
         self.tmp = tmp_path
         self.repo = _repo(tmp_path)
         self.home = home = tmp_path / "remote-home"
+        self.had_tdlib = tdlib
         self.bin = home / ".local" / "bin"
         self.lib = home / ".local" / "lib" / "tele-notify"
         self.units = home / ".config" / "systemd" / "user"
@@ -63,23 +68,23 @@ class Server:
             d.mkdir(parents=True)
         # what an earlier deploy/install.sh left: bot, TDLib, a real venv dir, the unit
         _exe(self.bin / "telenotify", OLD_BOT)
-        (self.lib / "libtdjson.so").write_text("old tdlib")
+        if tdlib:
+            (self.lib / "libtdjson.so").write_text("old tdlib")
         venv = self.lib / "tui-venv"
         (venv / "bin").mkdir(parents=True)
         (venv / "old-screen").write_text("old screen")
         _exe(venv / "bin" / "telenotify-tui", "#!/bin/sh\n")
-        (self.bin / "telenotify-tui").symlink_to(venv / "bin" / "telenotify-tui")
+        if tui_link:
+            (self.bin / "telenotify-tui").symlink_to(venv / "bin" / "telenotify-tui")
         (self.units / "tele-notify.service").write_text("old unit\n")
 
         self.log = log = tmp_path / "calls.log"
         self.ssh_args = tmp_path / "ssh-args.log"
-        sysd = tmp_path / "systemd-state"
+        self.sysd = sysd = tmp_path / "systemd-state"
         sysd.mkdir()
         (sysd / "before").write_text("active" if active else "inactive")
-        (sysd / "after").write_text("failed" if health == "inactive" else "active")
         (sysd / "n").write_text("0")
-        if health == "crashloop":
-            (sysd / "crashloop").write_text("")
+        self.set_health(health)
 
         local = tmp_path / "fakes"
         remote = tmp_path / "remote-fakes"     # only on the "server"'s PATH
@@ -89,10 +94,16 @@ class Server:
         _exe(local / "ssh", "#!/bin/sh\n"
                             'for a; do cmd=$a; done\n'
                             f'i=0; for a; do i=$((i+1)); [ $i -lt $# ] && printf "%s\\n" "$a" >> "{self.ssh_args}"; done\n'
+                            # CLOSE_PIPE: the connection drops after two lines of output
+                            'if [ -n "${CLOSE_PIPE:-}" ]; then\n'
+                            f'  env HOME="{home}" PATH="{remote}:$PATH" sh -c "$cmd" 2>&1 | head -n 2\n'
+                            '  exit 0\nfi\n'
                             f'exec env HOME="{home}" PATH="{remote}:$PATH" sh -c "$cmd"\n')
         _exe(remote / "systemctl", "#!/bin/sh\n"
                                    f'echo "systemctl $* XDG_RUNTIME_DIR=${{XDG_RUNTIME_DIR:-}}" >> "{log}"\n'
                                    f'S="{sysd}"\n'
+                                   f'if [ -n "${{CLOSE_PIPE:-}}" ]; then "{shutil.which("sleep")}" 0.3; fi\n'
+                                   'if [ "${FAKE_FAIL:-}" = "$2" ]; then exit 1; fi\n'
                                    'case "$2" in\n'
                                    '  is-active)\n'
                                    '    if [ -f "$S/restarted" ]; then st=$(cat "$S/after"); else st=$(cat "$S/before"); fi\n'
@@ -136,8 +147,16 @@ class Server:
                         TELENOTIFY_PREBUILT=str(self.built), XDG_RUNTIME_DIR="/run/user/test")
         self.env.pop("FAKE_FAIL", None)
 
-    def run(self, *args: str, fail: str = "") -> subprocess.CompletedProcess:
-        env = dict(self.env)
+    def set_health(self, health: str) -> None:
+        """How the bot is after the next restart: ok, inactive or crashloop."""
+        (self.sysd / "restarted").unlink(missing_ok=True)
+        (self.sysd / "crashloop").unlink(missing_ok=True)
+        (self.sysd / "after").write_text("failed" if health == "inactive" else "active")
+        if health == "crashloop":
+            (self.sysd / "crashloop").write_text("")
+
+    def run(self, *args: str, fail: str = "", **extra: str) -> subprocess.CompletedProcess:
+        env = dict(self.env, **extra)
         if fail:
             env["FAKE_FAIL"] = fail
         argv = list(args) if args else [TARGET]
@@ -150,7 +169,10 @@ class Server:
 
     def assert_old_set_in_place(self) -> None:
         assert (self.bin / "telenotify").read_text() == OLD_BOT
-        assert (self.lib / "libtdjson.so").read_text() == "old tdlib"
+        if self.had_tdlib:
+            assert (self.lib / "libtdjson.so").read_text() == "old tdlib"
+        else:
+            assert not (self.lib / "libtdjson.so").exists()
         assert (self.units / "tele-notify.service").read_text() == "old unit\n"
         assert (self.lib / "tui-venv" / "old-screen").read_text() == "old screen"
         tui = self.bin / "telenotify-tui"
@@ -161,14 +183,15 @@ class Server:
                  *self.units.glob(".tele-notify*"), *self.lib.glob(".libtdjson*"),
                  *self.lib.glob(".tui-venv*")]
         # screen builds: only the current one and the previous one stay
-        kept = {os.readlink(p) for p in (self.lib / "tui-venv", self.lib / "tui-venv.prev")
-                if p.is_symlink()}
-        found += [p for p in self.lib.glob("tui-venv.??????") if p.name not in kept]
+        kept = {p.resolve() for p in (self.lib / "tui-venv", self.lib / "tui-venv.prev")}
+        found += [p for p in self.lib.glob("tui-venv.build-*") if p.resolve() not in kept]
         return [p.name for p in found]
 
 
 def test_installs_keeps_the_previous_set_and_restarts_a_running_service(tmp_path):
     s = Server(tmp_path, active=True)
+    mine = s.lib / "tui-venv.mine12"          # not the script's: the cleanup leaves it alone
+    mine.mkdir()
     r = s.run()
     assert r.returncode == 0, r.stderr
     head = subprocess.run(["git", "-C", str(s.repo), "rev-parse", "--short", "HEAD"],
@@ -192,6 +215,7 @@ def test_installs_keeps_the_previous_set_and_restarts_a_running_service(tmp_path
     assert "systemctl --user restart tele-notify" in calls
     assert "sleep" in calls                                               # the health check waited
     assert s.leftovers() == []                                            # nothing left behind
+    assert mine.is_dir()
 
 
 def test_the_installed_bot_is_executable(tmp_path):
@@ -271,6 +295,55 @@ def test_a_bot_that_does_not_stay_up_is_rolled_back(tmp_path, health):
     assert "rolled back" in r.stderr
     s.assert_old_set_in_place()
     assert s.calls().count("systemctl --user restart tele-notify") == 2   # the new, then the old
+    assert "systemctl --user reset-failed tele-notify" in s.calls()        # past the start limit
+
+
+@pytest.mark.parametrize("fail", ["restart", "daemon-reload"])
+def test_a_failing_systemctl_after_the_swap_rolls_back(tmp_path, fail):
+    s = Server(tmp_path, active=True)
+    r = s.run(fail=fail)
+    assert r.returncode != 0, r.stdout
+    assert "rolled back" in r.stderr
+    s.assert_old_set_in_place()
+
+
+def test_a_dropped_connection_after_the_swap_still_rolls_back(tmp_path):
+    s = Server(tmp_path, active=True, health="inactive")
+    s.run(CLOSE_PIPE="1")
+    s.assert_old_set_in_place()
+    assert s.calls().count("systemctl --user restart tele-notify") == 2
+
+
+def test_a_rollback_with_no_tdlib_before_removes_the_new_one(tmp_path):
+    s = Server(tmp_path, active=True, health="inactive", tdlib=False)
+    r = s.run()
+    assert r.returncode != 0, r.stdout
+    s.assert_old_set_in_place()
+
+
+def test_a_rollback_after_two_changing_pushes_goes_back_to_the_first(tmp_path):
+    s = Server(tmp_path, active=True)
+    assert s.run().returncode == 0
+    first = (s.lib / "tui-venv").resolve()
+    # a second, different push: new bot, new screen; the bot then doesn't stay up
+    (s.built / "telenotify").write_text(NEW_BOT + "# v2\n")
+    (s.repo / "tui" / "pyproject.toml").write_text('[project]\nname = "telenotify-tui"\nversion = "2"\n')
+    _git(s.repo, "commit", "-q", "-am", "v2")
+    s.set_health("inactive")
+    r = s.run()
+    assert r.returncode != 0, r.stdout
+    assert (s.bin / "telenotify").read_text() == NEW_BOT
+    assert (s.lib / "tui-venv").resolve() == first
+    assert (first / "bin" / "telenotify-tui").exists()
+    assert os.access(s.bin / "telenotify-tui", os.X_OK)
+
+
+def test_the_screen_command_is_linked_when_missing(tmp_path):
+    s = Server(tmp_path, tui_link=False)
+    r = s.run()
+    assert r.returncode == 0, r.stderr
+    assert (s.bin / "telenotify-tui").is_symlink()
+    assert os.access(s.bin / "telenotify-tui", os.X_OK)
 
 
 def test_a_stopped_service_is_left_stopped(tmp_path):
@@ -280,12 +353,14 @@ def test_a_stopped_service_is_left_stopped(tmp_path):
     assert "restart" not in s.calls()
 
 
-def test_a_dirty_tree_is_refused_unless_allowed(tmp_path):
+@pytest.mark.parametrize("path", ["tui/pyproject.toml", "src/telenotify.nim", "telenotify.nimble"])
+def test_a_dirty_tree_is_refused_unless_allowed(tmp_path, path):
     s = Server(tmp_path)
-    (s.repo / "tui" / "pyproject.toml").write_text('[project]\nname = "changed"\n')
+    with (s.repo / path).open("a") as f:
+        f.write("# changed\n")
     r = s.run()
     assert r.returncode != 0
-    assert "uncommitted" in r.stderr and "tui/pyproject.toml" in r.stderr
+    assert "uncommitted" in r.stderr and path in r.stderr
     assert not s.ssh_args.exists()                                        # nothing was sent
     r = s.run("--allow-dirty", TARGET)
     assert r.returncode == 0, r.stderr
