@@ -341,4 +341,5 @@ def test_a_dry_run_started_with_the_flag_sends_no_notifications():
     """#131 run 3: --dry-run, not only the config's dry_run."""
     cfg = {"notify_bot_token": "1:abc"}
     assert sd.notify_note(cfg) == ""
-    assert sd.notify_note(cfg, dry_run_flag=True) == "Sends nothing now: a dry run"
+    assert sd.notify_note(cfg, dry_run_flag=True) == "The dry run shown here sends none"   # the real bot may send
+    assert sd.notify_note(cfg | {"dry_run": True}, dry_run_flag=True) == "Sends nothing now: a dry run"

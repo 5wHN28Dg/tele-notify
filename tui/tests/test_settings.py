@@ -868,7 +868,8 @@ async def test_the_notification_switches_say_when_they_cant_do_anything(paths, c
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     cfg.pop("notify_bot_token", None)
     cfg_path.write_text(json.dumps(cfg | extra), encoding="utf-8")
-    app = TeleNotifyApp(replace(paths, config=cfg_path, dry_run=False), refresh_seconds=0)   # the config decides
+    app = TeleNotifyApp(replace(paths, config=cfg_path, dry_run=False, dry_run_flag=False),
+                        refresh_seconds=0)   # the config decides
     async with app.run_test(size=(120, 40)) as pilot:
         pane = await open_settings(pilot)
         for key in ("notify_published", "notify_review"):
@@ -953,9 +954,9 @@ async def test_the_dry_run_note_follows_the_saved_config_and_the_flag(paths, cfg
         await pilot.pause()
         await pilot.click(pane.query_one("#f-dry_run", Checkbox))
         await pilot.pause()
-        assert ("a dry run" in note()) == flag
+        assert ("dry run" in note()) == flag
         await save(pilot)
         await pilot.press("n")
         await pilot.pause()
         assert json.loads(cfg_path.read_text(encoding="utf-8"))["dry_run"] is False
-        assert ("a dry run" in note()) == flag
+        assert ("dry run" in note()) == flag

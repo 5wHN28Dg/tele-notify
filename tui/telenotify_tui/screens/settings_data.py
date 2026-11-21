@@ -77,8 +77,11 @@ def notify_note(cfg: dict, dry_run_flag: bool = False) -> str:
     # as the bot checks it (notify.nim validToken): digits, a colon, then letters, digits, _ or -
     if not (isinstance(token, str) and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token.strip(ascii_space))):
         return "Sends nothing now: notify_bot_token isn't a bot token"
-    if cfg.get("dry_run") is True or dry_run_flag:
+    if cfg.get("dry_run") is True:
         return "Sends nothing now: a dry run"
+    if dry_run_flag:
+        # --dry-run only picks the state shown here: the real bot may run and send meanwhile
+        return "The dry run shown here sends none"
     return ""
 
 
