@@ -9,7 +9,15 @@ from pathlib import Path
 
 import pytest
 from conftest import BAD, GOOD
-from textual.widgets import Button, Checkbox, DataTable, Input, OptionList, Static, TabbedContent
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Input,
+    OptionList,
+    Static,
+    TabbedContent,
+)
 
 from telenotify_tui import bot, rtl
 from telenotify_tui.app import TeleNotifyApp
