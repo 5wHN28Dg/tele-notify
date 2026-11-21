@@ -94,10 +94,12 @@ async def test_stale_connection_after_a_crash_is_not_ready(paths, now, age):
 # window size -> the line's form, and whether the Service row fits with it (the owner's choice B, #100:
 # it gives way only where the box is too short, as at 80 x 24)
 LOGIN_LAYOUTS = {
-    # (size, real service, dry-run service): (the line starts, the Service row shows)
-    ((80, 24), "inactive", "active"): ("Not logged in:", False),
-    ((100, 30), "activating", "inactive"): ("Not logged in:", False),   # a 2-row Service row: 7 rows, one too many
-    ((100, 30), "activating", "active"): ("Not logged in:", True),      # a 1-row Service row: 6 rows, it fits
+    # (size, real service, dry-run service): (the line starts, the Service row shows; None: either,
+    # as long as Mode and the pending count stay in the box). Under 100 columns the Bot box has the
+    # whole width (#57); beside the Activity box it is 64 cells at 120 columns.
+    ((80, 24), "inactive", "active"): ("Not logged in to Telegram.", True),
+    ((60, 24), "activating", "inactive"): ("Not logged in:", None),
+    ((100, 30), "activating", "inactive"): ("Not logged in to Telegram.", True),
     ((120, 40), "inactive", "active"): ("Not logged in:", True),
     ((120, 40), "unknown", "unknown"): ("Not logged in:", True),     # a 2-row Service row still fits
     ((160, 40), "inactive", "active"): ("Not logged in to Telegram.", True),
@@ -136,11 +138,10 @@ async def test_a_lost_login_says_what_to_run(paths, now, age, layout, monkeypatc
         # "not logged in": right both for a log-out and for a first start before `telenotify login`
         assert first.startswith(f"{lead} Stop, run telenotify login, then Start.")
         rest = first.split("Start.", 1)[1]
-        assert ("Service" in rest) == service
+        if service is not None:
+            assert ("Service" in rest) == service
         assert "Mode" in rest and "1 pending" in rest   # never pushed out of the box
-        if size == (80, 24):   # 3 rows in the 24-cell box
-            assert drawn[2].endswith("Start.") and not drawn[1].endswith("Start.")
-        else:   # "Stop ... Start": the buttons are in view where they were before
+        if size[1] >= 24 and size[0] >= 80:   # "Stop ... Start": the buttons are in view
             restart = app.query_one("#svc-restart").region
             assert box.content_region.contains_region(restart)
 
@@ -154,6 +155,9 @@ async def test_the_login_line_follows_a_resize(paths):
     db.close()
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        assert " ".join(text(app, "#status").split()).startswith("Not logged in to Telegram. Stop")
+        await pilot.resize_terminal(120, 30)   # beside the Activity box now: 64 cells
         await settle(app, pilot)
         assert " ".join(text(app, "#status").split()).startswith("Not logged in: Stop")
         await pilot.resize_terminal(160, 30)
@@ -522,3 +526,33 @@ def test_chart_colours_never_carry_alpha():
     c = series_colours({"background": "#12121280", "foreground": "#E0E0E0EA",
                         "text-success": "#8AD4A1", "text-warning": "#FFC473"})
     assert len(c["reject"]) == 7, c
+
+
+async def test_a_narrow_window_shows_one_top_box_at_a_time(paths):
+    """#57, the owner's choice: under 100 columns the Bot and Activity boxes don't fit side by side,
+    so one has the whole width (Bot first, v flips) and every Bot row and button is in view; under 30
+    rows the post's details shrink, so the live feed keeps rows. From 100 columns up, both, as before."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        bot_box, activity = app.query_one("#dash-bot"), app.query_one("#dash-activity")
+        assert bot_box.display and not activity.display
+        for button in ("#svc-start", "#svc-stop", "#svc-restart"):
+            assert bot_box.content_region.contains_region(app.query_one(button).region), button
+        status = " ".join(text(app, "#status").split())
+        assert "Alerts" in status
+        status_widget = app.query_one("#status", Static)
+        assert status_widget.region.height <= bot_box.content_region.height - 1   # nothing cut
+        assert app.query_one("#feed", DataTable).region.height >= 4               # header and 3 rows
+        await pilot.press("v")
+        await settle(app, pilot)
+        assert activity.display and not bot_box.display
+        await pilot.press("v")
+        await settle(app, pilot)
+        assert bot_box.display and not activity.display
+        await pilot.resize_terminal(120, 40)
+        await settle(app, pilot)
+        assert bot_box.display and activity.display
+        await pilot.press("v")                    # nothing to flip: both are shown
+        await settle(app, pilot)
+        assert bot_box.display and activity.display

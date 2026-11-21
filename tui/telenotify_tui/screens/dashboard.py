@@ -211,6 +211,11 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
 
 # ------------------------------------------------------------ snapshot
 
+# below this many columns the Bot and Activity boxes don't fit side by side (#57): one at a time
+NARROW = 100
+# below this many rows the post's details shrink so the live feed keeps some rows
+SHORT = 30
+
 # the Bot box's width from which "Not logged in to Telegram. Stop, run telenotify login, then Start." (66) fits a line
 LOGIN_WIDE = 66
 
@@ -444,6 +449,12 @@ class DashboardPane(Vertical):
     DashboardPane #view-alerts > #health-box { width: 2fr; margin-left: 1; }
     DashboardPane #alerts, DashboardPane #health { height: 1fr; }
     DashboardPane .section { text-style: bold; height: 1; }
+    /* narrow (under NARROW columns): one top box at a time, full width; v flips them (#57) */
+    DashboardPane.-narrow #dash-activity { display: none; width: 1fr; }
+    DashboardPane.-narrow.-show-activity #dash-activity { display: block; }
+    DashboardPane.-narrow.-show-activity #dash-bot { display: none; }
+    /* short (under SHORT rows): the post's details take less, so the feed keeps rows */
+    DashboardPane.-short #feed-detail-box { height: 4; }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -452,6 +463,7 @@ class DashboardPane(Vertical):
         Binding("a", "view('alerts')", "Alerts", show=False),
         Binding("p", "pick_period", "Period"),
         Binding("d", "custom_range", "Dates"),
+        Binding("v", "flip_top", "Bot/Activity"),
     ]
 
     def __init__(self) -> None:
@@ -529,8 +541,27 @@ class DashboardPane(Vertical):
             self._show_activity(self.snapshot)
 
     def on_resize(self, event: events.Resize) -> None:
+        narrow = event.size.width < NARROW
+        if narrow != self.has_class("-narrow"):
+            self.set_class(narrow, "-narrow")
+            self._top_titles()
+            self.refresh_bindings()
+        self.set_class(event.size.height < SHORT, "-short")
         # the login line has a short and a long form: pick again once the new layout is in place
         self.call_after_refresh(self._show_status)
+
+    def _top_titles(self) -> None:
+        hint = "v: activity" if self.has_class("-narrow") else ""
+        self.query_one("#dash-bot").border_subtitle = hint
+        self.query_one("#dash-activity").border_title = "Activity" + ("  (v: bot)" if self.has_class("-narrow") else "")
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "flip_top":
+            return self.has_class("-narrow")   # only while the two boxes don't fit side by side
+        return True
+
+    def action_flip_top(self) -> None:
+        self.toggle_class("-show-activity")
 
     def on_show(self) -> None:
         # Focus the feed when the tab is shown, so f / c / a and the arrow keys work at once.
