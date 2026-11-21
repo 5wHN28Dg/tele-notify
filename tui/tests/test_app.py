@@ -108,3 +108,22 @@ asyncio.run(main())
     theme, current, background = out.stdout.split()[-3:]
     assert theme == current == expected
     assert not background.startswith("ansi")
+
+
+async def test_a_lost_queued_reload_doesnt_stop_tab_reloads(paths, monkeypatch):
+    """Review run 3: Textual drops a call_after_refresh callback whose screen goes away first;
+    the "reload queued" mark must not then stop every later tab show from reloading."""
+    import time
+
+    from telenotify_tui.screens.review import ReviewPane
+
+    calls = []
+    monkeypatch.setattr(ReviewPane, "reload", lambda self: calls.append(time.monotonic()))
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app._reload_queued = time.monotonic() - 5   # queued long ago; its callback never ran
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.pause()
+        assert calls, "showing Review didn't reload it"

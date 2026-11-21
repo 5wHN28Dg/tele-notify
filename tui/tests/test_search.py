@@ -18,6 +18,15 @@ from telenotify_tui.screens.search import SearchPane, row_key
 from telenotify_tui.store import Store
 
 
+def search_bar(app) -> str:
+    """The search bar's row as drawn (the cell grid of a screenshot)."""
+    from audit import svg
+    w, h = app.size
+    lines = svg.text(app.export_screenshot(), w, h).splitlines()
+    bar = app.query_one("#search-bar").region
+    return "\n".join(lines[bar.y:bar.bottom])
+
+
 def text_of(app, selector: str) -> str:
     """What the widget shows, in reading order (a post body is drawn right to
     left where it should be; test_rtl.py checks how it is drawn)."""
@@ -584,6 +593,56 @@ async def test_quitting_mid_search_on_a_locked_file_ends_at_once(paths):
         assert stuck == [], "a search thread still waits for the lock"
     finally:
         holder.close()
+
+
+async def test_a_locked_state_file_is_worded_as_on_the_dashboard(paths, monkeypatch):
+    """#105: Search said "couldn't read the state: database is locked", cut at 80 x 24 and squeezing
+    the search box. Now the count says it short, and the details say it in the Dashboard's words."""
+    from telenotify_tui.screens import search as search_mod
+    from telenotify_tui.store import BUSY
+
+    monkeypatch.setattr(search_mod, "LOCK_WAIT_SECONDS", 0.3)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_search(app, pilot)
+        box_width = app.query_one("#q").size.width
+        holder = sqlite3.connect(paths.state, isolation_level=None)
+        holder.execute("BEGIN EXCLUSIVE")
+        try:
+            pane.reload()
+            await settle(app, pilot)
+        finally:
+            holder.close()
+        count, head = text_of(app, "#count"), text_of(app, "#search-detail-head")
+        assert count == "file busy"
+        assert BUSY in head and "ctrl+r" in head
+        assert "database is locked" not in count + head
+        assert app.query_one("#q").size.width == box_width      # the search box isn't squeezed
+        assert app.query_one("#count").content_region.width >= len(count)   # nor the count cut
+
+
+async def test_an_unreadable_state_file_is_said_in_words(paths):
+    """#105: a broken file in plain words with a next step, not the exception."""
+    paths.state.write_bytes(b"this is not a database" * 100)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_search(app, pilot)
+        count, head = text_of(app, "#count"), text_of(app, "#search-detail-head")
+        assert count == "can't read"
+        assert "Can't read the state file." in head and "journalctl --user -u tele-notify-dryrun" in head
+        assert "DatabaseError" not in count + head and "not a database" not in count + head
+        assert "chats not read" in search_bar(app)              # review runs 2 and 3: as drawn
+        assert "loading chats" not in search_bar(app)
+
+
+async def test_the_chat_picker_shows_all_chats_once_read(paths):
+    """Review run 3: the picker kept showing "loading chats…" after the chats were read,
+    because the value stayed "all" and an equal value doesn't redraw the label."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_search(app, pilot)
+        assert "4 results" in search_bar(app)
+        assert "all chats" in search_bar(app) and "loading chats" not in search_bar(app)
 
 
 async def test_y_copies_the_selected_post_in_reading_order(paths):
