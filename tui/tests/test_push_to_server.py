@@ -451,3 +451,13 @@ def test_a_bot_that_does_not_start_here_exits_3(tmp_path):
     """Exit 3 tells self-update.sh not to try this package again; a busy lock is an ordinary failure."""
     s = Server(tmp_path, active=True)
     assert s.run(fail="bot").returncode == 3
+
+
+def test_a_failed_reload_keeps_a_self_update_turned_off(tmp_path):
+    """The owner turned the timer off and a reload fails once: the timer file stays, so later installs
+    still leave it off."""
+    s = Server(tmp_path, active=True)
+    s.units.mkdir(parents=True, exist_ok=True)
+    (s.units / "tele-notify-update.timer").write_text("old timer\n")
+    s.run(fail="daemon-reload")
+    assert (s.units / "tele-notify-update.timer").exists()

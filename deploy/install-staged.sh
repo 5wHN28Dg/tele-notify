@@ -111,7 +111,7 @@ if [ -f "$d/self-update.sh" ]; then
     done
     if ! systemctl --user daemon-reload; then
       warn "could not reload the self-update's units"
-      first_update=2
+      [ "$first_update" = 1 ] && first_update=2
     elif [ "$first_update" = 1 ]; then
       if systemctl --user enable --now tele-notify-update.timer; then
         say "nightly self-update is on"
