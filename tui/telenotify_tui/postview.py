@@ -11,6 +11,11 @@ presentation forms).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import os
+import shutil
+
 from textual.app import App
 from textual.content import Content
 from textual.geometry import Size
@@ -85,9 +90,65 @@ class PostView(Static):
         return "\n".join(parts), "\n"
 
 
+COPY_TIMEOUT = 3.0   # seconds a clipboard program may take
+NOT_COPIED = ("Sent {n} to your terminal's clipboard (OSC 52). If nothing pastes, your terminal "
+              "blocks it: select with the mouse instead.")
+
+
+def _chars(n: int) -> str:
+    return f"{n} character{'s' if n != 1 else ''}"
+
+
+def clipboard_command() -> list[str] | None:
+    """The desktop's own clipboard program, when the screen runs on this machine's desktop (not over
+    SSH, where it would fill the far machine's clipboard): wl-copy on Wayland, else xclip or xsel on X11."""
+    env = os.environ
+    if env.get("SSH_CONNECTION"):
+        return None
+    if env.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        return ["wl-copy"]
+    if env.get("DISPLAY"):
+        if shutil.which("xclip"):
+            return ["xclip", "-selection", "clipboard"]
+        if shutil.which("xsel"):
+            return ["xsel", "--clipboard", "--input"]
+    return None
+
+
+async def _desktop_copy(command: list[str], text: str) -> bool:
+    """Run `command` with `text` on stdin only (it is untrusted: never in argv). True if it took it."""
+    try:
+        proc = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
+                                                    stdout=asyncio.subprocess.DEVNULL,
+                                                    stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return False
+    try:
+        await asyncio.wait_for(proc.communicate(text.encode("utf-8")), COPY_TIMEOUT)
+    except (TimeoutError, OSError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return False
+    return proc.returncode == 0
+
+
+def copy_text(text: str) -> str:
+    """What `y` copies: the post as a mouse selection of all of it gives it (PostView.get_selection),
+    in reading order and without bidi controls (rtl.safe, through Block)."""
+    return Block(text).text
+
+
 def copy_post(app: App, text: str) -> None:
-    """Put a post's text on the clipboard (OSC 52, through the terminal) and say so. The text is
-    copied as stored, in reading order, as a mouse selection in a PostView copies it (#78)."""
-    app.copy_to_clipboard(text)
-    n = len(text)
-    app.notify(f"Copied the post's text ({n} character{'s' if n != 1 else ''}).", markup=False)
+    """Put a post's text on the clipboard and say what happened (#78). OSC 52 always goes to the
+    terminal, but nothing tells us whether the terminal honoured it; so on this machine's desktop the
+    desktop's clipboard program is used as well, and only then does the note say "Copied"."""
+    content = copy_text(text)
+    app.copy_to_clipboard(content)
+    command = clipboard_command()
+
+    async def run() -> None:
+        ok = command is not None and await _desktop_copy(command, content)
+        n = _chars(len(content))
+        app.notify(f"Copied the post's text ({n})." if ok else NOT_COPIED.format(n=n), markup=False)
+
+    app.run_worker(run(), group="copy-post", exclusive=True)

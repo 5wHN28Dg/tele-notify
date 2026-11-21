@@ -598,8 +598,9 @@ async def test_y_copies_the_selected_post_in_reading_order(paths):
         assert selected is not None and selected.text == UNCLEAR   # two lines, drawn right to left
         await pilot.press("y")
         await pilot.pause()
+        await app.workers.wait_for_complete()
         assert app.clipboard == selected.text
-        assert any("Copied" in n.message for n in app._notifications)
+        assert any("OSC 52" in n.message for n in app._notifications)   # no desktop here: not "Copied"
         await pilot.press("p")                    # the paste box: y is a letter typed there
         await pilot.pause()
         app.copy_to_clipboard("")

@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable, OptionList, Static
 
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
+from telenotify_tui.postview import PostView
 from telenotify_tui.screens import dashboard_data as dd
 from telenotify_tui.screens import review as review_mod
 from telenotify_tui.screens.review import CheckModal, ReviewPane
@@ -850,8 +851,9 @@ async def test_y_copies_the_open_post_in_reading_order(paths):
         await open_review(pilot)
         await pilot.press("y")
         await pilot.pause()
+        await app.workers.wait_for_complete()
         assert app.clipboard == UNCLEAR
-        assert any("Copied" in n.message for n in app._notifications)
+        assert any("OSC 52" in n.message for n in app._notifications)   # no desktop here: not "Copied"
 
 
 async def test_y_is_off_with_no_post_open(paths, state):
@@ -866,3 +868,24 @@ async def test_y_is_off_with_no_post_open(paths, state):
         await pilot.pause()
         assert app.clipboard == ""
         assert not app.query_one(ReviewPane).check_action("copy_post", ())
+
+
+async def test_y_copies_what_a_selection_gives_without_bidi_controls(paths, state, now):
+    """I5 (review of #137): y copied the stored text with its bidi override / embedding controls,
+    while selecting the post with the mouse drops them (rtl.safe); y copies what the selection gives."""
+    from textual.selection import Selection
+
+    db = sqlite3.connect(state)
+    db.execute("UPDATE reviews SET status = 'discarded'")
+    db.commit()
+    db.close()
+    add_pending(state, 77, "before \u202eevil\u202c and \u202bembedded\u202c after", now)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("y")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        view = app.query_one("#detail-text", PostView)
+        selected, _ = view.get_selection(Selection(None, None))
+        assert app.clipboard == selected == "before evil and embedded after"
