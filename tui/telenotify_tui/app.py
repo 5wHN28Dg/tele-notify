@@ -7,6 +7,7 @@ it is visible, so the numbers stay live while the bot runs.
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from typing import ClassVar
 from weakref import WeakKeyDictionary
@@ -28,6 +29,7 @@ from .screens.settings import ConfirmModal, SettingsPane
 from .store import Store
 
 REFRESH_SECONDS = 5
+RELOAD_LOST_SECONDS = 1.0   # a queued tab reload that hasn't run by then never will
 
 
 class TeleNotifyApp(App):
@@ -113,6 +115,7 @@ class TeleNotifyApp(App):
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
         self.refresh_seconds = refresh_seconds
+        self._reload_queued: float | None = None   # when a reload was queued (monotonic), until it runs
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
 
     def notify(self, message: str, *, title: str = "", severity="information",
@@ -143,7 +146,7 @@ class TeleNotifyApp(App):
     def on_mount(self) -> None:
         if self.refresh_seconds > 0:
             self.set_interval(self.refresh_seconds, self._tick)
-        self.call_after_refresh(self.action_reload)
+        self._reload_soon()
 
     def _active_pane(self):
         tabs = self.query_one(TabbedContent)
@@ -156,6 +159,7 @@ class TeleNotifyApp(App):
             pane.reload()
 
     def action_reload(self) -> None:
+        self._reload_queued = None   # a queued reload is done by this one
         pane = self._active_pane()
         if pane is not None and hasattr(pane, "reload"):
             pane.reload()
@@ -175,20 +179,38 @@ class TeleNotifyApp(App):
         if not settings.dirty:
             self.exit()
             return
+        if getattr(self.screen, "quit_question", False):   # a held ctrl+q: one question is enough (#92)
+            return
 
         def done(yes: bool | None) -> None:
             if yes:
                 self.exit()
 
-        self.push_screen(ConfirmModal("Settings has unsaved changes. Quit and lose them?", "Quit"), done)
+        question = ConfirmModal("Settings has unsaved changes. Quit and lose them?", "Quit")
+        question.quit_question = True   # other questions (revert, restart) may still have it on top
+        self.push_screen(question, done)
 
     def action_show(self, tab: str) -> None:
         # Hand focus to the tab bar first: if a widget inside the old tab kept
         # focus, Textual would move it to a sibling in that hidden tab and
         # TabbedContent would switch straight back.
         self.set_focus(self.query_one(Tabs))
-        self.query_one(TabbedContent).active = tab
-        self.call_after_refresh(self.action_reload)
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == tab:   # already shown: no TabActivated follows
+            self._reload_soon()
+        else:   # TabActivated reloads it: once, not twice (each read of a locked file takes time)
+            tabs.active = tab
 
     def on_tabbed_content_tab_activated(self, _event: TabbedContent.TabActivated) -> None:
+        self._reload_soon()
+
+    def _reload_soon(self) -> None:
+        """Reload the shown tab after this refresh. Asked again before it runs (start-up,
+        a tab shown at once), it still reloads once: a read of a locked file takes time."""
+        now = time.monotonic()
+        # Textual runs the callback on the screen on top: if that screen goes away first,
+        # the callback is dropped. A request older than a second is taken as lost.
+        if self._reload_queued is not None and now - self._reload_queued < RELOAD_LOST_SECONDS:
+            return
+        self._reload_queued = now
         self.call_after_refresh(self.action_reload)

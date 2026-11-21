@@ -18,6 +18,11 @@ from .clean import clean
 SERVICES = {"real": "tele-notify", "dry-run": "tele-notify-dryrun"}
 
 
+def service(dry_run: bool) -> str:
+    """The systemd unit of the bot this screen shows."""
+    return SERVICES["dry-run" if dry_run else "real"]
+
+
 @dataclass
 class Verdict:
     verdict: str

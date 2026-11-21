@@ -39,7 +39,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import BUSY_NOTE, Review, is_busy
+from ..store import BUSY_NOTE, Review, is_busy, unreadable_note
 from .review_data import history, remove_label, write_label
 
 DECISION_KEYS = ("send", "keep", "discard", "next", "open_link", "check")
@@ -278,14 +278,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         except (sqlite3.Error, OSError, ValueError) as e:   # a lock, a broken file, a value that isn't a number
             self._read_error = True
             busy = is_busy(e)
-            problem = BUSY_NOTE if busy else f"can't read the state file: {e}"
+            problem = BUSY_NOTE if busy else unreadable_note(bot.service(paths.dry_run))   # the Dashboard's words
             if self._unrecorded:   # beside, never instead of, a decision that wasn't recorded
                 self.note(f"{self._unrecorded}  ·  {problem}", "bad")
             else:
                 self.note(problem, "warn")
-            if self._history_mode or not self._items:
-                said = BUSY_NOTE if busy else f"Can't read the state file: {e}"
-                self.query_one("#review-empty", Static).update(Content(clean(said)))
+            if self._history_mode or not self._items:   # the note above says why, once (#106)
+                self.query_one("#review-empty", Static).update(Content("Nothing to show until the state file can be read."))
                 self._show_only("#review-empty")
             self._sync_controls()
             return

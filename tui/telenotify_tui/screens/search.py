@@ -36,13 +36,14 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import Judged
+from ..store import BUSY, Judged, is_busy, unreadable_note
 from . import search_data
 
 DEBOUNCE_SECONDS = 0.35
 LOCK_WAIT_SECONDS = 10      # how long a search waits for the bot's lock in all,
 LOCK_STEP_SECONDS = 0.25    # in steps this long, checking whether it was replaced
 CHATS_LOADING = "loading chats…"
+CHATS_NOT_READ = "chats not read"   # the state file couldn't be read (the details say why)
 LIMIT = 200
 
 VERDICT_STYLE = {"publish": "bold green", "review": "bold yellow", "reject": "bold red"}
@@ -80,6 +81,15 @@ def when(at: int, fmt: str) -> str:
 
 def _locked(e: Exception) -> bool:
     return isinstance(e, sqlite3.OperationalError) and "locked" in str(e)
+
+
+def _set_options(sel: Select, options: list, value) -> None:
+    """New options and value, without a Changed message. The shown label follows even when
+    the value stays the same ("all"): setting an equal value doesn't redraw it."""
+    with sel.prevent(Select.Changed):
+        sel.set_options(options)
+        sel.value = value
+        sel.mutate_reactive(Select.value)
 
 
 def row_key(j: Judged) -> str:
@@ -243,9 +253,7 @@ class SearchPane(Vertical):
         if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])] or not self._chats_shown:
             self._chats_shown = True
             self._chat_options = options
-            with sel.prevent(Select.Changed):
-                sel.set_options(options)
-                sel.value = current if any(o[1] == current for o in options) else "all"
+            _set_options(sel, options, current if any(o[1] == current for o in options) else "all")
 
     def _chat_dropdown_toggled(self, expanded: bool) -> None:
         if not expanded and self._chats_waiting is not None:
@@ -277,6 +285,7 @@ class SearchPane(Vertical):
         # While the bot holds a lock, wait for it in short steps, so a replaced
         # search or quitting the screen doesn't sit out a 10 s busy timeout.
         deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        note = ""   # a failed read, in words, where the selected post's details go
         while True:
             try:
                 found, rows, problem = self._read(worker, query, verdict, chat_id, chats)
@@ -286,12 +295,14 @@ class SearchPane(Vertical):
                     return
                 if _locked(e) and time.monotonic() < deadline:
                     continue
-                found, rows, problem = None, [], f"couldn't read the state: {e}"
+                # the Dashboard's words, short in the count (it shares its row at 80 columns), whole beside it
+                found, rows, problem = None, [], "file busy" if is_busy(e) else "can't read"
+                note = f"{BUSY}. ctrl+r searches again." if is_busy(e) else unreadable_note(self._service())
                 break
         if worker.is_cancelled:
             return
         try:
-            self.app.call_from_thread(self._apply, generation, found, rows, problem, focus_results)
+            self.app.call_from_thread(self._apply, generation, found, rows, problem, focus_results, note)
         except RuntimeError:   # the app closed while we read
             pass
 
@@ -318,8 +329,11 @@ class SearchPane(Vertical):
                 return found, [], "nothing judged yet"
             return found, search_data.search(s, query, verdict, chat_id, limit=LIMIT), ""
 
+    def _service(self) -> str:
+        return bot.service(self.app.paths.dry_run)
+
     def _apply(self, generation: int, chats: list[tuple[int, str]] | None, rows: list[Judged], problem: str,
-               focus_results: bool) -> None:
+               focus_results: bool, note: str = "") -> None:
         if generation != self._generation or not self.is_mounted:
             return   # a newer search is on its way
         self._pending = None
@@ -332,6 +346,11 @@ class SearchPane(Vertical):
         moved = focus_results and self.app.focused is table
         self._fill(rows, cursor=table.cursor_row if moved else None)
         count = self.query_one("#count", Static)
+        if note:
+            self.query_one("#search-detail-head", Static).update(Text(note, style="bold"))
+            sel = self.query_one("#chat", Select)
+            if not self._chats_shown and not sel.expanded:   # not "loading" any more
+                _set_options(sel, [(CHATS_NOT_READ, "all")], "all")
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:
