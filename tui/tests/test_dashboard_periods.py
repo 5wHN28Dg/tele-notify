@@ -538,3 +538,19 @@ def test_a_sliver_has_the_colour_of_its_biggest_series(small, style):
     start = bottom.index("▁")
     styles = [str(sp.style) for sp in chart.spans if sp.start <= len("\n".join(chart.plain.splitlines()[:2])) + 1 + start < sp.end]
     assert styles == [style]
+
+
+def test_a_series_with_posts_keeps_a_cell_when_the_bar_has_room():
+    """#117 item 3: the old midpoint rule dropped a small series. Here 2 published posts under 28
+    others filled a 3-cell bar with reject only; now the bottom cell shows publish."""
+    bars = [dd.DayCount("2026-11-01", publish=2, review=3, reject=25)]
+    rows = render_chart(bars, "day", height=3).plain.splitlines()[:3]    # top to bottom
+    assert rows[2].strip() == dash.SERIES_MARK["publish"] * 2
+    assert rows[1].strip() == rows[0].strip() == dash.SERIES_MARK["reject"] * 2
+
+
+def test_cell_series_never_drops_the_only_cell_of_another_series():
+    # 1.5 cells for three series: two can show, and a cell is only taken from a series shown twice
+    cells = dash._cell_series(4, 8, 12, 3)
+    assert cells[:2] == ["publish", "reject"]
+    assert dash._cell_series(8, 16, 24, 3) == ["publish", "review", "reject"]   # even thirds: unchanged

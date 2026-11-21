@@ -150,6 +150,33 @@ def series_colours(theme: dict[str, str]) -> dict[str, str]:
     return colours
 
 
+def _cell_series(p: int, r: int, t: int, height: int) -> list[str]:
+    """The series each cell of one bar shows, bottom up (`p`, `r`, `t`: the tops of publish,
+    review and reject, in eighths of a cell). A cell shows the series covering most of it; a
+    series that covers some of the bar but most of no cell (5 publish, 5 review, 5 reject against
+    a top of 30) takes the cell where it covers most, if that cell's own series shows elsewhere
+    too, so no series with posts disappears from a bar that has room for it (#117)."""
+    spans = {"publish": (0, p), "review": (p, r), "reject": (r, t)}
+
+    def cover(series: str, row: int) -> int:
+        a, b = spans[series]
+        return max(0, min(b, row * 8 + 8) - max(a, row * 8))
+
+    out = []
+    for row in range(height):
+        best = max(spans, key=lambda s: (cover(s, row), -list(spans).index(s)))
+        out.append(best if cover(best, row) else "reject")
+    used = [row for row in range(height) if row * 8 < t]
+    for series in spans:
+        if series in (out[row] for row in used) or not any(cover(series, row) for row in used):
+            continue
+        for row in sorted(used, key=lambda row: -cover(series, row)):
+            if cover(series, row) and sum(out[x] == out[row] for x in used) > 1:
+                out[row] = series
+                break
+    return out
+
+
 def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHART_WIDTH,
                  height: int = CHART_HEIGHT, colours: dict[str, str] | None = None) -> Text:
     """A small stacked bar chart: publish (█) at the bottom, then review (▚), then
@@ -181,12 +208,12 @@ def render_chart(bars: list[dd.DayCount], bucket: str = "day", width: int = CHAR
             t = max(t, 1)
             p, r = (t, t) if biggest == "publish" else (0, t) if biggest == "review" else (0, 0)
         scaled.append((p, max(r, p), max(t, r, p)))
+    cells = [_cell_series(p, r, t, height) for p, r, t in scaled]
     for row in range(height - 1, -1, -1):
         lo = row * 8
         for i, (p, r, t) in enumerate(scaled):
             fill = min(8, max(0, t - lo))
-            mid = lo + max(fill, 1) / 2
-            series = "publish" if mid < p else "review" if mid < r else "reject"
+            series = cells[i][row]
             style = (colours or SERIES_FALLBACK)[series]
             glyph = SERIES_MARK[series] if fill == 8 else eighths[fill]
             out.append(glyph * bar_w, style=style)
