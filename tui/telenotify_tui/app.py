@@ -113,6 +113,7 @@ class TeleNotifyApp(App):
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
         self.refresh_seconds = refresh_seconds
+        self._reload_queued = False
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
 
     def notify(self, message: str, *, title: str = "", severity="information",
@@ -143,7 +144,7 @@ class TeleNotifyApp(App):
     def on_mount(self) -> None:
         if self.refresh_seconds > 0:
             self.set_interval(self.refresh_seconds, self._tick)
-        self.call_after_refresh(self.action_reload)
+        self._reload_soon()
 
     def _active_pane(self):
         tabs = self.query_one(TabbedContent)
@@ -191,8 +192,24 @@ class TeleNotifyApp(App):
         # focus, Textual would move it to a sibling in that hidden tab and
         # TabbedContent would switch straight back.
         self.set_focus(self.query_one(Tabs))
-        self.query_one(TabbedContent).active = tab
-        self.call_after_refresh(self.action_reload)
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == tab:   # already shown: no TabActivated follows
+            self._reload_soon()
+        else:   # TabActivated reloads it: once, not twice (each read of a locked file takes time)
+            tabs.active = tab
 
     def on_tabbed_content_tab_activated(self, _event: TabbedContent.TabActivated) -> None:
-        self.call_after_refresh(self.action_reload)
+        self._reload_soon()
+
+    def _reload_soon(self) -> None:
+        """Reload the shown tab after this refresh. Asked again before it runs (start-up,
+        a tab shown at once), it still reloads once: a read of a locked file takes time."""
+        if self._reload_queued:
+            return
+        self._reload_queued = True
+
+        def reload() -> None:
+            self._reload_queued = False
+            self.action_reload()
+
+        self.call_after_refresh(reload)

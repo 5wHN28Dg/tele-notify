@@ -43,6 +43,7 @@ DEBOUNCE_SECONDS = 0.35
 LOCK_WAIT_SECONDS = 10      # how long a search waits for the bot's lock in all,
 LOCK_STEP_SECONDS = 0.25    # in steps this long, checking whether it was replaced
 CHATS_LOADING = "loading chats…"
+CHATS_NOT_READ = "chats not read"   # the state file couldn't be read (the details say why)
 LIMIT = 200
 
 VERDICT_STYLE = {"publish": "bold green", "review": "bold yellow", "reject": "bold red"}
@@ -340,6 +341,11 @@ class SearchPane(Vertical):
         count = self.query_one("#count", Static)
         if note:
             self.query_one("#search-detail-head", Static).update(Text(note, style="bold"))
+            sel = self.query_one("#chat", Select)
+            if not self._chats_shown and not sel.expanded:   # not "loading" any more
+                with sel.prevent(Select.Changed):
+                    sel.set_options([(CHATS_NOT_READ, "all")])
+                    sel.value = "all"
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:

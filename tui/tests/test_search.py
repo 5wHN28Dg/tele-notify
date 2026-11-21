@@ -622,3 +622,5 @@ async def test_an_unreadable_state_file_is_said_in_words(paths):
         assert count == "can't read"
         assert "Can't read the state file." in head and "journalctl --user -u tele-notify-dryrun" in head
         assert "DatabaseError" not in count + head and "not a database" not in count + head
+        sel = app.query_one("#chat", Select)                     # review run 2: not "loading chats…"
+        assert [str(label) for label, _ in sel._options] == ["chats not read"]

@@ -962,25 +962,6 @@ async def test_the_dry_run_note_follows_the_saved_config_and_the_flag(paths, cfg
         assert ("dry run" in note()) == flag
 
 
-async def test_a_locked_state_file_is_worded_as_on_the_dashboard(paths, cfg_path, monkeypatch):
-    """#105: Settings said "Couldn't read the chat list: database is locked"; the Dashboard
-    and Review say the state file is busy, in the same words."""
-    from telenotify_tui.store import BUSY, Store
-
-    monkeypatch.setattr(TeleNotifyApp, "store", lambda self, timeout=10: Store(self.paths.state, 0.1))
-    holder = sqlite3.connect(paths.state, isolation_level=None)
-    holder.execute("BEGIN EXCLUSIVE")
-    try:
-        app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
-        async with app.run_test(size=(120, 40)) as pilot:
-            await open_settings(pilot)
-            said = messages(app)
-            assert BUSY in said and "chat list" in said
-            assert "database is locked" not in said
-    finally:
-        holder.close()
-
-
 async def test_holding_ctrl_q_asks_once(paths, cfg_path):
     """#92: holding ctrl+q with unsaved edits stacked one quit question per repeat."""
     app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
@@ -1028,3 +1009,100 @@ async def test_an_unreadable_state_file_is_said_once_in_plain_words(paths, cfg_p
         await open_settings(pilot)
         await pilot.pause()
         assert len([n for n in app._notifications if "chat list" in n.message]) == 2
+
+
+# A real lock held by another process, with the real timeouts (nothing patched). The bounds
+# are generous for a slow CI machine: what they catch is a 10 s wait on the event loop.
+LOOP_BLOCK_LIMIT = 3.0
+HOLD = ("import sqlite3, sys, time; c = sqlite3.connect(sys.argv[1], isolation_level=None); "
+        "c.execute('BEGIN EXCLUSIVE'); print('held', flush=True); time.sleep(float(sys.argv[2]))")
+
+
+def hold_lock(path: Path, seconds: float = 120):
+    import subprocess
+    import sys
+    p = subprocess.Popen([sys.executable, "-I", "-c", HOLD, str(path), str(seconds)],
+                         stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "held"
+    return p
+
+
+class LoopWatch:
+    """The longest the event loop was blocked while inside the `with`."""
+
+    def __enter__(self):
+        import asyncio
+        import time
+
+        async def tick():
+            while True:
+                t = time.monotonic()
+                await asyncio.sleep(0.02)
+                self.worst = max(self.worst, time.monotonic() - t - 0.02)
+
+        self.worst = 0.0
+        self._task = asyncio.get_running_loop().create_task(tick())
+        return self
+
+    def __exit__(self, *exc):
+        self._task.cancel()
+
+
+def chat_toasts(app) -> list[str]:
+    return [n.message for n in app._notifications if "chat list" in n.message]
+
+
+async def test_a_real_lock_never_freezes_settings_and_is_said_where_it_stays(paths, cfg_path):
+    """Review run 2: under another process's exclusive lock, opening Settings read the chat list
+    twice on the UI thread, 10 s each; the only toast expired inside the freeze, the lasting
+    note said "No chat list from the bot yet", and ctrl+r said nothing."""
+    from telenotify_tui.store import BUSY
+
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        holder = hold_lock(paths.state)
+        try:
+            with LoopWatch() as watch:
+                pane = await open_settings(pilot)
+                await pilot.pause()
+            assert watch.worst < LOOP_BLOCK_LIMIT, f"event loop blocked {watch.worst:.1f} s"
+            note = str(pane.query_one("#chat-note", Static).render())
+            assert BUSY in note and "ctrl+r retries" in note
+            assert "not yet" not in note and "once the bot has run" not in note
+            assert chat_toasts(app) == [pane.chats_problem]          # one opening, one toast
+            with LoopWatch() as watch:
+                await pilot.press("ctrl+r")                          # a retry gets its own answer
+                await pilot.pause()
+            assert watch.worst < LOOP_BLOCK_LIMIT, f"event loop blocked {watch.worst:.1f} s"
+            assert len(chat_toasts(app)) == 2
+        finally:
+            holder.kill()
+            holder.wait()
+        await pilot.press("ctrl+r")                                  # the lock is gone
+        await pilot.pause()
+        assert pane.chats_problem == "" and pane.has_chat_table
+        assert BUSY not in str(pane.query_one("#chat-note", Static).render())
+        assert len(chat_toasts(app)) == 2
+
+
+async def test_an_unreadable_chat_list_stays_said_in_the_chat_note(paths, cfg_path):
+    """Review run 2: the lasting note said "No chat list from the bot yet" while the read failed."""
+    paths.state.write_bytes(b"this is not a database" * 100)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await pilot.pause()
+        note = str(pane.query_one("#chat-note", Static).render())
+        assert "Can't read the state file." in note and "journalctl --user -u tele-notify-dryrun" in note
+        assert "not yet" not in note
+        await add_keyword(pilot, pane, "roles", "level_keywords_en", "new grad")   # an edit redraws it
+        assert "Can't read the state file." in str(pane.query_one("#chat-note", Static).render())
+        n = len(chat_toasts(app))
+        app.action_show("dashboard")                                 # (a "1" would go into the entry)
+        await pilot.pause()
+        app.action_show("settings")                                  # with unsaved edits: one toast
+        await pilot.pause()
+        await pilot.pause()
+        said = [m.message for m in app._notifications][-1:]
+        assert len(chat_toasts(app)) == n + 1 and "wasn't read either" in said[0], [m.message for m in app._notifications]

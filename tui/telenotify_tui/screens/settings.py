@@ -474,6 +474,7 @@ class ChatTable(DataTable):
 # ------------------------------------------------------------------ pane
 
 LIST_SECTIONS = ("roles", "places", "filters")
+CHATS_TIMEOUT = 0.25   # seconds the chat-list read waits for the bot's lock (on the UI thread)
 
 
 class SettingsPane(Vertical):
@@ -523,7 +524,7 @@ class SettingsPane(Vertical):
         self.problems: list[sd.Problem] = []
         self.has_chat_table = False
         self.store_chats: list = []
-        self._chats_warned = False   # the chat list's read failed, and was said, in this tab opening
+        self.chats_problem = ""   # why the last chat-list read failed, in words ("" when it worked)
         self.chat_filter = ""
         self._tab_label: str | None = None
         self.has_dups = False   # some list has an entry twice: "Remove duplicates" is offered
@@ -589,7 +590,8 @@ class SettingsPane(Vertical):
         t.add_column("kind", key="kind")
         t.add_column("status", key="status")
         t.add_column("id", key="id")
-        self.call_after_refresh(self.load)
+        # config.json only: the chat list is read when the tab is shown (it may be locked)
+        self.call_after_refresh(self.load, chats=False)
 
     # ------------------------------------------------------- data in/out
 
@@ -624,8 +626,8 @@ class SettingsPane(Vertical):
     def dirty(self) -> bool:
         return self.original is not None and sd.is_dirty(self.original, self.edited)
 
-    def load(self) -> None:
-        """(Re-)read config.json and the chat list; replaces any edits."""
+    def load(self, chats: bool = True) -> None:
+        """(Re-)read config.json and (with `chats`) the chat list; replaces any edits."""
         path = self.paths.config
         try:
             text = path.read_text(encoding="utf-8")
@@ -637,30 +639,30 @@ class SettingsPane(Vertical):
             self.load_error = str(e) if isinstance(e, sd.ConfigError) else f"cannot read {path}: {e}"
         self.loaded_text = text
         self.edited = copy.deepcopy(self.original) if self.original is not None else {}
-        self.load_chats()
+        if chats:
+            self.load_chats()
         self.fill_widgets()
         self.changed()
 
-    def load_chats(self) -> None:
+    def load_chats(self, say: bool = True) -> str:
+        """Read the bot's chat list. On the UI thread, so it waits for a lock only briefly:
+        the screen must keep answering. A failure is said in #chat-note while it lasts
+        and, with `say`, in a toast; it is returned ("" when the read worked)."""
         try:
-            with self.app.store() as s:  # type: ignore[attr-defined]
+            with self.app.store(CHATS_TIMEOUT) as s:  # type: ignore[attr-defined]
                 self.has_chat_table = s.has_table("chats")
                 self.store_chats = s.chats()
+            self.chats_problem = ""
         except (sqlite3.Error, OSError, ValueError) as e:  # a locked or broken state file mustn't break settings
             self.has_chat_table, self.store_chats = False, []
-            if self._chats_warned:   # one tab opening reads the list more than once: say it once
-                return
-            self._chats_warned = True
             if is_busy(e):   # the Dashboard's words (#105)
-                said = f"{BUSY}, so the chat list wasn't read. Opening this tab again retries."
+                retry = "opening this tab again retries" if self.dirty else "ctrl+r retries"
+                self.chats_problem = f"{BUSY}, so the chat list wasn't read; {retry}."
             else:
-                said = f"The chat list wasn't read. {unreadable_note(bot.service(self.paths.dry_run))}"
-            self.notify(said, severity="warning", markup=False)
-            return
-        self._chats_warned = False
-
-    def on_hide(self) -> None:
-        self._chats_warned = False   # opening the tab again says it again
+                self.chats_problem = f"The chat list wasn't read. {unreadable_note(bot.service(self.paths.dry_run))}"
+            if say:
+                self.notify(self.chats_problem, severity="warning", markup=False)
+        return self.chats_problem
 
     def reload(self) -> None:
         """Called by the app when the tab is shown and on ctrl+r."""
@@ -678,10 +680,11 @@ class SettingsPane(Vertical):
             else:
                 self.load()
             return
-        self.load_chats()
+        unread = self.load_chats(say=False)   # one toast for this reload
         self.refresh_chats()
         self.notify("Settings has unsaved changes, so config.json wasn't re-read. "
-                    "ctrl+s saves them; Revert discards them.", severity="warning")
+                    "ctrl+s saves them; Revert discards them."
+                    + (" The chat list wasn't read either (see Chats)." if unread else ""), severity="warning")
 
     def fill_widgets(self) -> None:
         with self.prevent(Input.Changed, Checkbox.Changed):
@@ -785,6 +788,10 @@ class SettingsPane(Vertical):
         self.query_one("#chat-named").set_class(not named, "hidden")
         self.query_one("#chat-ids").set_class(named, "hidden")
         note = self.query_one("#chat-note", Static)
+        if not named and self.chats_problem:   # not "not yet": the list couldn't be read
+            note.update(Text(f"{self.chats_problem} Edit chat IDs directly meanwhile.", style="bold"))
+            self.query_one("#editor-chats", KeywordEditor).refresh_items()
+            return
         if not named:
             note.update("No chat list from the bot yet: edit chat IDs directly. Names appear here "
                         "once the bot has run (it saves your chat list when it starts).")
