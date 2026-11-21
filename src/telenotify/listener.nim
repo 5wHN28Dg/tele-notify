@@ -38,7 +38,7 @@
 ##   to your Saved Messages.
 
 import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
-import config, classify, gather, fetch, telegram, state, dedup, boards, instagram
+import config, classify, gather, fetch, telegram, state, dedup, boards, notify, instagram
 
 type
   Listener* = ref object
@@ -59,6 +59,10 @@ type
     retryChats: seq[int64]        # chats whose backlog couldn't be read yet (#5)
     retryEveryTicks*: int         # worker ticks (~0.1 s) between retries; backs off
     log*: proc (line: string) {.closure, gcsafe.}
+    notify*: Notifier               ## your own bot (#122); nil: off (or `outbox`)
+    outbox*: NotifyQueue            ## sends `notify`'s messages in the background
+    awayPublished, awayReview: int  # the backlog's posts, for one summary
+    retrying: bool                  # handling a backlog read on retry (summarized too)
     downSince: int64
     selfChat: int64
     titles*: Table[int64, string]   # watched chats' titles, for alerts
@@ -82,18 +86,72 @@ proc duration(seconds: int64): string =
   let m = (seconds mod 3600) div 60
   if h > 0: &"{h}h {m}m" else: &"{m}m"
 
+proc notifying(l: Listener): bool =
+  ## Is there a bot to tell (#122)? Makes the queue for `notify` if needed.
+  if l.outbox == nil and l.notify != nil:
+    l.outbox = newNotifyQueue(l.notify, proc (line: string) {.closure, gcsafe.} = l.say line)
+  l.outbox != nil
+
+proc tell(l: Listener, text: string) =
+  ## Through your own bot, if there is one (#122): queued, sent in the
+  ## background, so a slow or unreachable Bot API never holds up a post or
+  ## an alert. A failure is logged.
+  if l.notifying: l.outbox.push text
+
+proc tellWithLink(l: Listener, text: string, chat, msg: int64) =
+  ## `text` and the post's link, asked from TDLib when its turn comes (at
+  ## most 5 s), in the background: a slow answer never holds up a post.
+  if not l.notifying: return
+  let tg = l.tg
+  l.outbox.pushLater proc (): Future[string] {.async, closure, gcsafe.} =
+    var link = ""
+    try:
+      let asking = tg.link(chat, msg)
+      if await withTimeout(asking, sendTimeoutMs): link = asking.read
+    except CatchableError: discard
+    return text & (if link != "": "\n" & link else: "")
+
+proc flushNotifications*(l: Listener, timeoutMs = 10_000) {.async.} =
+  ## Wait (at most `timeoutMs`) until the queued notifications are sent: at
+  ## a stop, and in tests.
+  if l.outbox != nil: await l.outbox.flush(timeoutMs)
+
+const reviewHint* = "Review: telenotify review, or the screen's Review tab (2)"
+  ## the last line of a review message: what to do next
+
+proc isolated(role: string): string =
+  ## A role (often Arabic) inside an English line, isolated so neither
+  ## reorders the other; "a post" when there's none.
+  if role == "": "a post" else: "\u2068" & role & "\u2069"
+
+proc tellSummary(l: Listener) =
+  ## One message for a backlog (at start-up, or read on retry), instead of
+  ## one per post. Only the kinds you get notified about.
+  if l.awayPublished + l.awayReview == 0: return
+  var parts: seq[string]
+  if l.cfg.notifyPublished: parts.add &"{l.awayPublished} published"
+  if l.cfg.notifyReview: parts.add &"{l.awayReview} for review"
+  l.tell "📥 Backlog read: " & parts.join(", ") &
+         (if l.awayReview > 0: "\n" & reviewHint else: "")
+
+proc alertText*(text: string, dryRun: bool): string =
+  ## An alert as sent to you. Two bots (a dry run beside the real one) both
+  ## alert: say which.
+  "⚠️ tele-notify" & (if dryRun: " [dry run]" else: "") & ": " & text
+
 proc alert*(l: Listener, text: string) {.async.} =
-  ## Log loudly and, if alerts are on, tell you in Saved Messages.
+  ## Log loudly, record it for the terminal screen and, if alerts are on,
+  ## tell you in Saved Messages and through your bot.
   l.say "⚠️  " & text
   try: l.state.addAlert(text)        # for the terminal screen
   except CatchableError as e: l.say "   (could not record the alert: " & e.msg & ")"
   if not l.cfg.alerts: return
   try:
     if l.selfChat == 0: l.selfChat = await l.tg.selfChat()
-    # two bots (a dry run beside the real one) both alert: say which
-    await l.tg.sendText(l.selfChat, "⚠️ tele-notify" & (if l.dryRun: " [dry run]" else: "") & ": " & text)
+    await l.tg.sendText(l.selfChat, alertText(text, l.dryRun))
   except CatchableError as e:
     l.say "   (could not send the alert: " & e.msg & ")"
+  l.tell alertText(text, l.dryRun)
 
 # ------------------------------------------------- lost access to a chat (#16)
 
@@ -245,8 +303,9 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
                                 prev.action, prev.textHash, albumId = y.albumId)
       return
     l.say &"✏️  {m.chatTitle} #{m.id} was edited: judging it again"
-  var verdict, role, reasons = ""
+  var verdict, role, reasons, postLink = ""
   var action = "error"
+  var queued = false       # in the review queue (it can fail in the error path)
   try:
     var post = Post(text: group.mapIt(it.text).filterIt(it.strip != "").join("\n"))
     for x in group: post.buttons.add x.buttons
@@ -288,16 +347,16 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
         l.state.addPublished(m.chatId, m.id, g.text)
       else:
         # forwarding is forbidden in this chat: send the role and a link
-        let link = await l.tg.link(m.chatId, m.id)
-        await l.tg.sendText(l.cfg.targetChat, "match: " & role & "\npost link: " & link)
+        postLink = await l.tg.link(m.chatId, m.id)
+        await l.tg.sendText(l.cfg.targetChat, "match: " & role & "\npost link: " & postLink)
         action = "linked"
         l.state.addPublished(m.chatId, m.id, g.text)
     of vReview:
-      var link = ""
-      try: link = await l.tg.link(m.chatId, m.id)
+      try: postLink = await l.tg.link(m.chatId, m.id)
       except CatchableError: discard
-      l.state.addReview(m.chatId, m.id, m.chatTitle, g.text, reasons, role, link, ids)
+      l.state.addReview(m.chatId, m.id, m.chatTitle, g.text, reasons, role, postLink, ids)
       action = "queued for review"
+      queued = true
     of vReject:
       action = "rejected"
   except CatchableError as e:
@@ -306,11 +365,12 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
     action = "error, queued for review"
     l.say &"   ✗ {m.chatTitle} #{m.id}: {e.msg}"
     try:
-      var link = ""
-      try: link = await l.tg.link(m.chatId, m.id)
-      except CatchableError: discard
+      if postLink == "":
+        try: postLink = await l.tg.link(m.chatId, m.id)
+        except CatchableError: discard
       l.state.addReview(m.chatId, m.id, m.chatTitle, group.mapIt(it.text).join("\n"),
-                        reasons.strip(chars = {';', ' '}), role, link, ids)
+                        reasons.strip(chars = {';', ' '}), role, postLink, ids)
+      queued = true
     except CatchableError as e2:
       l.say &"   could not queue it for review either: {e2.msg}"
   for x in group:
@@ -321,6 +381,22 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
     except CatchableError as e:
       l.say &"   could not record {x.chatTitle} #{x.id}: {e.msg}"
 
+  # Your bot (#122): not in a dry run (it changes nothing); the backlog
+  # after downtime is one summary at its end, not a ping per post.
+  # Each kind can be turned off (notify_published, notify_review).
+  let published = action in ["forwarded", "linked"]
+  let wanted = (published and l.cfg.notifyPublished) or (queued and l.cfg.notifyReview)
+  if wanted and not l.dryRun:
+    if l.bootstrapping or l.retrying:
+      if published: inc l.awayPublished
+      else: inc l.awayReview
+    elif published:
+      let text = "✅ Published: " & isolated(role) & "\n" & m.chatTitle
+      if postLink == "": l.tellWithLink(text, m.chatId, m.id)   # a forward: its link is asked aside
+      else: l.tell text & "\n" & postLink
+    else:
+      l.tell "🔎 For review: " & isolated(role) & "\n" & m.chatTitle &
+             (if postLink != "": "\n" & postLink else: "") & "\n" & reviewHint
   let mark = case action
     of "forwarded", "linked", "would publish": "✅"
     of "queued for review", "error, queued for review": "🤔"
@@ -415,7 +491,10 @@ proc bootstrap*(l: Listener) {.async.} =
         await l.unreadFailed(chat, e)
     l.backlogTotal = l.queue.len
     l.backlogDone = 0
+    l.awayPublished = 0
+    l.awayReview = 0
     await l.processQueue()
+    l.tellSummary()
   finally:
     l.bootstrapping = false
     for m in l.held: l.queue.addLast m
@@ -427,6 +506,7 @@ proc retryFailedChats*(l: Listener) {.async.} =
   ## timeout). Without this, their unread messages waited for the next
   ## restart. Messages already handled live meanwhile are skipped as seen.
   var still: seq[int64]
+  var read = 0
   for chat in l.retryChats:
     if l.stop[]:
       still.add chat
@@ -441,6 +521,7 @@ proc retryFailedChats*(l: Listener) {.async.} =
         await l.alert(&"{u.messages[0].chatTitle} had more than {u.messages.len} unread " &
                       "messages; only the newest were checked.")
       for m in u.messages: l.queue.addLast m
+      read += u.messages.len
     except CatchableError as e:
       l.say &"   could not read chat {chat} again: {e.msg}"
       still.add chat
@@ -450,21 +531,33 @@ proc retryFailedChats*(l: Listener) {.async.} =
   if still.len > 0 and still.len == l.retryChats.len:
     l.retryEveryTicks = min(l.retryEveryTicks * 2, 18_000)
   l.retryChats = still
+  if read > 0:
+    # that backlog now: one summary for it, not a ping per post (live
+    # messages queued meanwhile are counted in it too)
+    l.retrying = true
+    l.awayPublished = 0
+    l.awayReview = 0
+    try: await l.processQueue()
+    finally: l.retrying = false
+    l.tellSummary()
 
 proc sendApproved*(l: Listener) {.async.} =
   ## Send the posts you approved in `telenotify review`. A failure puts the
   ## post back in the review queue, with the reason.
   for r in l.state.approvedReviews():
     if l.stop[]: return
+    var link = r.link
     try:
       if not await l.tg.forward(l.cfg.targetChat, r.chatId, r.albumIds):
-        var link = r.link
         if link == "": link = await l.tg.link(r.chatId, r.msgId)
         if link == "": raise newException(ValueError, "no link to the post")
         await l.tg.sendText(l.cfg.targetChat, "match: " & r.role & "\npost link: " & link)
       l.state.addPublished(r.chatId, r.msgId, r.text)
       discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
+      if l.cfg.notifyPublished:
+        l.tell "✅ Published after your review: " & isolated(r.role) & "\n" &
+               r.chatTitle & (if link != "": "\n" & link else: "")
     except CatchableError as e:
       l.say &"   could not send reviewed {r.chatTitle} #{r.msgId}: {e.msg}"
       try: l.state.reopenReview(r.id, e.msg)

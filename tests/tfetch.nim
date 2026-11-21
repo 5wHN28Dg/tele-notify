@@ -1,7 +1,7 @@
 ## fetch(): redirects, errors and time limits, against a local test server.
 
 import std/[unittest, asyncdispatch, asynchttpserver, asyncnet, strutils, os, net]
-import telenotify/fetch
+import telenotify/[fetch, notify]
 
 proc handler(req: Request) {.async, gcsafe.} =
   case req.url.path
@@ -178,3 +178,34 @@ suite "fetch: review pass 3 (stage 2) findings":
 
   test "time limits that aren't whole seconds are reported exactly":
     check "1500 ms" in get("/slow", 1500).error
+
+suite "name lookups for your bot (#122, review run 2)":
+  test "an address can be kept a while, so a slow resolver blocks once per period":
+    let before = addressLookups
+    check waitFor(fetch(base & "/ok", allowPrivate = true)).ok
+    check waitFor(fetch(base & "/ok", allowPrivate = true)).ok
+    check addressLookups == before + 2                   # job-board links: every time
+    let kept = addressLookups
+    for _ in 1 .. 3:
+      check waitFor(fetch(base & "/ok", allowPrivate = true, keepAddressMs = 600_000)).ok
+    check addressLookups == kept + 1
+
+  test "a failed lookup is remembered a minute, so a failing resolver blocks once too (review run 3)":
+    let before = addressLookups
+    for _ in 1 .. 3:
+      let r = waitFor fetch("http://no-such-host.invalid/x", keepAddressMs = 600_000)
+      check not r.ok and "resolve" in r.error
+    check addressLookups == before + 1
+    # without keeping, every fetch looks it up again (job-board links)
+    let plain = addressLookups
+    for _ in 1 .. 2: discard waitFor fetch("http://no-such-host.invalid/x")
+    check addressLookups == plain + 2
+
+  test "the bot's fetcher keeps it for 10 minutes":
+    forgetKeptAddresses()                     # an earlier test kept 127.0.0.1 already
+    let f = botFetcher(allowPrivate = true)
+    let before = addressLookups
+    # 127.0.0.1, not localhost: CI's localhost answers ::1 first, and the test server is IPv4 only
+    for _ in 1 .. 3: check waitFor(f("http://127.0.0.1:" & $port & "/ok")).ok
+    check addressLookups == before + 1
+    check keepBotAddressMs == 600_000

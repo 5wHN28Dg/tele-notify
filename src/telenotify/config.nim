@@ -39,6 +39,21 @@
 ##   for 6 h (200 posts). Share links (instagram.com/share/...) aren't read.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
+## * `notify_bot_token` (default none): your own bot's token from @BotFather.
+##   Press Start in the bot's chat once; the bot then notifies you there (a
+##   normal Telegram notification on phone and laptop) when a post goes to
+##   review, when one is published, and for every alert, the log-out alert
+##   included (#122). It says "🔔 tele-notify notifications are on" once,
+##   at the first start that reaches you. A backlog (after downtime, or a
+##   chat read on retry) is one summary ("📥 Backlog read: 3
+##   published, 5 for review"), not a message per post. A dry run sends no
+##   per-post notifications, only its alerts, marked "[dry run]". A token
+##   that isn't `digits:letters` turns notifications off with one log line;
+##   one the bot can't send with (401, 403: Start not pressed) is one alert
+##   on the terminal screen. A secret: keep it out of anything you share.
+## * `notify_published`, `notify_review` (default true): turn off the bot's
+##   messages for published posts, or for posts for review. Alerts follow
+##   `alerts`: `"alerts": false` keeps them out of the bot too.
 ##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the
@@ -70,6 +85,9 @@ type
     dryRun*: bool              ## judge and record, but forward nothing
     alerts*: bool              ## send downtime alerts to Saved Messages
     alertAfterMinutes*: int    ## downtime shorter than this is only logged
+    notifyBotToken*: string    ## your own bot's token (@BotFather): notifications (#122)
+    notifyPublished*: bool     ## through it: each published post
+    notifyReview*: bool        ## through it: each post for review
     keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
     instagramFrontend*: string ## a kittygram's address: read linked Instagram posts (#114)
     apiId*: int
@@ -169,6 +187,9 @@ proc parseConfig*(j: JsonNode): Config =
   result.dryRun = j{"dry_run"}.getBool(false)
   result.alerts = j{"alerts"}.getBool(true)
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
+  result.notifyBotToken = j{"notify_bot_token"}.getStr("").strip
+  result.notifyPublished = j{"notify_published"}.getBool(true)
+  result.notifyReview = j{"notify_review"}.getBool(true)
   result.keepTextDays = j{"keep_text_days"}.getInt(90)
   result.instagramFrontend = j{"instagram_frontend"}.getStr("").strip
   if result.instagramFrontend != "" and

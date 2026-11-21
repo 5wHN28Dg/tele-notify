@@ -253,6 +253,15 @@ def test_write_temp_leaves_the_secrets_out(tmp_path):
         p.unlink()
 
 
+def test_write_temp_leaves_the_bot_token_out(tmp_path):
+    """#122: your notification bot's token is a secret too; judging posts doesn't need it."""
+    p = sd.write_temp(dict(base_cfg(), notify_bot_token="123:SECRET"))
+    try:
+        assert "SECRET" not in p.read_text(encoding="utf-8")
+    finally:
+        p.unlink()
+
+
 def test_same_change_on_disk_and_on_screen_is_no_conflict():
     orig = base_cfg()
     disk = dict(orig, chats=[-1, -2, -7], target_chat=-5)
