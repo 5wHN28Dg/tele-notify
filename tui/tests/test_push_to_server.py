@@ -42,6 +42,9 @@ def _repo(tmp_path: Path) -> Path:
     (repo / "deploy").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "deploy" / "push-to-server.sh")
     shutil.copy(REPO / "deploy" / "tele-notify.service", repo / "deploy" / "tele-notify.service")
+    for f in ("install-staged.sh", "make-package.sh", "self-update.sh",
+              "tele-notify-update.service", "tele-notify-update.timer"):
+        shutil.copy(REPO / "deploy" / f, repo / "deploy" / f)
     (repo / "tui" / "telenotify_tui").mkdir(parents=True)
     (repo / "tui" / "pyproject.toml").write_text('[project]\nname = "telenotify-tui"\n')
     (repo / "tui" / "telenotify_tui" / "__init__.py").write_text("")
@@ -390,3 +393,42 @@ def test_a_dirty_tree_is_refused_unless_allowed(tmp_path, path):
 def test_without_a_target_it_says_how_to_use_it(tmp_path):
     r = subprocess.run(["sh", str(SCRIPT)], cwd=REPO, capture_output=True, text=True, check=False)
     assert r.returncode != 0 and "usage" in r.stderr.lower()
+
+
+def test_the_installed_version_is_recorded(tmp_path):
+    """#123: a successful install records its version (here a commit), so self-update knows what's there."""
+    s = Server(tmp_path, active=True)
+    r = s.run()
+    assert r.returncode == 0, r.stderr
+    head = subprocess.run(["git", "-C", str(s.repo), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert (s.lib / "version").read_text().strip() == head
+
+
+def test_a_rollback_keeps_the_old_version(tmp_path):
+    s = Server(tmp_path, active=True, health="inactive")
+    (s.lib / "version").write_text("v4.0.0\n")
+    r = s.run()
+    assert r.returncode != 0
+    assert (s.lib / "version").read_text() == "v4.0.0\n"
+
+
+def test_a_push_installs_and_turns_on_the_nightly_self_update(tmp_path):
+    """#123: the self-update script and its timer come with each install, and the timer is enabled."""
+    s = Server(tmp_path, active=True)
+    r = s.run()
+    assert r.returncode == 0, r.stderr
+    assert (s.lib / "self-update.sh").is_file()
+    assert (s.units / "tele-notify-update.timer").is_file() and (s.units / "tele-notify-update.service").is_file()
+    assert "systemctl --user enable --now tele-notify-update.timer" in s.calls()
+
+
+def test_a_self_update_turned_off_stays_off(tmp_path):
+    """#123: the timer is turned on at its first install only; a later push keeps it as the owner left it."""
+    s = Server(tmp_path, active=True)
+    s.units.mkdir(parents=True, exist_ok=True)
+    (s.units / "tele-notify-update.timer").write_text("old timer\n")
+    r = s.run()
+    assert r.returncode == 0, r.stderr
+    assert "enable --now tele-notify-update.timer" not in s.calls()
+    assert (s.units / "tele-notify-update.timer").read_text() != "old timer\n"   # but brought up to date

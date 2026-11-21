@@ -1,0 +1,13 @@
+# systemd *user* service: install a newer tele-notify release if there is one
+# (#123). Started by tele-notify-update.timer; installed by deploy/install-staged.sh.
+# Logs: journalctl --user -u tele-notify-update
+
+[Unit]
+Description=tele-notify: install a new release if there is one
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh %h/.local/lib/tele-notify/self-update.sh
+Nice=10

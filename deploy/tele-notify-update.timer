@@ -1,0 +1,14 @@
+# Look for a new tele-notify release once a day, at night in Baghdad (#123; the
+# owner's choice: "Daily, at night"). A missed run (the machine was off) runs
+# at the next start.
+
+[Unit]
+Description=tele-notify: look for a new release every night
+
+[Timer]
+OnCalendar=*-*-* 04:00 Asia/Baghdad
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

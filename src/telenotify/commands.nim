@@ -118,6 +118,22 @@ proc corpusId*(j: JsonNode): string =
   elif id.kind == JInt: $id.getBiggestInt
   else: $id
 
+proc cmdAlert*(cfg: Config, text: string, fetcher: Fetcher = nil) {.async.} =
+  ## An alert from outside the bot (the nightly self-update, #123): kept for
+  ## the terminal screen, and sent through your own bot unless `"alerts":
+  ## false`. It goes to the user id the bot kept (no Telegram login here).
+  ## A send that fails is said on stderr; the alert is still kept.
+  let st = openState(statePath(cfg, cfg.dryRun))
+  defer: st.close()
+  st.addAlert(text)
+  if not cfg.alerts: return
+  let log = proc (line: string) {.closure, gcsafe.} = stderr.writeLine line
+  let send = notifierFor(cfg.notifyBotToken, storedChatId(st, nil),
+                         (if fetcher != nil: fetcher else: botFetcher()), log, st)
+  if send == nil: return
+  let err = await send(alertText(text, cfg.dryRun))
+  if err != "": log "could not send the alert through your bot: " & err
+
 proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   let dry = dryRunFlag or cfg.dryRun
   let st = openState(statePath(cfg, dry))
