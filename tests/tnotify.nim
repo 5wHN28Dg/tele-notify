@@ -3,6 +3,10 @@
 import std/[unittest, asyncdispatch, strutils, uri, unicode, times, os, asyncnet, net, sequtils]
 import telenotify/[notify, fetch, state]
 
+const notifyPaceDefault = 1000
+doAssert notifyPaceMs == notifyPaceDefault    # the bot paces messages to about one a second (#127)
+notifyPaceMs = 0                 # but these tests don't wait for it, apart from the pacing test
+
 proc utf16Len(s: string): int =
   ## How Telegram counts a message's length.
   for r in s.runes: result += (if r.int > 0xFFFF: 2 else: 1)
@@ -286,3 +290,118 @@ suite "failures, retries and the queue (review run 2)":
     id = 43                                                 # another account
     waitFor announceOn(st, send, who, dryRun = true)
     check sent.len == 3 and sent[2] == "🔔 tele-notify [dry run] notifications are on"
+
+
+suite "notification reliability (#127)":
+  proc counting(calls: ref int, answers: seq[Fetched]): Fetcher =
+    result = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        let i = min(calls[], answers.high)
+        inc calls[]
+        return answers[i]
+
+  test "a timeout, a failed lookup or a 5xx is tried once more (MSG3)":
+    let ok = Fetched(ok: true, status: 200)
+    for first in [Fetched(status: 0, error: "timed out after 5000 ms"),
+                  Fetched(status: 0, error: "cannot resolve api.telegram.org"),
+                  Fetched(status: 502, error: "HTTP 502")]:
+      let calls = new int
+      let n = botNotifier("1:t", fixedId(42), counting(calls, @[first, ok]), transientWaitMs = 50)
+      check waitFor(n("x")) == ""
+      check calls[] == 2
+
+  test "a send that keeps failing is tried twice, not forever, and says why":
+    let calls = new int
+    let n = botNotifier("1:t", fixedId(42), counting(calls, @[Fetched(status: 503, error: "HTTP 503")]),
+                        transientWaitMs = 50)
+    check "503" in waitFor(n("x"))
+    check calls[] == 2
+
+  test "a 400 is not tried again (the message itself is wrong)":
+    let calls = new int
+    let n = botNotifier("1:t", fixedId(42), counting(calls, @[Fetched(status: 400, error: "HTTP 400",
+      body: """{"ok":false,"description":"Bad Request: message text is empty"}""")]), transientWaitMs = 50)
+    check "400" in waitFor(n("x"))
+    check calls[] == 1
+
+  test "\"chat not found\" (Start never pressed) and a bare 401 are the can't-reach-you alert":
+    let dir = getTempDir() / "tn-notify-reach"
+    removeDir(dir)
+    createDir(dir)
+    for (name, answer, alerted) in [
+        ("notfound", Fetched(status: 400, error: "HTTP 400",
+                             body: """{"ok":false,"description":"Bad Request: chat not found"}"""), true),
+        ("401", Fetched(status: 401, error: "HTTP 401",
+                        body: """{"ok":false,"description":"Unauthorized"}"""), true),
+        ("empty", Fetched(status: 400, error: "HTTP 400",
+                          body: """{"ok":false,"description":"Bad Request: message text is empty"}"""), false)]:
+      let st = openState(dir / name & ".sqlite3")
+      let calls = new int
+      discard waitFor botNotifier("1:t", fixedId(42), counting(calls, @[answer]), st)("x")
+      check (st.alertTexts() == @[unreachableAlert]) == alerted
+      st.close()
+
+  test "a full queue makes room for an urgent message by dropping the newest, not the front":
+    var sent: seq[string]
+    let slow: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      await sleepAsync(50)
+      {.cast(gcsafe).}: sent.add text
+      return ""
+    let q = newNotifyQueue(slow, proc (line: string) {.closure, gcsafe.} = discard, cap = 3)
+    for t in ["1", "2", "3", "4"]: q.push t          # "1" is being sent; 2, 3, 4 wait
+    q.pushFirst "logged out"
+    q.waitIdle()
+    check sent == @["1", "logged out", "2", "3"]
+
+  test "messages go out at most one per gap":
+    var at: seq[float]
+    let quick: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: at.add epochTime()
+      return ""
+    let q = newNotifyQueue(quick, proc (line: string) {.closure, gcsafe.} = discard, gapMs = 300)
+    for t in ["1", "2", "3"]: q.push t
+    q.waitIdle()
+    check at.len == 3
+    check at[1] - at[0] >= 0.28 and at[2] - at[1] >= 0.28
+    check at[2] - at[0] < 1.5
+
+  test "the queue's gap is notifyPaceMs unless given":
+    let saved = notifyPaceMs
+    notifyPaceMs = 250
+    var at: seq[float]
+    let quick: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: at.add epochTime()
+      return ""
+    let q = newNotifyQueue(quick, proc (line: string) {.closure, gcsafe.} = discard)
+    notifyPaceMs = saved
+    q.push "1"
+    q.push "2"
+    q.waitIdle()
+    check at[1] - at[0] >= 0.23
+
+  test "\"notifications are on\" isn't sent when every kind is off":
+    let dir = getTempDir() / "tn-notify-allof"
+    removeDir(dir)
+    let st = openState(dir / "state.sqlite3")
+    defer: st.close()
+    var sent: seq[string]
+    let send: Notifier = proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: sent.add text
+      return ""
+    waitFor announceOn(st, send, fixedId(42), dryRun = false, anyOn = false)
+    check sent.len == 0
+    waitFor announceOn(st, send, fixedId(42), dryRun = false, anyOn = true)
+    check sent.len == 1
+
+  test "the waits at a stop fit what they wait for (under systemd's 90 s)":
+    check oneSendMs == sendTimeoutMs + transientRetryMs + sendTimeoutMs        # a send tried twice
+    let linkMs = sendTimeoutMs                     # tellWithLink asks TDLib for the post's link first
+    check stopFlushMs >= linkMs + notifyPaceDefault + oneSendMs
+    let inFlight = linkMs + sendTimeoutMs + maxRetryAfterMs + sendTimeoutMs   # a send waiting out a 429
+    check logOutFlushMs >= inFlight + notifyPaceDefault + oneSendMs
+    check logOutFlushMs < 90_000
+
+  test "\"notifications are on\" follows whether any kind is on":
+    check anyNotifications(true, false, false) and anyNotifications(false, true, false)
+    check anyNotifications(false, false, true)
+    check not anyNotifications(false, false, false)

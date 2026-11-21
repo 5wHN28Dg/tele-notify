@@ -18,11 +18,14 @@
 ## log-out alert still reaches you when Telegram can't tell it any more.
 ##
 ## A 429 (too many messages) is tried once more after Telegram's
-## `retry_after` (at most 30 s). A 401 or 403 (wrong token, or Start not
-## pressed) is one alert for the terminal screen, repeated only after a send
-## has worked again.
+## `retry_after` (at most 30 s); a timeout, a lost connection, a failed name
+## lookup or a 5xx (Telegram's own trouble) once more after 2 s. A 401 or 403
+## (wrong token), or a 400 "chat not found" (Start not pressed), is one alert
+## for the terminal screen, repeated only after a send has worked again.
+## Messages go out at most about one a second (Telegram's Bot FAQ asks that
+## per chat).
 
-import std/[asyncdispatch, deques, json, strutils, strformat, uri, unicode]
+import std/[asyncdispatch, deques, json, strutils, strformat, uri, unicode, times, monotimes]
 import fetch, state
 
 const
@@ -32,10 +35,24 @@ const
   chatIdKey* = "notify_chat_id"   ## your user id, in the state's meta table
   keepBotAddressMs* = 600_000     ## api.telegram.org's address is looked up this often at most
   maxRetryAfterMs* = 30_000       ## the longest wait after a 429
+  transientRetryMs* = 2000        ## the wait before trying a timed-out or 5xx send again
+  oneSendMs* = 2 * sendTimeoutMs + transientRetryMs
+    ## the longest one message takes when it's tried twice (12 s)
+  stopFlushMs* = sendTimeoutMs + 1000 + oneSendMs
+    ## at a stop: long enough for the message being sent (its link, the pace,
+    ## tried twice: 18 s)
+  logOutFlushMs* = 70_000
+    ## at a stop after a log-out: the message being sent (its link 5 s, a send,
+    ## a 429's wait of up to 30 s, the send again: 45 s), the pace (1 s), then
+    ## the alert tried twice (12 s) is 58 s; with room to spare, under systemd's
+    ## 90 s stop limit. An alert that itself meets a 429 may not make it.
   unreachableKey = "notify_unreachable"
   onKey = "notify_on_for"         ## the user id told "notifications are on"
   unreachableAlert* = "Your notification bot can't reach you: press Start in its chat, " &
                       "or check notify_bot_token"
+
+var notifyPaceMs* = 1000
+  ## the least time between two messages to you (tests set 0)
 
 type
   Notifier* = proc (text: string): Future[string] {.closure, gcsafe.}
@@ -93,8 +110,13 @@ proc retryAfterMs(r: Fetched, cap: int): int =
   except CatchableError: discard
   result = min(result, cap)
 
+proc cantReach(r: Fetched): bool =
+  ## Telegram says this bot can't message you: a wrong token (401), you
+  ## blocked it (403), or you never pressed Start (often 400 "chat not found").
+  r.status in [401, 403] or (r.status == 400 and "chat not found" in reason(r).toLowerAscii)
+
 proc botNotifier*(token: string, chatId: ChatId, fetcher: Fetcher, st: State = nil,
-                  retryCapMs = maxRetryAfterMs): Notifier =
+                  retryCapMs = maxRetryAfterMs, transientWaitMs = transientRetryMs): Notifier =
   ## Sends through the Bot API. Your user id is asked once, after that it's
   ## kept. `st`: where a bot that can't reach you is recorded as an alert
   ## (nil: nowhere). Never raises.
@@ -108,13 +130,20 @@ proc botNotifier*(token: string, chatId: ChatId, fetcher: Fetcher, st: State = n
       if r.status == 429:
         await sleepAsync(retryAfterMs(r, retryCapMs))
         r = await fetcher(url)
+      elif r.status == 0 or r.status >= 500:
+        # a timeout, a lost connection, a failed lookup or Telegram's own
+        # trouble: often gone a moment later (MSG3). A timeout or a 502/504
+        # can come after Telegram took the message, and the Bot API can't
+        # tell a repeat: then you get it twice, which beats not at all.
+        await sleepAsync(transientWaitMs)
+        r = await fetcher(url)
       if r.ok:
         if st != nil:
           try:
             if st.getMeta(unreachableKey) != "": st.setMeta(unreachableKey, "")
           except CatchableError: discard
         return ""
-      if r.status in [401, 403] and st != nil:
+      if r.cantReach and st != nil:
         try:
           if st.getMeta(unreachableKey) == "":
             st.addAlert(unreachableAlert)     # for the terminal screen
@@ -183,9 +212,13 @@ type
     pending: Deque[Later]
     sending: bool
     dropped: bool        # already said so, until the queue empties
+    gapMs: int           # the least time between two sends
+    lastSend: MonoTime   # when the last send started (not the wall clock: it can be set back)
 
-proc newNotifyQueue*(send: Notifier, log: LogProc, cap = 50): NotifyQueue =
-  NotifyQueue(send: send, log: log, cap: max(cap, 1), pending: initDeque[Later]())
+proc newNotifyQueue*(send: Notifier, log: LogProc, cap = 50, gapMs = -1): NotifyQueue =
+  ## `gapMs`: the least time between two sends; -1: `notifyPaceMs`.
+  NotifyQueue(send: send, log: log, cap: max(cap, 1), pending: initDeque[Later](),
+              gapMs: (if gapMs < 0: notifyPaceMs else: gapMs))
 
 proc idle*(q: NotifyQueue): bool =
   ## Nothing waiting and nothing being sent.
@@ -197,7 +230,12 @@ proc drain(q: NotifyQueue) {.async.} =
     while q.pending.len > 0:
       let later = q.pending.popFirst
       var err = ""
-      try: err = await q.send(await later())
+      try:
+        let text = await later()
+        let wait = q.gapMs - (getMonoTime() - q.lastSend).inMilliseconds.int
+        if wait > 0: await sleepAsync(min(wait, q.gapMs))
+        q.lastSend = getMonoTime()
+        err = await q.send(text)
       except CatchableError as e: err = e.msg.splitLines()[0]
       if err != "": q.log "   (could not notify you through your bot: " & err & ")"
   finally:
@@ -232,19 +270,23 @@ proc pushFirst*(q: NotifyQueue, text: string) =
 proc flush*(q: NotifyQueue, timeoutMs = 10_000) {.async.} =
   ## Wait until everything queued is sent, at most `timeoutMs`. Gives up
   ## with one log line saying how many weren't sent.
-  var waited = 0
-  while not q.idle and waited < timeoutMs:
+  let start = getMonoTime()     # time that passed, not sleeps counted: a blocking lookup counts too
+  while not q.idle and (getMonoTime() - start).inMilliseconds < timeoutMs:
     await sleepAsync(20)
-    waited += 20
   if not q.idle:
     let left = q.pending.len + (if q.sending: 1 else: 0)
     q.log &"   ({left} notifications not sent: stopped waiting for your bot)"
 
-proc announceOn*(st: State, send: Notifier, chatId: ChatId, dryRun: bool) {.async.} =
+proc anyNotifications*(published, review, alerts: bool): bool =
+  ## Is any kind of message to your bot on? Else "notifications are on" isn't said.
+  published or review or alerts
+
+proc announceOn*(st: State, send: Notifier, chatId: ChatId, dryRun: bool, anyOn = true) {.async.} =
   ## "Notifications are on", once: at the first start with a working token,
   ## and again when your user id changes (another account). Kept in the
   ## state database only once sent, so a failed send (Start not pressed yet)
   ## is tried at the next start. Never raises.
+  if not anyOn: return     # every kind turned off: nothing will come
   try:
     let id = await chatId()
     if st.getMeta(onKey) == $id: return

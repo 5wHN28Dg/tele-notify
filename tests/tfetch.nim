@@ -209,3 +209,66 @@ suite "name lookups for your bot (#122, review run 2)":
     for _ in 1 .. 3: check waitFor(f("http://127.0.0.1:" & $port & "/ok")).ok
     check addressLookups == before + 1
     check keepBotAddressMs == 600_000
+
+suite "kept addresses (#127)":
+  test "a kept address expires":
+    forgetKeptAddresses()
+    let before = addressLookups
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 150)).ok
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 150)).ok
+    check addressLookups == before + 1
+    sleep 300
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 150)).ok
+    check addressLookups == before + 2
+
+  test "an address kept for a fetch that allows local ones isn't used by one that refuses them":
+    forgetKeptAddresses()
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 600_000)).ok
+    let r = waitFor fetch("http://127.0.0.1:" & $port & "/ok", keepAddressMs = 600_000)
+    check not r.ok and "private" in r.error
+
+  test "a kept address that can't be connected to is looked up again next time":
+    forgetKeptAddresses()
+    let probe = newSocket()
+    probe.bindAddr(Port(0), "127.0.0.1")
+    let closed = probe.getLocalAddr()[1]
+    probe.close()                                    # nothing listens there now
+    let url = "http://127.0.0.1:" & $closed & "/x"
+    check not waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok
+    let before = addressLookups
+    check not waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok
+    check addressLookups == before + 1
+
+  test "a kept address whose fetch times out is looked up again next time (a hang, not a refusal)":
+    forgetKeptAddresses()
+    let slow = "http://127.0.0.1:" & $port & "/slow"
+    check not waitFor(fetch(slow, timeoutMs = 200, allowPrivate = true, keepAddressMs = 600_000)).ok
+    let before = addressLookups
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 600_000)).ok
+    check addressLookups == before + 1
+
+
+  test "after a failed connect, a failing lookup still falls back to the address kept before":
+    forgetKeptAddresses()
+    let probe = newSocket()
+    probe.bindAddr(Port(0), "127.0.0.1")
+    let closed = probe.getLocalAddr()[1]
+    probe.close()
+    # the address stays in the table, expired: resolve's fallback for a lookup that fails
+    check not waitFor(fetch("http://127.0.0.1:" & $closed & "/x", allowPrivate = true,
+                            keepAddressMs = 600_000)).ok
+    check keptAddressFor("127.0.0.1", closed, allowPrivate = true) == "127.0.0.1"   # kept, only expired
+
+
+  test "while lookups fail, the address known before is used, with one lookup a minute (an outage)":
+    forgetKeptAddresses()
+    let name = "tn-gone.invalid"           # its lookup always fails
+    keepAddressExpired(name, Port(port), allowPrivate = true, "127.0.0.1")
+    let url = "http://" & name & ":" & $port & "/ok"
+    let before = addressLookups
+    check waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok   # the fallback reached it
+    check addressLookups == before + 1
+    # the address stops answering (a failed connect marks it expired): still no new lookup this minute
+    keepAddressExpired(name, Port(port), allowPrivate = true, "127.0.0.1")
+    for _ in 1 .. 3: discard waitFor fetch(url, allowPrivate = true, keepAddressMs = 600_000)
+    check addressLookups == before + 1
