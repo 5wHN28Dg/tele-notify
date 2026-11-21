@@ -38,7 +38,7 @@
 ##   to your Saved Messages.
 
 import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
-import config, classify, gather, fetch, telegram, state, dedup, boards, notify, instagram
+import config, classify, gather, fetch, telegram, state, dedup, boards, notify, instagram, summary
 
 type
   Listener* = ref object
@@ -259,6 +259,38 @@ proc checkWatchedChats*(l: Listener) {.async.} =
       else: l.say &"   could not check access to chat {chat}: " & e.msg.splitLines()[0]
     l.accessChecked.incl chat
 
+proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
+                  known: string): Future[tuple[text, link: string]] {.async.} =
+  ## What goes to your channel when Telegram won't forward a matched post
+  ## (#80). `forward_fallback` "link": the old "match: <role>" + "post link:
+  ## <link>" text. "summary": the bot's own summary (summary.nim), with the
+  ## link only when the chat is public (a private chat's link opens only for
+  ## its members). `known`: the post's link if already known; else it is
+  ## asked for (its errors propagate when it's needed, as before). Returns
+  ## the text and the link (for your notification).
+  var link = known
+  if l.cfg.forwardFallback == ffLink:
+    if link == "": link = await l.tg.link(chat, msg)
+    if link == "": raise newException(ValueError, "no link to the post")
+    return ("match: " & role & "\npost link: " & link, link)
+  var public = false
+  var name = title
+  try:
+    let a = await l.tg.chatAccess(chat)
+    public = a.public
+    if name == "": name = a.title
+  except CatchableError as e:
+    l.say &"   could not tell whether chat {chat} is public ({e.msg}): its link is left out"
+  if link == "":
+    try: link = await l.tg.link(chat, msg)
+    except CatchableError:
+      if public: raise         # readers could have opened it: try again from review
+  # TDLib's links to private chats are t.me/c/...: never in a public summary
+  let shown = if public and link != "" and "/c/" notin link: link else: ""
+  if public and shown == "": raise newException(ValueError, "no public link to the post")
+  return (summaryText(role, place, applyMethods(text, @defaultJobPostingSites & l.cfg.extraJobSites),
+                      name, shown), link)
+
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
 proc fingerprint(group: seq[TgMessage]): string =
@@ -348,10 +380,11 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
         action = "forwarded"
         l.state.addPublished(m.chatId, m.id, g.text)
       else:
-        # forwarding is forbidden in this chat: send the role and a link
-        postLink = await l.tg.link(m.chatId, m.id)
-        await l.tg.sendText(l.cfg.targetChat, "match: " & role & "\npost link: " & postLink)
-        action = "linked"
+        # forwarding is forbidden in this chat: the role and a link, or a summary (#80)
+        let fallback = await l.fallbackText(m.chatId, m.id, m.chatTitle, role, d.place, g.text, postLink)
+        postLink = fallback.link
+        await l.tg.sendText(l.cfg.targetChat, fallback.text)
+        action = if l.cfg.forwardFallback == ffSummary: "summarized" else: "linked"
         l.state.addPublished(m.chatId, m.id, g.text)
     of vReview:
       try: postLink = await l.tg.link(m.chatId, m.id)
@@ -390,7 +423,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
   # Your bot (#122): not in a dry run (it changes nothing); the backlog
   # after downtime is one summary at its end, not a ping per post.
   # Each kind can be turned off (notify_published, notify_review).
-  let published = action in ["forwarded", "linked"]
+  let published = action in ["forwarded", "linked", "summarized"]
   let wanted = (published and l.cfg.notifyPublished) or (queued and l.cfg.notifyReview)
   if wanted and not l.dryRun:
     if l.bootstrapping or l.retrying:
@@ -404,7 +437,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       l.tell "🔎 For review: " & isolated(role) & "\n" & m.chatTitle &
              (if postLink != "": "\n" & postLink else: "") & "\n" & reviewHint
   let mark = case action
-    of "forwarded", "linked", "would publish": "✅"
+    of "forwarded", "linked", "summarized", "would publish": "✅"
     of "queued for review", "error, queued for review": "🤔"
     of "duplicate": "♻️"
     else: "·"
@@ -420,7 +453,9 @@ proc noteOtherBot*(l: Listener, m: TgMessage) {.async.} =
   ## for `telenotify compare`. Never raises.
   try:
     var (chat, msg) = (m.originChat, m.originMsg)
-    let i = m.text.find("post link: ")
+    # "post link: " (the old text) or "Post link: " (the summary, #80), at the
+    # start of a line: the last such line, so no text above it can stand in
+    let i = ("\n" & m.text).toLowerAscii.rfind("\npost link: ")
     if chat == 0 and i >= 0:
       let words = m.text[i + "post link: ".len .. ^1].splitWhitespace
       if words.len > 0:
@@ -571,9 +606,11 @@ proc sendApproved*(l: Listener) {.async.} =
     var link = r.link
     try:
       if not await l.tg.forward(l.cfg.targetChat, r.chatId, r.albumIds):
-        if link == "": link = await l.tg.link(r.chatId, r.msgId)
-        if link == "": raise newException(ValueError, "no link to the post")
-        await l.tg.sendText(l.cfg.targetChat, "match: " & r.role & "\npost link: " & link)
+        # the place: the filter's, from the post's text as queued
+        let place = if l.cfg.forwardFallback == ffSummary: classify(r.text, l.cfg).place else: ""
+        let fallback = await l.fallbackText(r.chatId, r.msgId, r.chatTitle, r.role, place, r.text, link)
+        link = fallback.link
+        await l.tg.sendText(l.cfg.targetChat, fallback.text)
       l.state.addPublished(r.chatId, r.msgId, r.text)
       discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"

@@ -41,6 +41,9 @@ type
   Decision* = object
     verdict*: Verdict
     role*: string           ## the role that matched (shown in link-only forwards)
+    place*: string          ## the place keyword that counted, as written in the
+                            ## config ("البصرة", "Rumaila"); "" when none did. For
+                            ## the summary posted when forwarding is blocked (#80)
     reasons*: seq[string]   ## human-readable explanation, for logs and `explain`
 
 proc around(line: string, h: Hit, before, after: int): string =
@@ -107,12 +110,15 @@ proc basraHits(flat: string, cfg: Config): seq[Hit] =
       continue # "remote terminal units", "المدينه المنوره"
     result.add h
 
-proc locate(lines: seq[string], cfg: Config, why: var string): Place =
+proc locate(lines: seq[string], cfg: Config, why, word: var string): Place =
   ## Where is the job?
   ## * A line that says where the job is or where you must live
   ##   ("📍", "Location:", "موقع العمل", "من سكنه ...") decides first.
   ## * Otherwise: Basra mentioned and no other city -> Basra; both -> mixed.
-  var markedBasra, markedOther, anyBasra, anyOther = ""
+  ## `word`: the Basra-side keyword that counted (as written in the config),
+  ## or "" (none, or elsewhere).
+  var markedBasra, markedBasraWord, markedOther, anyBasra, anyOther = ""
+  word = ""
   for line in lines:
     let flat = line.flatten
     let b = flat.basraHits(cfg)
@@ -122,20 +128,26 @@ proc locate(lines: seq[string], cfg: Config, why: var string): Place =
     if line.contains("📍") or flat.contains(cfg.locationMarkers):
       if b.len > 0 and o:
         why = "location line names Basra and elsewhere: '" & line.short & "'"
+        word = b[0].keyword
         return plMixed
-      if b.len > 0 and markedBasra == "": markedBasra = line.short
+      if b.len > 0 and markedBasra == "":
+        markedBasra = line.short
+        markedBasraWord = b[0].keyword
       elif o and markedOther == "": markedOther = line.short
   if markedBasra != "":
     why = "location line: '" & markedBasra & "'"
+    word = markedBasraWord
     return plBasra
   if markedOther != "":
     why = "location line says elsewhere: '" & markedOther & "'"
     return plElsewhere
   if anyBasra != "" and anyOther == "":
     why = "location: " & anyBasra
+    word = anyBasra
     return plBasra
   if anyBasra != "":
     why = "mentions both " & anyBasra & " and " & anyOther
+    word = anyBasra
     return plMixed
   if anyOther != "":
     why = "location: " & anyOther
@@ -256,13 +268,13 @@ type WholePostPlace = object
   lines: seq[string]
   done: bool
   place: Place
-  why: string
+  why, word: string
 
-proc get(w: var WholePostPlace, cfg: Config): (Place, string) =
+proc get(w: var WholePostPlace, cfg: Config): (Place, string, string) =
   if not w.done:
-    w.place = locate(w.lines, cfg, w.why)
+    w.place = locate(w.lines, cfg, w.why, w.word)
     w.done = true
-  (w.place, w.why)
+  (w.place, w.why, w.word)
 
 proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace): Decision =
   let roles = b.lines.findRoles(cfg)
@@ -280,12 +292,13 @@ proc judgeBlock(b: Block, header: Block, cfg: Config, whole: var WholePostPlace)
   result.role = best.keyword
   result.reasons.add "role (" & $best.kind & "): " & best.keyword
 
-  var why = ""
-  var place = locate(b.lines & header.lines, cfg, why)
+  var why, word = ""
+  var place = locate(b.lines & header.lines, cfg, why, word)
   if place == plNone and whole.lines.len > 0:
     # The address may sit in a footer that was glued to another job.
-    (place, why) = whole.get(cfg)
+    (place, why, word) = whole.get(cfg)
   result.reasons.add why
+  result.place = word
   case place
   of plNone, plElsewhere:
     result.verdict = vReject

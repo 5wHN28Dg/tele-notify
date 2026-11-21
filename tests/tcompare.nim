@@ -49,3 +49,13 @@ suite "compare":
   test "the time window applies":
     let c = st.compareRuns(getTime().toUnix + 60)
     check c.both.len + c.pythonOnly.len + c.nimOnly.len == 0
+
+  test "a post the real bot summarized (#80) counts as published by Nim":
+    let d2 = getTempDir() / "tn-compare-test-summary"
+    removeDir(d2)
+    let s2 = openState(d2 / "state.sqlite3")
+    s2.markProcessed(-1, 20, "Jobs", "publish", "help desk", "entry role", "summarized")
+    s2.addPublished(-1, 20, "IT help desk intern wanted in Basra")
+    s2.addOtherBot(200, -1, 20, "Job match: help desk\nFrom: Jobs\nPost link: https://t.me/jobs/20")
+    let c = s2.compareRuns(getTime().toUnix - 86400)
+    check c.both.len == 1 and c.pythonOnly.len == 0 and c.nimOnly.len == 0

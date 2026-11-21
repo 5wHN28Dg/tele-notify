@@ -147,7 +147,7 @@ The bot reads `config.json` (the old Python bot read the same file):
 | `certifications` | Certificates that disqualify a post when they are *required* |
 | `recent_messages` | Used only by the old Python bot; the Nim bot ignores it |
 
-The Nim version adds optional keys, such as `publish_when_unsure`, `max_experience_years`, `data_dir`, `dry_run` and `alerts`. They are listed in the [rewrite guide](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). My own keywords are in [`example_keywords.txt`](example_keywords.txt).
+The Nim version adds optional keys, such as `publish_when_unsure`, `max_experience_years`, `data_dir`, `dry_run`, `alerts` and `forward_fallback` (`"link"` or `"summary"`: what goes to your channel when a chat doesn't allow forwarding). They are listed in the [rewrite guide](docs/rewrite-guide.md#5-changing-the-filter-without-breaking-it). My own keywords are in [`example_keywords.txt`](example_keywords.txt).
 
 ## More
 

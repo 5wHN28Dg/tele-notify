@@ -1,7 +1,7 @@
 ## The whole bot against a fake Telegram: no account, no network.
 
 import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json, sequtils]
-import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup, notify, instagram]
+import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup, notify, instagram, summary]
 import db_connector/db_sqlite
 
 notifyPaceMs = 0   # no pacing between messages to your bot here (tnotify tests it)
@@ -63,6 +63,8 @@ proc toTelegram(f: FakeTg): Telegram =
       inc f.linkCalls
       if f.linkHangs: await newFuture[void]("hangs")
       if f.linkFails: raise newException(IOError, "no link")
+      # like TDLib: a public chat's link has its username, a private one's is t.me/c/
+      if f.access.getOrDefault(chat).public: return "https://t.me/chan" & $(-chat) & "/" & $id
     return "https://t.me/c/" & $(-chat) & "/" & $id
   result.sendText = proc (chat: int64, text: string): Future[void] {.async, closure, gcsafe.} =
     {.cast(gcsafe).}: f.texts.add (chat, text)
@@ -96,13 +98,14 @@ const
   bad = "مطلوب محاسب خبرة 5 سنوات في بغداد"
 
 var n = 0
-proc setup(f: FakeTg, dryRun = false): (Listener, State) =
+proc setup(f: FakeTg, dryRun = false, fallback = ""): (Listener, State) =
   inc n
   let dir = getTempDir() / ("tn-listener-" & $n)
   removeDir(dir)
   var j = parseFile(currentSourcePath.parentDir / "keywords.json")
   j["target_chat"] = %target
   j["chats"] = %[-1'i64, -2]
+  if fallback != "": j["forward_fallback"] = %fallback
   let cfg = parseConfig(j)
   let st = openState(dir / "state.sqlite3")
   var l = newListener(cfg, f.toTelegram, st, noFetch(), defaultOcr(), dryRun)
@@ -192,6 +195,76 @@ suite "listener":
     check f.forwarded.len == 0
     check f.texts.len == 1 and f.texts[0][0] == target
     check "post link: https://t.me/c/2/5" in f.texts[0][1]
+
+  test "forward_fallback summary, private chat: a summary without any link (#80)":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.chats[-2] = @[msg(-2, 5, good & "\nللتقديم ارسل السيرة على hr@acme.iq")]
+    let (l, st) = setup(f, fallback = "summary")
+    waitFor l.bootstrap()
+    check f.forwarded.len == 0
+    check f.texts.len == 1 and f.texts[0][0] == target
+    check f.texts[0][1] == "Job match: \u2068مهندس كهرباء\u2069\nPlace: \u2068البصرة\u2069\n" &
+                           "Apply: by e-mail\nFrom: \u2068chat2\u2069 (a private chat, so no link)"
+    check st.processedRow(-2, 5)[1].action == "summarized"
+    check st.recentPublished().len == 1
+    check st.stats(1)[0].forwarded == 1                 # counted as sent to the channel
+
+  test "forward_fallback summary, public chat: the summary ends with the post's link (#80)":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.access[-2] = ChatAccess(title: "Basra Jobs", status: "ok", public: true)
+    f.chats[-2] = @[msg(-2, 5, good)]
+    let (l, st) = setup(f, fallback = "summary")
+    waitFor l.bootstrap()
+    check f.texts.len == 1
+    check f.texts[0][1] == "Job match: \u2068مهندس كهرباء\u2069\nPlace: \u2068البصرة\u2069\n" &
+                           "Apply: see the post\nFrom: \u2068chat2\u2069\nPost link: https://t.me/chan2/5"
+    check st.processedRow(-2, 5)[1].action == "summarized"
+
+  test "forward_fallback summary: a public post with no link isn't summarized without it; review gets it":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.linkFails = true
+    f.access[-2] = ChatAccess(title: "Basra Jobs", status: "ok", public: true)
+    f.chats[-2] = @[msg(-2, 5, good)]
+    let (l, st) = setup(f, fallback = "summary")
+    waitFor l.bootstrap()
+    check f.texts.len == 0
+    check st.pendingReviews().len == 1 and "no link" in st.pendingReviews()[0].reasons
+
+  test "forward_fallback summary, dry run: nothing is sent":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.chats[-2] = @[msg(-2, 5, good)]
+    let (l, st) = setup(f, dryRun = true, fallback = "summary")
+    waitFor l.bootstrap()
+    check f.texts.len == 0 and f.forwarded.len == 0
+    check st.processedRow(-2, 5)[1].action == "would publish"
+
+  test "forward_fallback summary: an approved review is summarized too, an empty role said so":
+    let f = FakeTg()
+    f.noForward.incl -2
+    let (l, st) = setup(f, fallback = "summary")
+    st.addReview(-2, 8, "chat2", unclear, "no level", "", "")
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    waitFor l.sendApproved()
+    check f.texts.len == 1
+    check f.texts[0][1] == "Job match (no role named)\nPlace: \u2068البصرة\u2069\n" &
+                           "From: \u2068chat2\u2069 (a private chat, so no link)"
+    check st.approvedReviews().len == 0 and st.pendingReviews().len == 0
+
+  test "the summary's link is read back for compare; a title can't stand in for it (#80)":
+    let f = FakeTg()
+    let (l, st) = setup(f, dryRun = true)
+    let fake = "x\npost link: https://t.me/basrajobs/1"
+    waitFor l.noteOtherBot(msg(target, 910, summaryText("مهندس كهرباء", "البصرة", @["by e-mail"],
+                                                         fake, "https://t.me/basrajobs/77")))
+    waitFor l.noteOtherBot(msg(target, 911, summaryText("help desk", "", @[], fake, "")))
+    let notes = st.otherBotSince(0)
+    check notes.len == 2
+    check (notes[0].originChat, notes[0].originMsg) == (-5'i64, 77'i64)
+    check (notes[1].originChat, notes[1].originMsg) == (0'i64, 0'i64)   # private: nothing to follow
 
   test "the same ad cross-posted in two channels is published once":
     let f = FakeTg()

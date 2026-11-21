@@ -54,6 +54,12 @@
 ## * `notify_published`, `notify_review` (default true): turn off the bot's
 ##   messages for published posts, or for posts for review. Alerts follow
 ##   `alerts`: `"alerts": false` keeps them out of the bot too.
+## * `forward_fallback` (default "link"): what goes to `target_chat` when a
+##   source chat won't let a matched post be forwarded (#80). "link": the
+##   old "match: <role>" and "post link: <link>" lines. "summary": a short
+##   plain-text summary of the post (role, place, how to apply), the source
+##   chat's title and, only for a public chat, the post's link (see
+##   summary.nim). Anything else is refused.
 ##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the
@@ -63,6 +69,11 @@ import std/[json, strutils, sets, os]
 import keywords, normalize, defaults
 
 type
+  ForwardFallback* = enum
+    ## What the bot posts when forwarding a match is blocked (#80).
+    ffLink = "link"         ## "match: <role>" + "post link: <link>" (the old text)
+    ffSummary = "summary"   ## its own short summary of the post (summary.nim)
+
   Config* = object
     levels*: KeywordList        ## explicit entry-level words ("intern", "حديث التخرج")
     entryRoles*: KeywordList    ## roles that are entry-level by nature ("help desk")
@@ -90,6 +101,7 @@ type
     notifyReview*: bool        ## through it: each post for review
     keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
     instagramFrontend*: string ## a kittygram's address: read linked Instagram posts (#114)
+    forwardFallback*: ForwardFallback  ## when forwarding is blocked: a link or a summary (#80)
     apiId*: int
     apiHash*: string
     chats*: seq[int64]
@@ -197,6 +209,13 @@ proc parseConfig*(j: JsonNode): Config =
       not result.instagramFrontend.toLowerAscii.startsWith("https://"):
     raise newException(ConfigError, "config key 'instagram_frontend' must be an address starting with " &
                        "http:// or https:// (e.g. \"http://127.0.0.1:8430\"), found: " & result.instagramFrontend)
+  let fallback = j{"forward_fallback"}
+  if fallback == nil or fallback.kind == JNull: result.forwardFallback = ffLink
+  elif fallback.kind == JString and fallback.getStr.strip in ["link", ""]: result.forwardFallback = ffLink
+  elif fallback.kind == JString and fallback.getStr.strip == "summary": result.forwardFallback = ffSummary
+  else:
+    raise newException(ConfigError, "config key 'forward_fallback' must be \"link\" (the default) or " &
+                       "\"summary\", found: " & $fallback)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)

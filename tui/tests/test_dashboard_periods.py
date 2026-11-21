@@ -208,6 +208,23 @@ def test_counts_albums_once_and_forwarded_reviews_only_when_sent(tmp_path):
     assert (chats["B"].reject, chats["B"].total) == (2, 2)
 
 
+def test_a_summary_sent_when_forwarding_was_blocked_counts_as_forwarded(tmp_path):
+    """#80: with forward_fallback "summary" the bot records "summarized"; it reached the channel,
+    so the Dashboard, the stats and Search say so, like "forwarded" and "linked"."""
+    from telenotify_tui.screens.search import action_label
+    t = at(date.today())
+    rows = [(-1, 1, "A", "publish", "summarized", t, 0), (-1, 2, "A", "publish", "linked", t, 0),
+            (-1, 3, "A", "publish", "would publish", t, 0)]
+    path = tmp_path / "s.sqlite3"
+    new_db(path, rows)
+    with Store(path) as s:
+        ps = dd.period_stats(s, dd.resolve(dd.PeriodChoice("today"), date.today()), 46)
+        [row] = s.stats(1)
+    assert ps.totals.forwarded == 2 and ps.totals.publish == 3
+    assert row.forwarded == 2
+    assert action_label("summarized") == "summarized"   # shown as it is (History, Search)
+
+
 def test_album_counts_where_its_first_picture_is(tmp_path):
     """Like `telenotify stats`: an album whose first picture was judged before the period isn't counted again."""
     day = date(2026, 11, 18)

@@ -357,7 +357,7 @@ type StatRow* = object
 
 const statsSql* = """SELECT chat_title,
       SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
-      SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
+      SUM(action IN ('forwarded', 'linked', 'summarized') OR EXISTS (SELECT 1 FROM reviews r
         WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent')),
       MAX(at)
       FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
@@ -390,7 +390,7 @@ proc percentile*(sorted: seq[int64], p: int): int64 =
   sorted[rank - 1]
 
 const latencySql* = """SELECT MAX(0, u.at - p.posted_at),
-      CASE WHEN p.action NOT IN ('forwarded', 'linked', 'would publish') THEN 2
+      CASE WHEN p.action NOT IN ('forwarded', 'linked', 'summarized', 'would publish') THEN 2
            WHEN p.caught_up = 1 THEN 1 ELSE 0 END
       FROM published u JOIN processed p ON p.chat_id = u.chat_id AND p.msg_id = u.msg_id
       WHERE u.at > ? AND p.posted_at IS NOT NULL"""

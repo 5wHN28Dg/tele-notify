@@ -66,7 +66,8 @@ may install it. Not a reader, viewer, sharing tool, training product, family fil
   its reasons, chat (watched or the target), keyword list, review queue, alert, period (for the numbers), the bot
   (real or dry run).
 - **Not the original post:** when forwarding is blocked, the bot posts its own short "match / post link" text in the
-  channel (#80).
+  channel, or, with `"forward_fallback": "summary"` (#80, off until the owner checks it), its own plain-text summary:
+  role, place, how to apply, the source chat's title, and the link only for a public chat.
 - **Verbs:** watch / unwatch a chat; judge (the filter); forward; review a post (send, discard, match no send, undo);
   search; re-judge; test settings on the corpus; save settings; start / stop / restart the bot.
 
@@ -247,6 +248,7 @@ table adds the intent order and the rest of the product. One row per layout; gro
 | Messages: alerts in the owner's Saved Messages (back after downtime, no connection, a watched chat lost, a backlog cut, a send failed) | tell the owner something needs them | the first line says why | n/a | Telegram | 1 why; 2 what to do |
 | Messages: forwards to the public channel | the original post, unchanged | n/a (Telegram's UI) | n/a | n/a | n/a |
 | Messages: the fallback "match / post link" text in the public channel (when forwarding is blocked) | point readers to the post | the role and a link readers can open | n/a | Telegram | 1 what the job is; 2 the link (#80) |
+| Messages: the fallback summary in the public channel (`"forward_fallback": "summary"`, #80) | tell readers about the job without the post | role, place, how to apply, source; the link only when public; plain, at most 5 lines / 400 characters | n/a | Telegram | 1 what the job is; 2 where; 3 how to apply; 4 the source and its link |
 
 ## Budgets (with tolerance) and the benchmark walk
 

@@ -430,7 +430,7 @@ telenotify run
 1. Already in `processed`? Skip it. This covers restarts and the startup backlog overlapping live updates.
 2. `gather` reads the text, the photo (OCR) and the job page, then `classify` decides.
 3. Then:
-   - **publish**: if it repeats something published in the last 14 days (same job link, or ≥ 80% the same words), skip it as a duplicate. A bare domain like `https://company.com` doesn't count as a job link: many different jobs from one company end with it. Otherwise forward it to `target_chat`. Where the channel forbids forwarding, send "match: role / post link" instead, using Telegram's real link, which also works for private channels.
+   - **publish**: if it repeats something published in the last 14 days (same job link, or ≥ 80% the same words), skip it as a duplicate. A bare domain like `https://company.com` doesn't count as a job link: many different jobs from one company end with it. Otherwise forward it to `target_chat`. Where the channel forbids forwarding, what goes out depends on `forward_fallback` (#80, see "When forwarding is blocked" below): "match: role / post link" (the default, "link"), using Telegram's real link, which only opens for a private chat's members; or the bot's own short summary ("summary").
    - **review**: put it in the review queue in `state.sqlite3`, not in Saved Messages.
    - **reject**: nothing.
 4. Record the verdict, reasons and action in `processed`, then mark the message read.
@@ -474,6 +474,31 @@ Photos are deleted from TDLib's file folder once read, so a bot that runs for mo
 **Schema versions and the copy kept before an upgrade (#74).** The file's schema version is SQLite's `user_version` (`PRAGMA user_version`); files from before versions existed read as 0, and `schemaVersion` in `state.nim` is the current one (1: `processed.posted_at` and `processed.caught_up`). When the bot, or any command, opens a file older than that, it takes an exclusive lock on `state.sqlite3.lock` beside it (so the bot and, say, `stats` can't upgrade at the same moment; a second one waits up to 20 seconds, then stops with "try again in a minute"; the copy of a state file of a few MB takes well under a second), looks at the version again (the other one may have just upgraded it), and removes half-made copies (`state.sqlite3.bak-*.tmp-*`) a process that died while copying left behind. Then, for an existing file, it makes a fresh copy at `state.sqlite3.bak-<old version>` (so `state.sqlite3.bak-0` for the first upgrade), private to you like the file itself, and only then adds the columns and sets the version, in one transaction (`BEGIN IMMEDIATE` … `COMMIT`), so the file is either fully upgraded or not at all, before letting go of the lock. A copy already at that name is replaced, not trusted: it may be from an earlier upgrade followed by a rollback to an older bot that kept writing, or broken by a power cut. The copy is made with SQLite's `VACUUM INTO`, not a file copy: while the bot runs, recent writes are still in the write-ahead log (`state.sqlite3-wal`), which a plain copy of `state.sqlite3` would miss. It's written under a temporary name, flushed to the disk (`fsync`; `VACUUM INTO` doesn't do that itself), renamed, and the folder flushed too, so a half-written copy never takes the backup's name. If the copy fails (a full disk, say), the file is left unchanged and the command stops, saying to free some disk space and check the folder's permissions; the next start tries again. If the copy was made but flushing the folder fails, it says the copy exists but may not be on the disk yet, and the file was not upgraded. Any failed upgrade is one line (`error: …` in the journal), and the bot then stops; systemd starts it again, so a passing problem fixes itself. The tests reach into the upgrade's steps through `upgradeTestHook`. A new, empty file needs no copy. To undo an upgrade, stop the bot and put the copy back in place of `state.sqlite3` (removing `state.sqlite3-wal` and `state.sqlite3-shm`). Adding a column later: add it to the list in `createTables`, raise `schemaVersion`, and the copy comes with it.
 
 Open it with `sqlite3 ~/.local/share/tele-notify/state.sqlite3`. For example, `SELECT chat_title, verdict, action, reasons FROM processed ORDER BY at DESC LIMIT 20;`
+
+### When forwarding is blocked (#80, `forward_fallback`)
+
+Some chats don't allow forwarding. The old answer was a text of two lines, `match: <role>` and `post link: <link>`, and for a private chat that link only opens for its members, so the channel's readers got nothing they could use. The owner decided on 2026-11-21 (#135, "Post its own summary") that the bot writes a short summary instead. It is a tier-2 change (a message in a live public channel), so it sits behind a switch in config.json until the owner has checked it:
+
+- `"forward_fallback": "link"` (the default, also when the key is missing or empty): the old two lines. The state records `linked`.
+- `"forward_fallback": "summary"`: the summary below. The state records `summarized`, which counts as forwarded everywhere (`telenotify stats`, `compare`, the screen's Dashboard; History and Search show "summarized").
+- Anything else stops the bot at start-up with a config error naming the key.
+
+The summary (`summary.nim`), at most 5 lines and 400 characters:
+
+```
+Job match: electrical engineer
+Place: البصرة
+Apply: on LinkedIn, by e-mail
+From: Basra Jobs
+Post link: https://t.me/basrajobs/123
+```
+
+- **Job match**: the role keyword the filter matched, as written in the config; "Job match (no role named)" when there is none (an approved review with no role).
+- **Place**: the place keyword that counted for the filter, as written in the config (`Decision.place`, new); left out when none did.
+- **Apply**: how the post says to apply, named and never quoted: "on Khana/Taeen/LinkedIn/Workable/a job site" (the job links `boards.nim` knows), "through a form", "by e-mail", "on WhatsApp", "by phone" (an Iraqi mobile number), at most three. Addresses and numbers are never copied, since Telegram would turn them into links. With none found: "see the post" when there is a link, else no line.
+- **From**: the chat's title. For a public chat (TDLib says it has a username, and its link isn't a `t.me/c/` one) the last line is `Post link: <link>`; for a private one the From line ends "(a private chat, so no link)". A public chat whose link can't be had isn't summarized without it: the post goes to the review queue with the error, as before.
+
+Safety: it is plain text, sent with no entities and no parse mode. Telegram still makes links of some plain text by itself, so every value is defused: control, invisible and direction characters (U+200B–U+200F, U+202A–U+202E, U+2060–U+206F, U+061C and others) are dropped, line breaks become spaces, a space goes after `@`, `#`, `$`, `/` and a dot glued to the next word (no @mention that pings, no hashtag, cashtag, bot command or web or e-mail address), and runs of digits are broken into fours (no "bank card"). Each value is cut (role and title 60 characters, place 40) and wrapped in Unicode isolation marks, as in the notifications, so Arabic and English don't reorder each other. Nothing else from the post is copied. A dry run sends nothing, as before. The `Post link: ` line is the last one and starts a line, so the dry run's note of the real bot's posts (`noteOtherBot`, for `compare`) reads it like the old `post link: `, and a title can't stand in for it; a private chat's summary has no link, so `compare` can't tie it to its post and lists it under the other bot only.
 
 ### Downtime alerts (#3, #16)
 
@@ -522,7 +547,7 @@ The plan: run `telenotify run --dry-run` next to the Python bot for about a week
 
 The Python bot uses the same Telegram account, so what it sends to your channel shows up as *your own outgoing messages* there. During a dry run, the Nim bot notes each one (table `other_bot` in `state-dryrun.sqlite3`) with where it came from:
 - a forward from a channel carries its origin (channel and message id);
-- a "match: … post link: https://t.me/…" message is resolved with TDLib's `getMessageLinkInfo`;
+- a "match: … post link: https://t.me/…" message, or a summary's last line "Post link: https://t.me/…" (#80), is resolved with TDLib's `getMessageLinkInfo` (only a line that starts with it, the last one);
 - anything else (a forward from a group) is matched by text later.
 
 `telenotify compare --days:7` then prints three lists:

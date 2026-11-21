@@ -238,7 +238,7 @@ class Store:
         first_of_album = ("AND (COALESCE(album_id, 0) = 0 OR msg_id = (SELECT MIN(msg_id) FROM processed q "
                           "WHERE q.chat_id = p.chat_id AND q.album_id = p.album_id))") if album else ""
         sql = f"""SELECT chat_title, SUM(verdict = 'publish'), SUM(verdict = 'review'),
-                  SUM(verdict = 'reject'), SUM(action = 'forwarded' OR action = 'linked' {sent_review}),
+                  SUM(verdict = 'reject'), SUM(action IN ('forwarded', 'linked', 'summarized') {sent_review}),
                   MAX(at)
                   FROM processed p WHERE at > ? {first_of_album}
                   GROUP BY +chat_id ORDER BY COUNT(*) DESC, chat_id"""
