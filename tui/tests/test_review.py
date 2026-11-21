@@ -307,7 +307,8 @@ async def test_corrupt_state_file_is_a_note_not_a_crash(paths, state):
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test() as pilot:
         await open_review(pilot)
-        assert "Can't read the state file" in str(app.query_one("#review-empty", Static).content)
+        assert "can't read the state file" in note(app)   # said once, in the note (#106)
+        assert "Nothing to show" in str(app.query_one("#review-empty", Static).content)
         await pilot.press("h")
         await pilot.pause()
         await pilot.press("h", "s", "d")
