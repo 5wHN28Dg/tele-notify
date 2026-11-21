@@ -30,8 +30,11 @@
 ##   is kept in the state database (for searching it in the terminal
 ##   screen); 0 keeps it forever. Verdicts and reasons are always kept.
 ## * `instagram_frontend` (default none): the address of a kittygram
-##   (an Instagram front end, e.g. "http://127.0.0.1:8430") through which the
-##   pictures of Instagram posts linked in an ad are read (#114).
+##   (an Instagram front end, e.g. "http://127.0.0.1:8430"; it must start
+##   with http:// or https://) through which the pictures of Instagram posts
+##   linked in an ad are read (#114): up to 2 posts per ad and 3 pictures per
+##   post, about 45 s per ad in all, each post read in full remembered for
+##   6 h (200 posts). Share links (instagram.com/share/...) aren't read.
 ## * `alerts` (default true), `alert_after_minutes` (default 10): send a
 ##   message to your Saved Messages after downtime longer than that.
 ##
@@ -166,6 +169,11 @@ proc parseConfig*(j: JsonNode): Config =
   result.alertAfterMinutes = j{"alert_after_minutes"}.getInt(10)
   result.keepTextDays = j{"keep_text_days"}.getInt(90)
   result.instagramFrontend = j{"instagram_frontend"}.getStr("").strip
+  if result.instagramFrontend != "" and
+      not result.instagramFrontend.toLowerAscii.startsWith("http://") and
+      not result.instagramFrontend.toLowerAscii.startsWith("https://"):
+    raise newException(ConfigError, "config key 'instagram_frontend' must be an address starting with " &
+                       "http:// or https:// (e.g. \"http://127.0.0.1:8430\"), found: " & result.instagramFrontend)
   result.apiId = j{"api_id"}.getInt(0)
   result.apiHash = j{"api_hash"}.getStr("")
   result.targetChat = j{"target_chat"}.getBiggestInt(0)

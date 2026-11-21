@@ -1,6 +1,6 @@
 ## Instagram posts linked in job ads, read through a kittygram front end (#114).
 
-import std/[unittest, asyncdispatch, os, strutils, json, sequtils]
+import std/[unittest, asyncdispatch, asynchttpserver, os, strutils, json, sequtils]
 import telenotify/[instagram, gather, fetch, ocr, config]
 
 let picture = readFile(currentSourcePath.parentDir / "fixtures" / "ocr_arabic.png")
@@ -35,9 +35,10 @@ suite "instagram links":
   test "a linked post's pictures are read and its descriptions kept":
     let seen = new seq[string]
     let ig = kittygramReader("http://127.0.0.1:8430", fakeFrontend(seen), fakeFrontend(seen), fakeOcr())
-    let r = waitFor ig("Df665JXhgxw")
+    let r = waitFor ig.readPost("Df665JXhgxw")
     check seen[][0] == "http://127.0.0.1:8430/p/Df665JXhgxw/?json=true"
-    check r.text.count("مطلوب مهندس كهرباء حديث التخرج") == 2           # both pictures
+    check r.text.count("مطلوب مهندس كهرباء حديث التخرج") == 1           # the second picture
+    check "https://cdn.example/Df665JXhgxw-1.webp" notin seen[]         # the first: Instagram read its text
     check "May be an image of text that says" in r.text
     check r.notes.anyIt("instagram" in it.toLowerAscii)
 
@@ -59,13 +60,13 @@ suite "instagram links":
     let down: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
       return Fetched(ok: false, error: "connection refused")
     let ig1 = kittygramReader("http://127.0.0.1:8430", down, down, fakeOcr())
-    let r1 = waitFor ig1("X1")
+    let r1 = waitFor ig1.readPost("X1")
     check r1.text == "" and r1.notes.anyIt("connection refused" in it)
     let ig2 = kittygramReader("http://127.0.0.1:8430", fakeFrontend(seen, "<html>oops</html>"), fakeFrontend(seen), fakeOcr())
-    let r2 = waitFor ig2("X2")
+    let r2 = waitFor ig2.readPost("X2")
     check r2.text == "" and r2.notes.len > 0
 
-  test "at most two linked posts and five pictures each are read":
+  test "at most two linked posts and three pictures each are read":
     let seen = new seq[string]
     var many = newJArray()
     for i in 1 .. 9: many.add %*{"image_url": "https://cdn.example/p" & $i & ".webp", "alt_text": ""}
@@ -73,7 +74,7 @@ suite "instagram links":
     discard waitFor gather(Post(text: "instagram.com/p/A1/ instagram.com/p/A2/ instagram.com/p/A3/"),
                            fakeFrontend(seen), fakeOcr(), instagram = ig)
     check seen[].countIt("/?json=true" in it) == 2
-    check seen[].countIt("cdn.example" in it) == 10
+    check seen[].countIt("cdn.example" in it) == 6
 
   test "config: instagram_frontend is read, empty by default; empty means no reader":
     var j = parseFile(currentSourcePath.parentDir / "keywords.json")
@@ -82,3 +83,267 @@ suite "instagram links":
     check parseConfig(j).instagramFrontend == "http://127.0.0.1:8430"
     check instagramFor("", fakeOcr()) == nil
     check instagramFor("http://127.0.0.1:8430", fakeOcr()) != nil
+
+proc answerFetcher(seen: ref seq[string], answer: string, badPictures: seq[string] = @[]): Fetcher =
+  ## A front end giving `answer` for every post; pictures in `badPictures` fail.
+  result = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+    {.cast(gcsafe).}:
+      seen[].add url
+      if url in badPictures: return Fetched(ok: false, error: "HTTP 404")
+      if "cdn.example" in url: return Fetched(ok: true, status: 200, body: picture)
+      return Fetched(ok: true, status: 200, body: answer)
+
+suite "instagram review fixes (PR #126)":
+  test "share links aren't read: a note, and 'share' is never a user name":
+    check instagramCodes("https://www.instagram.com/share/p/BAm9xY2kz/") == newSeq[string]()
+    check instagramCodes("https://www.instagram.com/share/reel/BAm9xY2kz/") == newSeq[string]()
+    let seen = new seq[string]
+    let g = waitFor gather(Post(text: "https://www.instagram.com/share/p/BAm9xY2kz/"), fakeFrontend(seen), fakeOcr(),
+                           instagram = kittygramReader("http://k", fakeFrontend(seen), fakeFrontend(seen), fakeOcr()))
+    check seen[].len == 0
+    check g.notes.anyIt("share links aren't read" in it)
+
+  test "path words after reels aren't post codes; the host match is anchored":
+    check instagramCodes("https://www.instagram.com/reels/audio/1234567890/") == newSeq[string]()
+    check instagramCodes("https://notinstagram.com/p/Abc123/") == newSeq[string]()
+    check instagramCodes("xinstagram.com/p/Abc123/") == newSeq[string]()
+    check instagramCodes("instagram.com/p/Abc123/") == @["Abc123"]               # at the start
+    check instagramCodes("see\ninstagram.com/p/Abc124/") == @["Abc124"]         # after whitespace
+    check instagramCodes("https://m.instagram.com/p/Abc125/") == @["Abc125"]     # after a dot
+    check instagramCodes("https://instagram.com/reels/Abc126/") == @["Abc126"]   # a reel code still counts
+
+  test "the user-name link form instagram.com/<user>/reel/<code>":
+    check instagramCodes("https://www.instagram.com/basra.jobs_1/reel/DAbc-12_x/?igsh=x") == @["DAbc-12_x"]
+    check instagramCodes("https://www.instagram.com/basrajobs/p/DAbc-13/") == @["DAbc-13"]
+
+  test "an empty image_url falls back to thumbnail; a missing one too":
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "", "thumbnail": "https://cdn.example/t1.webp"},
+                      {"thumbnail": "https://cdn.example/t2.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer), answerFetcher(seen, answer), fakeOcr())
+    discard waitFor ig.readPost("T1")
+    check "https://cdn.example/t1.webp" in seen[]
+    check "https://cdn.example/t2.webp" in seen[]
+
+  test "the {json: {post: {media: [...]}}} shape and a caption field":
+    let seen = new seq[string]
+    let answer = $(%*{"json": {"post": {"media": [
+      {"image_url": "https://cdn.example/m1.webp", "caption": "Hiring in Basra: junior electrical engineer"}]}}})
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer), answerFetcher(seen, answer), fakeOcr())
+    let r = waitFor ig.readPost("M1")
+    check "Hiring in Basra: junior electrical engineer" in r.text
+    check "مطلوب مهندس كهرباء حديث التخرج" in r.text
+    check "https://cdn.example/m1.webp" in seen[]
+
+  test "one picture failing and the next succeeding: both handled":
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "https://cdn.example/bad.webp"}, {"image_url": "https://cdn.example/good.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer),
+                             answerFetcher(seen, answer, @["https://cdn.example/bad.webp"]), fakeOcr())
+    let r = waitFor ig.readPost("F1")
+    check r.notes.anyIt("picture failed: HTTP 404" in it)
+    check r.text.count("مطلوب مهندس كهرباء حديث التخرج") == 1
+    check r.notes.anyIt("read instagram post F1" in it)
+
+  test "an OCR failure is a note":
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "https://cdn.example/o1.webp"}])
+    let broken: Ocr = proc (image: string): Future[OcrResult] {.async, closure, gcsafe.} =
+      return OcrResult(ok: false, error: "tesseract crashed")
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer), answerFetcher(seen, answer), broken)
+    let r = waitFor ig.readPost("O1")
+    check r.notes.anyIt(it == "instagram O1: OCR failed: tesseract crashed")
+
+  test "no pictures read says so, not 'read ... (0 pictures)'":
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "https://cdn.example/bad.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer),
+                             answerFetcher(seen, answer, @["https://cdn.example/bad.webp"]), fakeOcr())
+    let r = waitFor ig.readPost("Z1")
+    check "instagram Z1: no pictures read" in r.notes
+    check not r.notes.anyIt("read instagram post" in it)
+
+  test "gather with scrape=false calls nothing, Instagram included":
+    let seen = new seq[string]
+    let ig = kittygramReader("http://k", fakeFrontend(seen), fakeFrontend(seen), fakeOcr())
+    let g = waitFor gather(Post(text: "https://www.instagram.com/p/Df665JXhgxw/"), fakeFrontend(seen), fakeOcr(),
+                           scrape = false, instagram = ig)
+    check seen[].len == 0 and "instagram" notin g.notes.join(" ").toLowerAscii
+
+  test "a job URL only in Instagram's text doesn't change which job link is followed":
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "", "alt_text": "apply at https://khana.jobs/jobs/1234"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer), answerFetcher(seen, answer), fakeOcr())
+    let calls = new seq[string]
+    let jobFetcher: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}: calls[].add url
+      return Fetched(ok: false, error: "offline test")
+    let g = waitFor gather(Post(text: "وظيفة https://khana.jobs/jobs/9915 https://www.instagram.com/p/J1/"),
+                           jobFetcher, fakeOcr(), instagram = ig)
+    check calls[] == @["https://prodclient.up.railway.app/api/v1/jobs/9915"]   # the post's own link, followed
+    check "apply at https://khana.jobs/jobs/1234" in g.text                    # still read by the filter
+    check not g.notes.anyIt("job links: none followed" in it)
+
+  test "config: instagram_frontend must be an http(s) address":
+    var j = parseFile(currentSourcePath.parentDir / "keywords.json")
+    for bad in ["127.0.0.1:8430", "ftp://k", "kittygram"]:
+      j["instagram_frontend"] = %bad
+      expect ConfigError: discard parseConfig(j)
+      try: discard parseConfig(j)
+      except ConfigError as e: check "instagram_frontend" in e.msg and "http://" in e.msg
+    j["instagram_frontend"] = %"HTTPS://kitty.example"
+    check parseConfig(j).instagramFrontend == "HTTPS://kitty.example"
+
+# A local "kittygram" for instagramFor's real fetchers: its pictures point at
+# this machine too, which the ordinary fetcher must refuse (before connecting).
+let server = newAsyncHttpServer()
+server.listen(Port(0))
+let port = server.getPort.uint16
+let local = "http://127.0.0.1:" & $port
+proc handler(req: Request) {.async, gcsafe.} =
+  if req.url.path.startsWith("/p/"):
+    await req.respond(Http200, $(%*[{"image_url": "https://127.0.0.1:" & $port & "/pic.webp", "alt_text": ""}]))
+  else: await req.respond(Http404, "")
+asyncCheck (proc () {.async.} =
+  while true:
+    if server.shouldAcceptRequest: await server.acceptRequest(handler)
+    else: await sleepAsync(10))()
+
+proc fakeClock(now: ref float): Clock =
+  result = proc (): float {.closure, gcsafe.} =
+    {.cast(gcsafe).}: now[]
+
+proc slowOcr(now: ref float, seconds: float, calls: ref int): Ocr =
+  ## OCR that takes `seconds` of the fake clock.
+  result = proc (image: string): Future[OcrResult] {.async, closure, gcsafe.} =
+    {.cast(gcsafe).}:
+      now[] += seconds
+      inc calls[]
+    return OcrResult(ok: true, text: "مطلوب مهندس كهرباء حديث التخرج")
+
+suite "instagram load and wiring (PR #126)":
+  test "instagramFor: the front end may be local, Instagram's pictures may not":
+    let ig = instagramFor(local, fakeOcr())
+    let r = waitFor ig.readPost("L1")
+    check not r.notes.anyIt("front end failed" in it)                     # reached 127.0.0.1
+    check r.notes.anyIt("picture failed: refused a private/local address" in it)
+    check "instagram L1: no pictures read" in r.notes
+
+  test "the time budget: no picture is started once it's spent, with a note":
+    let now = new float
+    let calls = new int
+    var many = newJArray()
+    for i in 1 .. 3: many.add %*{"image_url": "https://cdn.example/b" & $i & ".webp"}
+    let seen = new seq[string]
+    let ig = kittygramReader("http://k", answerFetcher(seen, $many), answerFetcher(seen, $many),
+                             slowOcr(now, 30, calls), fakeClock(now))
+    let r = waitFor ig.readLinked("instagram.com/p/B1/ instagram.com/p/B2/")
+    check calls[] == 2                                  # 0 s, 30 s; at 60 s the third isn't started
+    check seen[].countIt("/?json=true" in it) == 1      # and B2 isn't asked for
+    check r.notes.anyIt("instagram B1: time for Instagram spent" in it)
+    check r.notes.anyIt("instagram B2: time for Instagram spent, not read" in it)
+    check not r.unread                                  # B1 was read
+
+  test "the time budget is per Telegram post, across its linked posts":
+    let now = new float
+    let calls = new int
+    let seen = new seq[string]
+    let one = $(%*[{"image_url": "https://cdn.example/c.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, one), answerFetcher(seen, one),
+                             slowOcr(now, 50, calls), fakeClock(now))
+    discard waitFor ig.readLinked("instagram.com/p/C1/ instagram.com/p/C2/")
+    check calls[] == 1
+    discard waitFor ig.readLinked("instagram.com/p/C3/")   # the next Telegram post has its own 45 s
+    check calls[] == 2
+
+  test "a post read in full is remembered by its code for 6 h":
+    let now = new float
+    let calls = new int
+    let seen = new seq[string]
+    let one = $(%*[{"image_url": "https://cdn.example/d.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, one), answerFetcher(seen, one),
+                             slowOcr(now, 1, calls), fakeClock(now))
+    let r1 = waitFor ig.readLinked("instagram.com/p/D1/")
+    let r2 = waitFor ig.readLinked("cross-posted: https://www.instagram.com/p/D1/")
+    check calls[] == 1 and seen[].countIt("/?json=true" in it) == 1
+    check r2.text == r1.text
+    check r2.notes.anyIt("instagram D1: read earlier" in it)
+    now[] += 6 * 3600.0 + 1
+    discard waitFor ig.readLinked("instagram.com/p/D1/")
+    check calls[] == 2                                  # expired: read again
+
+  test "a post that couldn't be read isn't remembered":
+    let calls = new int
+    let now = new float
+    let seen = new seq[string]
+    var up = false
+    let flaky: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        seen[].add url
+        if not up: return Fetched(ok: false, error: "connection refused")
+        return Fetched(ok: true, status: 200, body: $(%*[{"image_url": "https://cdn.example/e.webp"}]))
+    let ig = kittygramReader("http://k", flaky, fakeFrontend(seen), slowOcr(now, 1, calls), fakeClock(now))
+    check (waitFor ig.readLinked("instagram.com/p/E1/")).unread
+    up = true
+    check not (waitFor ig.readLinked("instagram.com/p/E1/")).unread
+    check calls[] == 1
+    # nor one whose pictures all failed
+    var picturesUp = false
+    let pictures: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if not picturesUp: return Fetched(ok: false, error: "HTTP 503")
+        return Fetched(ok: true, status: 200, body: picture)
+    let ig2 = kittygramReader("http://k", flaky, pictures, slowOcr(now, 1, calls), fakeClock(now))
+    check (waitFor ig2.readLinked("instagram.com/p/E2/")).unread
+    picturesUp = true
+    check not (waitFor ig2.readLinked("instagram.com/p/E2/")).unread
+    check calls[] == 2
+
+  test "the memory holds 200 posts: the oldest is forgotten first":
+    let now = new float
+    let calls = new int
+    let seen = new seq[string]
+    let one = $(%*[{"image_url": "https://cdn.example/f.webp"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, one), answerFetcher(seen, one),
+                             slowOcr(now, 1, calls), fakeClock(now))
+    for i in 0 .. cacheSize: discard waitFor ig.readPost("G" & $i)   # 201 posts
+    check calls[] == cacheSize + 1
+    discard waitFor ig.readPost("G" & $cacheSize)    # the newest: remembered
+    check calls[] == cacheSize + 1
+    discard waitFor ig.readPost("G0")                # the oldest: forgotten
+    check calls[] == cacheSize + 2
+
+  test "a picture Instagram already read (alt text 'text that says') isn't OCR'd; its text is kept":
+    let now = new float
+    let calls = new int
+    let seen = new seq[string]
+    let answer = $(%*[{"image_url": "https://cdn.example/h1.webp",
+                       "alt_text": "May be an image of text that says 'Hiring: junior engineer, Basra'"}])
+    let ig = kittygramReader("http://k", answerFetcher(seen, answer), answerFetcher(seen, answer),
+                             slowOcr(now, 1, calls), fakeClock(now))
+    let r = waitFor ig.readPost("H1")
+    check calls[] == 0 and "https://cdn.example/h1.webp" notin seen[]
+    check "Hiring: junior engineer, Basra" in r.text
+    check not r.unread
+    check r.notes.anyIt("read instagram post H1 (1 pictures, 1 by Instagram's own text reading)" == it)
+
+  test "a short post whose Instagram link couldn't be read is marked unreadable":
+    let down: Fetcher = proc (url: string): Future[Fetched] {.async, closure, gcsafe.} =
+      return Fetched(ok: false, error: "connection refused")
+    let ig = kittygramReader("http://k", down, down, fakeOcr())
+    let g = waitFor gather(Post(text: "وظيفة جديدة في البصرة https://www.instagram.com/p/U1/"), down, fakeOcr(),
+                           instagram = ig)
+    check g.unreadable != ""
+    # a share link can't be read either
+    let g2 = waitFor gather(Post(text: "https://www.instagram.com/share/p/BAm9x/"), down, fakeOcr(), instagram = ig)
+    check g2.unreadable != ""
+    # a long post speaks for itself
+    let long = "مطلوب مهندس كهرباء حديث التخرج للعمل في شركة نفطية في البصرة، دوام كامل، " &
+               "رواتب مجزية، ارسال السيرة الذاتية على البريد المذكور في الصورة مع ذكر الاختصاص"
+    let g3 = waitFor gather(Post(text: long & " https://www.instagram.com/p/U1/"), down, fakeOcr(), instagram = ig)
+    check g3.unreadable == ""
+    # and one that was read is fine
+    let seen = new seq[string]
+    let ok = kittygramReader("http://k", fakeFrontend(seen), fakeFrontend(seen), fakeOcr())
+    let g4 = waitFor gather(Post(text: "https://www.instagram.com/p/U2/"), down, fakeOcr(), instagram = ok)
+    check g4.unreadable == ""

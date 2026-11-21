@@ -1,7 +1,7 @@
 ## The whole bot against a fake Telegram: no account, no network.
 
 import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json, sequtils]
-import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup]
+import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup, instagram]
 
 const target = -999'i64
 
@@ -318,6 +318,19 @@ suite "listener":
     waitFor l.bootstrap()
     let r = st.pendingReviews()
     check r.len == 1 and "could not be read" in r[0].reasons
+
+  test "a short post whose only substance is an unreadable Instagram link goes to review (#114)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 1, "التفاصيل في المنشور https://www.instagram.com/p/DAbc123/"),
+                    msg(-1, 2, bad & "، دوام كامل في شركة تجارية كبرى، يشترط اجادة برامج المحاسبة " &
+                               "واللغة الانكليزية، ارسال السيرة الذاتية https://www.instagram.com/p/DAbc124/")]
+    let (l, st) = setup(f)
+    l.instagram = kittygramReader("http://127.0.0.1:8430", noFetch(), noFetch(), defaultOcr())
+    waitFor l.bootstrap()
+    let r = st.pendingReviews()
+    check r.len == 1 and r[0].msgId == 1   # a long post speaks for itself
+    check "the linked Instagram post could not be read, so this is a guess" in r[0].reasons
+    check "front end failed: offline test" in r[0].reasons
 
   test "a backlog too big to read in full is reported":
     let f = FakeTg()

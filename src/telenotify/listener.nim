@@ -261,11 +261,15 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
                          instagram = l.instagram)
     for n in g.notes:
       if n.startsWith("OCR failed"): photoProblem = n
+    var guess = "the picture could not be read, so this is a guess"
+    if g.unreadable != "":   # a short post whose link was the whole ad
+      photoProblem = g.unreadable
+      guess = g.unreadable & ", so this is a guess"
     var d = classify(g.text, l.cfg)
     if d.verdict == vReject and photoProblem != "":
       # The picture is often the whole ad: unread, it's unknown, not bad.
       d.verdict = vReview
-      d.reasons.add "the picture could not be read, so this is a guess"
+      d.reasons.add guess
     verdict = $d.verdict
     role = d.role
     reasons = (g.notes & d.reasons).join("; ")
