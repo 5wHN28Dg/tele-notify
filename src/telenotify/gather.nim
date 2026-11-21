@@ -13,9 +13,18 @@
 ## Posts with *several* job links are usually several jobs (each line a job
 ## and its link), so none of them is followed: their pages would mix
 ## different jobs together. The post text has to speak for itself.
+##
+## Linked Instagram posts (instagram.nim) add their text for the filter,
+## but job links are only looked for in the post itself, its pictures and
+## its buttons: a URL in someone's Instagram caption shouldn't decide which
+## page is followed. When a short post's only substance is an Instagram
+## link that couldn't be read, `unreadable` says so, and the listener
+## queues the post for review instead of rejecting it (as for a photo
+## whose OCR failed).
 
 import std/[asyncdispatch, strutils, uri]
-import boards, fetch, ocr
+from std/unicode import runeLen
+import boards, fetch, ocr, instagram
 
 type
   Post* = object
@@ -26,8 +35,14 @@ type
   Gathered* = object
     text*: string          ## what the filter will read
     notes*: seq[string]    ## what happened, for logs and verdict reasons
+    unreadable*: string    ## why the post's substance couldn't be read; "" if it could
 
   Ocr* = proc (image: string): Future[OcrResult] {.closure, gcsafe.}
+
+const shortPostChars* = 100
+  ## A post with at most this many characters of its own (links, hashtags and
+  ## @mentions left out) is
+  ## "short": a link it carries may be the whole ad.
 
 proc defaultOcr*(): Ocr =
   result = proc (image: string): Future[OcrResult] {.closure, gcsafe.} = ocrBytes(image)
@@ -67,9 +82,17 @@ proc follow(link: JobLink, fetcher: Fetcher, jobSites: seq[string]): Future[Foll
   else: notes.add "read " & $link.kind & " (" & $t.len & " characters)"
   return Followed(text: t, notes: notes)
 
+proc ownChars(text: string): int =
+  ## Characters of `text` that aren't links, #hashtags, @mentions or spaces.
+  for w in text.splitWhitespace:
+    let lw = w.toLowerAscii
+    if "://" in lw or "instagram.com" in lw or lw.startsWith("www.") or
+        lw.startsWith("#") or lw.startsWith("@"): continue
+    result += w.runeLen
+
 proc gather*(post: Post, fetcher: Fetcher, ocr: Ocr,
              jobSites: seq[string] = @defaultJobPostingSites,
-             scrape = true): Future[Gathered] {.async.} =
+             scrape = true, instagram: Instagram = nil): Future[Gathered] {.async.} =
   ## Never raises: OCR and download problems end up in `notes`.
   var parts = @[post.text]
   var notes: seq[string]
@@ -80,8 +103,16 @@ proc gather*(post: Post, fetcher: Fetcher, ocr: Ocr,
       notes.add "read " & $r.text.len & " characters from an image"
     else:
       notes.add "OCR failed: " & r.error
-  let all = (parts & post.buttons).join("\n")
-  let links = findJobLinks(all, jobSites)
+  # job links: only from the post, its pictures and its buttons
+  let links = findJobLinks((parts & post.buttons).join("\n"), jobSites)
+  let own = ownChars(parts.join("\n"))
+  var instagramUnread = false
+  if scrape and instagram != nil:
+    # Instagram posts the ad links to (#114): their pictures often hold the details
+    let r = await instagram.readLinked((@[post.text] & post.buttons).join("\n"))
+    notes.add r.notes
+    if r.text.len > 0: parts.add r.text
+    instagramUnread = r.unread
   if scrape and links.len == 1:
     let f = await follow(links[0], fetcher, jobSites)
     notes.add f.notes
@@ -89,4 +120,7 @@ proc gather*(post: Post, fetcher: Fetcher, ocr: Ocr,
   elif scrape and links.len > 1:
     notes.add $links.len & " job links: none followed (probably several jobs)"
   if post.buttons.len > 0: parts.add post.buttons.join("\n")
-  result = Gathered(text: parts.join("\n\n"), notes: notes)
+  var unreadable = ""
+  if instagramUnread and links.len == 0 and own <= shortPostChars:
+    unreadable = "the linked Instagram post could not be read"
+  result = Gathered(text: parts.join("\n\n"), notes: notes, unreadable: unreadable)
