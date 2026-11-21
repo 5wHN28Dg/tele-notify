@@ -29,6 +29,7 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import get_current_worker
@@ -354,7 +355,7 @@ class SearchPane(Vertical):
             if not self._chats_shown and not sel.expanded:   # not "loading" any more
                 _set_options(sel, [(CHATS_NOT_READ, "all")], "all")
         if problem:
-            count.update(Text(clean(problem), style="yellow"))
+            count.update(Content.styled(clean(problem), "$tn-warning"))   # readable in NO_COLOR too (#139)
         else:
             n = len(rows)
             count.update(f"{n}{'+' if n >= LIMIT else ''} result{'s' if n != 1 else ''}")

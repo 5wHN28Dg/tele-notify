@@ -97,7 +97,7 @@ INVISIBLE = dict.fromkeys(map(ord, "\u200e\u200f\u061c\u200b\ufeff\u00ad\u2060")
 
 def without_invisible(text: str) -> str:
     """`text` without LRM, RLM, ALM, the zero-width space, the BOM, the soft hyphen and the word
-    joiner (the bot's normalize.nim treats them as invisible too; ZWJ and ZWNJ stay: they
+    joiner (normalize.nim drops all but ALM and the word joiner too; ZWJ and ZWNJ stay: they
     change how emoji and Persian words read)."""
     return text.translate(INVISIBLE)
 

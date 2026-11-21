@@ -1175,7 +1175,7 @@ async def test_missing_api_keys_are_a_problem_listed_under_bot(paths, cfg_path, 
         pane = await open_settings(pilot)
         await pilot.pause()
         shown = str(pane.query_one("#settings-status", Static).render())
-        assert shown == "saved · 1 problem"
+        assert shown == "saved · 1 problem (Bot)"   # where to look: a first-time user starts on Roles
         listed = str(pane.query_one("#problems-bot", Static).render())
         assert f"{what} missing from config.json" in listed
 
@@ -1220,3 +1220,103 @@ async def test_the_status_is_whole_at_80x24_in_every_combination(paths, cfg_path
                             assert f"{problems} problem" in full, case
                         if warns:
                             assert f"{warns} warning" in full, case
+
+
+def drawn(app) -> str:
+    """The screen as drawn (from its SVG, as the audit reads it)."""
+    from audit.svg import text
+    return text(app.export_screenshot(), *app.size)
+
+
+def first_time_config(cfg_path: Path, **extra) -> None:
+    """The conftest config as a first-time user has it: no API keys, no duplicate words."""
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    sd.dedupe_all(cfg)
+    cfg.pop("api_id", None)
+    cfg.pop("api_hash", None)
+    cfg.update(extra)
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def test_a_first_time_user_sees_where_the_problem_is_at_80x24(paths, cfg_path):
+    """Review run 4: with no API keys, Settings at 80 x 24 said "saved · 1 problem" on the Roles tab and
+    nothing said where. The bar names the section and the Bot tab is marked, as drawn on screen."""
+    first_time_config(cfg_path)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        await pilot.pause()
+        status = pane.query_one("#settings-status", Static)
+        assert status.render_line(0).text.rstrip() == "saved · 1 problem (Bot)"
+        sections = pane.query_one("#sections", TabbedContent)
+        assert sections.active == "sec-roles"
+        assert str(sections.get_tab("sec-bot").label) == "Bot !"
+        assert str(sections.get_tab("sec-roles").label) == "Roles & levels"
+        screen = drawn(app)
+        assert "Bot !" in screen and "1 problem (Bot)" in screen
+
+
+async def test_problems_in_two_sections_mark_both_tabs(paths, cfg_path):
+    first_time_config(cfg_path, max_experience_years=-2)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        await pilot.pause()
+        status = pane.query_one("#settings-status", Static).render_line(0).text.rstrip()
+        assert status == "saved · 2 problems"   # two places: the marked tabs say which
+        sections = pane.query_one("#sections", TabbedContent)
+        assert str(sections.get_tab("sec-bot").label) == "Bot !"
+        assert str(sections.get_tab("sec-filters").label) == "Other filters !"
+
+
+async def test_the_bot_problems_are_never_cut_at_80x24(paths, cfg_path):
+    """Review run 4: the problems list had max-height 5 and no scrollbar, so keys missing, 4 Bot errors
+    and a warning lost the warning silently. It shows every line, or a scrollbar and the focus can
+    reach it to scroll to the last one."""
+    first_time_config(cfg_path, dry_run="x", notify_review="x", alert_after_minutes="x", data_dir=5,
+                      tdlib_path="/nonexistent/" + "lib" * 12 + "/libtdjson.so")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        await pilot.pause()
+        listed = str(pane.query_one("#problems-bot", Static).render())
+        for want in ("api_id and api_hash are missing", "error: dry_run, notify_review", "error: alert_after_minutes",
+                     "error: data_dir", "warning: tdlib_path"):
+            assert want in listed, want
+        box = pane.query_one("#problems-bot").parent
+        assert box.region.height > 0
+        if box.max_scroll_y > 0:   # doesn't fit: a scrollbar shows, and the keys can scroll it
+            assert box.show_vertical_scrollbar and box.allow_focus()
+            box.focus()
+            await pilot.press("end")
+            await pilot.pause()
+        assert "libtdjson.so doesn't exist" in drawn(app)
+
+
+async def test_many_problems_scroll_with_a_scrollbar(paths, cfg_path):
+    """More problems than the list's room: a scrollbar shows and the end can be reached."""
+    first_time_config(cfg_path, dry_run="x", notify_published="x", notify_review="x", alert_after_minutes="x",
+                      data_dir=5, alerts="x", tdlib_path="/nonexistent/" + "d" * 150 + "/libtdjson.so")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        await pilot.pause()
+        box = pane.query_one("#problems-bot").parent
+        assert box.max_scroll_y > 0
+        assert box.show_vertical_scrollbar and box.allow_focus()
+        box.focus()
+        await pilot.press("end")
+        await pilot.pause()
+        assert "libtdjson.so doesn't exist" in drawn(app)
+
+
+@pytest.mark.parametrize("api_id, api_hash", [(4242, 123), ("4242", "abc"), (4242, ["abc"]), (True, "abc")])
+def test_secrets_the_bot_cant_read_are_missing(api_id, api_hash):
+    """The bot reads api_id with getInt(0) and api_hash with getStr(""): a number as api_hash, or text
+    as api_id, is missing to it, so the screen doesn't call it set (review run 4)."""
+    assert "missing" in sd.secret_status({"api_id": api_id, "api_hash": api_hash}).values()
+    assert sd.secret_status({"api_id": 4242, "api_hash": "abc"}) == {"api_id": "set", "api_hash": "set"}

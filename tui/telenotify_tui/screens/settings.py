@@ -22,6 +22,7 @@ from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -41,6 +42,7 @@ from .. import bot
 from ..clean import clean
 from ..rtl import visual
 from ..store import BUSY, is_busy, unreadable_note
+from ..tones import tone
 from . import settings_data as sd
 from .armed import Armed
 
@@ -474,6 +476,15 @@ class ChatTable(DataTable):
 # ------------------------------------------------------------------ pane
 
 LIST_SECTIONS = ("roles", "places", "filters")
+STATUS_ROOM = 50   # columns the status bar has at 80 x 24: the section name is added only if the line still fits
+
+
+class ProblemsScroll(VerticalScroll):
+    """A section's problems: sized to them, scrolled (with its scrollbar) past max-height. It takes the
+    focus only when there is something to scroll, so the keys can reach the hidden lines."""
+
+    def allow_focus(self) -> bool:
+        return self.max_scroll_y > 0
 CHATS_TIMEOUT = 0.25   # seconds the chat-list read waits for the bot's lock (on the UI thread)
 
 
@@ -489,7 +500,9 @@ class SettingsPane(Vertical):
     SettingsPane #sections TabPane { padding: 0; }
     SettingsPane .lists { height: 1fr; }
     SettingsPane .picker { width: 34; height: 1fr; }
-    SettingsPane .problems { height: auto; max-height: 5; }
+    /* the problems under each section: whole when they fit, else a scrollbar shows (never cut silently) */
+    SettingsPane .problems { height: auto; max-height: 8; }
+    SettingsPane .problems > Static { height: auto; }
     SettingsPane .form-row { height: auto; min-height: 1; margin-top: 1; }
     SettingsPane .form-row Label { width: 22; }
     SettingsPane .form-row Input { width: 1fr; }
@@ -558,7 +571,8 @@ class SettingsPane(Vertical):
                             for k in keys:
                                 yield from self._form_row(k)
                             yield Static(id="secrets", classes="form-row")
-                    yield Static(id=f"problems-{sec}", classes="problems")
+                    with ProblemsScroll(classes="problems"):
+                        yield Static(id=f"problems-{sec}")
 
     def _form_row(self, key: str) -> ComposeResult:
         with Horizontal(classes="form-row"):
@@ -592,6 +606,8 @@ class SettingsPane(Vertical):
         t.add_column("id", key="id")
         # config.json only: the chat list is read when the tab is shown (it may be locked)
         self.call_after_refresh(self.load, chats=False)
+        # the pickers' "!" marks are drawn in the theme's colours: draw them again when it changes
+        self.app.theme_changed_signal.subscribe(self, lambda _theme: self.original is not None and self.update_pickers())
 
     # ------------------------------------------------------- data in/out
 
@@ -732,25 +748,35 @@ class SettingsPane(Vertical):
     def update_status(self) -> None:
         if self.original is None:
             self.query_one("#settings-status", Static).update(
-                Text(f"config.json can't be used: {clean(self.load_error)}", style="bold red"))
+                Content.styled(f"config.json can't be used: {clean(self.load_error)}", "bold $tn-error"))
             return
         n = len(sd.changed_keys(self.original, self.edited))
         errs = len(sd.errors(self.problems))
         warns = len(self.problems) - errs
-        t = Text()
-        t.append(f"{n} unsaved change{'s' if n != 1 else ''}" if n else "saved",
-                 style="bold yellow" if n else "green")
+        parts: list[tuple[str, str]] = [
+            (f"{n} unsaved change{'s' if n != 1 else ''}" if n else "saved", "bold $tn-warning" if n else "")]
         # counts only, so the line is whole in the 50 columns the bar has at 80 x 24 (#58); what the
-        # problems are is listed in each section. Missing API keys stop the bot logging in: a problem
-        # too, listed under Bot, so "no problems" is never said beside them
+        # problems are is listed in their section, whose tab is marked "!". Missing API keys stop the bot
+        # logging in: a problem too, listed under Bot, so "no problems" is never said beside them
         total = errs + (1 if self.missing_keys() else 0)
         if total:
-            t.append(f" · {total} problem{'s' if total != 1 else ''}", style="bold red")
+            parts.append((f" · {total} problem{'s' if total != 1 else ''}", "bold $tn-error"))
         if warns:
-            t.append(f" · {warns} warning{'s' if warns != 1 else ''}", style="yellow")
+            parts.append((f" · {warns} warning{'s' if warns != 1 else ''}", "$tn-warning"))
         if not total and not warns:   # said, not left out: the count is always in view
-            t.append(" · no problems")
-        self.query_one("#settings-status", Static).update(t)
+            parts.append((" · no problems", ""))
+        where = self.problem_sections() if total else []
+        if len(where) == 1:   # where to look, when it fits: a first-time user starts on another tab
+            name = f" ({where[0]})"
+            if len(name) <= STATUS_ROOM - sum(len(t) for t, _ in parts):
+                parts[1] = (parts[1][0] + name, parts[1][1])   # after "N problem(s)"
+        self.query_one("#settings-status", Static).update(Content.assemble(*parts))
+
+    def problem_sections(self) -> list[str]:
+        """The titles of the sections with a problem (an error, or missing API keys under Bot)."""
+        bad = {p.key for p in self.problems if p.error}
+        return [title for sec, title, keys in sd.SECTIONS
+                if bad & set(keys) or (sec == "bot" and self.missing_keys())]
 
     def missing_keys(self) -> str:
         """"API keys", or the one of api_id / api_hash missing from the file as opened; "" if both are set."""
@@ -759,23 +785,26 @@ class SettingsPane(Vertical):
         return "" if not missing else "API keys" if len(missing) == len(sec) else missing[0]
 
     def update_problems(self) -> None:
-        for sec, _title, keys in sd.SECTIONS:
+        for sec, title, keys in sd.SECTIONS:
             grouped: dict[tuple[bool, str], list[str]] = {}   # the same message for several lists: one line
             for p in self.problems:
                 if p.key in keys:
                     grouped.setdefault((p.error, p.message), []).append(p.key)
-            t = Text()
+            lines: list[Content] = []
             missing = self.missing_keys() if sec == "bot" and self.original is not None else ""
             if missing:   # counted in the status bar; not a save error: this screen never writes them
                 both = missing == "API keys"
                 what = "api_id and api_hash are" if both else f"{missing} is"
-                t.append(f"problem: {what} missing from config.json, so the bot can't log in; "
-                         f"add {'them' if both else 'it'} there (this screen never changes them)\n", style="red")
+                lines.append(Content.styled(f"problem: {what} missing from config.json, so the bot can't log in; "
+                                            f"add {'them' if both else 'it'} there (this screen never changes them)",
+                                            "$tn-error"))
             for (error, message), ks in sorted(grouped.items(), key=lambda x: not x[0][0]):
-                t.append(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}") + "\n",
-                         style="red" if error else "yellow")
-            t.rstrip()
-            self.query_one(f"#problems-{sec}", Static).update(t)
+                lines.append(Content.styled(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}"),
+                                            "$tn-error" if error else "$tn-warning"))
+            self.query_one(f"#problems-{sec}", Static).update(Content("\n").join(lines))
+            # the section's tab says it has problems (errors, missing keys) or warnings: " !" in words too
+            tab = self.query_one("#sections", TabbedContent).get_tab(f"sec-{sec}")
+            tab.label = title + (" !" if lines else "")
 
     def update_pickers(self) -> None:
         bad: dict[str, bool] = {}
@@ -791,7 +820,7 @@ class SettingsPane(Vertical):
                 label = Text(f"{'*' if key in changed else ' '}{key} ")
                 label.append(f"({n})", style="dim")
                 if key in bad:
-                    label.append(" !", style="bold red" if bad[key] else "yellow")
+                    label.append(" !", style=f"bold {tone(self.app, 'error')}" if bad[key] else tone(self.app, "warning"))
                 picker.replace_option_prompt_at_index(i, label)
 
     def update_tab_label(self) -> None:

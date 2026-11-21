@@ -30,6 +30,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.color import Color, ColorParseError
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import (
@@ -50,6 +51,7 @@ from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
 from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy, unreadable_note
+from ..tones import tone
 from . import dashboard_data as dd
 from . import search_data
 from .armed import Armed
@@ -553,6 +555,7 @@ class DashboardPane(Vertical):
     def _theme_changed(self, _theme) -> None:
         if self.snapshot is not None:
             self._show_activity(self.snapshot)
+        self._show_status()   # its error and warning colours come from the theme too (#139)
 
     def on_resize(self, event: events.Resize) -> None:
         # NARROW and SHORT are the window's size, as the README says (this pane is 2 columns
@@ -731,7 +734,7 @@ class DashboardPane(Vertical):
 
         def svc(mode: str) -> tuple[str, str]:
             st = self.services.get(mode, "…")
-            style = "green" if st == "active" else "red" if st == "failed" else "dim"
+            style = "green" if st == "active" else tone(self.app, "error") if st == "failed" else "dim"
             if st == "unknown":
                 st = "unknown (no systemctl?)" if all(v == "unknown" for v in self.services.values()) else st
             return st, style
@@ -763,7 +766,8 @@ class DashboardPane(Vertical):
         elif snap.busy:
             out.append(BUSY_NOTE, style="bold")   # words, theme colours: readable in both themes
         elif snap.error:
-            out.append(unreadable_note(bot.SERVICES[self.mode]), style="red")   # words, not the exception (#98)
+            # words, not the exception (#98), in a colour readable in both themes and NO_COLOR (#139)
+            out.append(unreadable_note(bot.SERVICES[self.mode]), style=tone(self.app, "error"))
         elif not snap.exists:
             out.append(f"No state file yet ({clean(self.paths.state.name)}).\n", style="dim")
             out.append("Start the bot in this mode to see it here.", style="dim")
@@ -775,7 +779,7 @@ class DashboardPane(Vertical):
             elif now - snap.last_alive < ALIVE_SECONDS:
                 alive = (f"alive (seen {fmt_age(now - snap.last_alive)} ago)", "green")
             else:
-                alive = (f"not seen for {fmt_age(now - snap.last_alive)}", "red")
+                alive = (f"not seen for {fmt_age(now - snap.last_alive)}", tone(self.app, "error"))
             row("Mode", (mode, "bold"), ("  ·  ", "dim"), alive)
             stale = snap.last_alive is None or now - snap.last_alive >= ALIVE_SECONDS
             if stale:
@@ -783,7 +787,7 @@ class DashboardPane(Vertical):
                 conn, conn_style = "not running", "dim"
             else:
                 conn = snap.connection or "unknown"
-                conn_style = "green" if conn == "ready" else "dim" if conn == "unknown" else "yellow"
+                conn_style = "green" if conn == "ready" else "dim" if conn == "unknown" else tone(self.app, "warning")
             up = []
             if snap.started_at and not stale:
                 up = [("  ·  ", "dim"), (f"up {fmt_age(now - snap.started_at)}", "")]
@@ -999,7 +1003,7 @@ class DashboardPane(Vertical):
         bits = []
         if snap.problems:
             bits.append(f"{len(snap.problems)} chat(s) need a look")
-        note.update(Text("  ".join(bits), style="yellow") if bits else "")
+        note.update(Content.styled("  ".join(bits), "$tn-warning") if bits else "")   # readable in NO_COLOR (#139)
 
     # ---------------------------------------------------------- views
 
@@ -1070,6 +1074,6 @@ class DashboardPane(Vertical):
         if ok:
             result.update(Text(f"{action} {name}: done", style="green"))
         else:
-            result.update(Text(f"{action} {name} failed: {msg or 'no reason given'}", style="red"))
+            result.update(Text(f"{action} {name} failed: {msg or 'no reason given'}", style=tone(self.app, "error")))
         self._load_services()
         self._request_state()

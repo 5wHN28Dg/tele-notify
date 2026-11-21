@@ -27,6 +27,7 @@ from .screens.review import ReviewPane
 from .screens.search import SearchPane
 from .screens.settings import ConfirmModal, SettingsPane
 from .store import Store
+from .tones import tones
 
 REFRESH_SECONDS = 5
 THEMES = ("textual-dark", "textual-light")   # the themes offered: the ones whose colours are checked
@@ -121,6 +122,14 @@ class TeleNotifyApp(App):
         self.refresh_seconds = refresh_seconds
         self._reload_queued: float | None = None   # when a reload was queued (monotonic), until it runs
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
+
+    def get_css_variables(self) -> dict[str, str]:
+        """The theme's variables plus $tn-error, $tn-warning and $tn-success: error, warning and
+        success text readable in both themes and under NO_COLOR (tones.py, #139)."""
+        variables = super().get_css_variables()
+        variables.update(tones(variables))
+        self.theme_variables = variables
+        return variables
 
     def notify(self, message: str, *, title: str = "", severity="information",
                timeout: float | None = None, markup: bool = True) -> None:
