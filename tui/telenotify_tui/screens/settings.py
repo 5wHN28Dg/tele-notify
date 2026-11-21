@@ -717,18 +717,23 @@ class SettingsPane(Vertical):
         t = Text()
         t.append(f"{n} unsaved change{'s' if n != 1 else ''}" if n else "saved",
                  style="bold yellow" if n else "green")
-        if errs:
-            t.append(f" · {errs} problem{'s' if errs != 1 else ''} to fix", style="bold red")
+        # missing API keys stop the bot logging in: a problem too, never beside "no problems" (#58)
+        missing = [k for k, v in sec.items() if v == "missing"]
+        keys = "API keys" if len(missing) == len(sec) else (missing[0] if missing else "")
+        total = errs + (1 if missing else 0)
+        if total == 1 and missing:   # short, to fit the 50 columns the bar has at 80 x 24
+            t.append(f" · 1 problem: {keys} missing", style="bold red")
+        elif total:
+            t.append(f" · {total} problem{'s' if total != 1 else ''} to fix", style="bold red")
         if warns:
             t.append(f" · {warns} warning{'s' if warns != 1 else ''}", style="yellow")
-        if not self.problems:   # said, not left out: the count is always in view (#58)
+        if not total and not warns:   # said, not left out: the count is always in view (#58)
             t.append(" · no problems")
-        # the secrets last and short: at 80 x 24 the bar has 50 columns, and what gets cut is these
-        if sec["api_id"] == sec["api_hash"]:
-            t.append(f" · API keys {sec['api_id']}", style="dim")
-        else:
-            missing = next(k for k, v in sec.items() if v == "missing")
-            t.append(f" · {missing} missing", style="dim")
+        # the secrets last and short: what gets cut at 80 x 24 is these
+        if not missing:
+            t.append(" · API keys set", style="dim")
+        elif errs:
+            t.append(f" · {keys} missing", style="dim")
         self.query_one("#settings-status", Static).update(t)
 
     def update_problems(self) -> None:

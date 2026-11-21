@@ -889,3 +889,25 @@ async def test_y_copies_what_a_selection_gives_without_bidi_controls(paths, stat
         view = app.query_one("#detail-text", PostView)
         selected, _ = view.get_selection(Selection(None, None))
         assert app.clipboard == selected == "before evil and embedded after"
+
+
+async def test_y_and_the_selection_drop_direction_marks(paths, state, now):
+    """Review run 2 (I5): direction marks and invisible characters (LRM, RLM, ALM, ZWSP, BOM) came
+    along: a link with an RLM glued on pasted with it. y and the mouse selection both drop them, and
+    Arabic still copies in reading order."""
+    from textual.selection import Selection
+
+    db = sqlite3.connect(state)
+    db.execute("UPDATE reviews SET status = 'discarded'")
+    db.commit()
+    db.close()
+    marked = "\u200f" + UNCLEAR.replace(" ", " \u200b", 1) + "\u061c\nhttps://example.com/apply\u200f\ufeff \u200emore"
+    add_pending(state, 78, marked, now)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("y")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        selected, _ = app.query_one("#detail-text", PostView).get_selection(Selection(None, None))
+        assert app.clipboard == selected == UNCLEAR + "\nhttps://example.com/apply more"

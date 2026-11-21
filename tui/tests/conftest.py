@@ -124,7 +124,8 @@ def private_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     # nor the owner's desktop clipboard (y runs wl-copy / xclip / xsel there); the copy tests
     # set these again with fake programs on PATH
-    for var in ("WAYLAND_DISPLAY", "DISPLAY"):
+    # (and where the screen thinks it runs: the copy tests say so themselves)
+    for var in ("WAYLAND_DISPLAY", "DISPLAY", "TMUX", "SSH_CONNECTION"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(home)
 

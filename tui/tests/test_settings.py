@@ -981,3 +981,39 @@ async def test_the_status_says_no_problems_whole_at_80x24(paths, cfg_path, edit)
         assert "no problems" in str(shown)
         assert ("unsaved change" in str(shown)) == edit
         assert shown.cell_length <= status.content_region.width, (str(shown), status.content_region.width)
+
+
+@pytest.mark.parametrize("drop, keys", [(("api_id", "api_hash"), "API keys"), (("api_hash",), "api_hash")])
+@pytest.mark.parametrize("edit", [False, True])
+async def test_missing_api_keys_are_a_problem_whole_at_80x24(paths, cfg_path, edit, drop, keys):
+    """Review run 2: "no problems · API keys missing" told a first-time user the opposite of the truth
+    (the bot can't log in without them). Missing keys count as a problem, and the line fits at 80 x 24."""
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    sd.dedupe_all(cfg)
+    for k in drop:
+        del cfg[k]
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        if edit:
+            await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await pilot.pause()
+        status = pane.query_one("#settings-status", Static)
+        shown = status.render()
+        assert "no problems" not in str(shown)
+        assert f"1 problem: {keys} missing" in str(shown)
+        assert shown.cell_length <= status.content_region.width, (str(shown), status.content_region.width)
+
+
+async def test_missing_api_keys_add_to_the_other_problems(paths, config):
+    """With the keys missing and other errors (no location keywords), the count adds them up."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        for k in sd.LOCATION_KEYS:
+            pane._put(k, [])
+        await pilot.pause()
+        errs = len(sd.errors(pane.problems))
+        shown = str(pane.query_one("#settings-status", Static).render())
+        assert f"{errs + 1} problems to fix" in shown and "API keys missing" in shown and "no problems" not in shown
