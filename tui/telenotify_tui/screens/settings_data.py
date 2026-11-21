@@ -60,6 +60,22 @@ SECRET_KEYS = ("api_id", "api_hash")
 # never handed to `telenotify` for the corpus test either: your notification bot's token (#122)
 TEMP_LEFT_OUT = (*SECRET_KEYS, "notify_bot_token")
 
+NOTIFY_KEYS = ("notify_published", "notify_review")
+
+
+def notify_note(cfg: dict) -> str:
+    """Why the notification switches do nothing in this config, or "" (they work).
+
+    The bot sends through your notification bot only with `notify_bot_token`, and a dry run sends
+    no per-post messages (only its alerts)."""
+    token = cfg.get("notify_bot_token")
+    if not (isinstance(token, str) and token.strip()):
+        return "off for now: no notify_bot_token in config.json"
+    if cfg.get("dry_run") is True:
+        return "off for now: a dry run sends none"
+    return ""
+
+
 ROLE_KEYS = ("entry_level_role_en", "entry_level_role_ar", "mid_level_general_role_en",
              "mid_level_general_role_ar", "field_keywords_en", "field_keywords_ar")
 LOCATION_KEYS = ("location_keywords_en", "location_keywords_ar")

@@ -843,9 +843,36 @@ async def test_each_kind_of_bot_notification_can_be_switched_off(paths, cfg_path
         await pilot.click(review)
         await pilot.pause()
         assert not review.value and pane.dirty
+        assert str(review.label) == "off" and str(published.label) == "on"   # in words, not colour alone
         await save(pilot)
         await pilot.press("n")                                          # don't restart the bot
         await pilot.pause()
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert cfg["notify_review"] is False
     assert "notify_published" not in cfg                               # unchanged keys aren't written
+
+
+
+@pytest.mark.parametrize(("extra", "note"), [
+    ({}, "Off for now: no notify_bot_token in config.json"),
+    ({"notify_bot_token": "1:abc", "dry_run": True}, "Off for now: a dry run sends none"),
+    ({"notify_bot_token": "1:abc"}, ""),
+])
+async def test_the_notification_switches_say_when_they_cant_do_anything(paths, cfg_path, extra, note):
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg.pop("notify_bot_token", None)
+    cfg_path.write_text(json.dumps(cfg | extra), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        for key in ("notify_published", "notify_review"):
+            text = str(pane.query_one(f"#help-{key}", Static).render())
+            assert "(default on)" in text
+            assert (note in text) if note else ("Off for now" not in text)
+        if extra.get("dry_run"):                       # switching the dry run off updates it at once
+            pane.query_one("#sections", TabbedContent).active = "sec-bot"
+            await pilot.pause()
+            await pilot.click(pane.query_one("#f-dry_run", Checkbox))
+            await pilot.pause()
+            assert "Off for now" not in str(pane.query_one("#help-notify_review", Static).render())
+            assert str(pane.query_one("#f-dry_run", Checkbox).label) == "off"

@@ -50,8 +50,8 @@ FORM_HELP = {
     "dry_run": "Judge and record, but forward nothing",
     "alerts": "Tell you about problems (downtime, lost access, log-out) in Saved Messages and through your notification bot",
     "alert_after_minutes": "Downtime shorter than this is only logged (default 10)",
-    "notify_published": "Through your notification bot: a message for each post published to your channel",
-    "notify_review": "Through your notification bot: a message for each post sent to review",
+    "notify_published": "Each post published to your channel, through your notification bot (default on)",
+    "notify_review": "Each post sent to review, through your notification bot (default on)",
     "data_dir": "TDLib login and state (default ~/.local/share/tele-notify); empty = default",
     "tdlib_path": "Path to libtdjson.so if it isn't found automatically; empty = automatic",
     "target_chat": "ID of the chat matches are forwarded to",
@@ -555,12 +555,12 @@ class SettingsPane(Vertical):
         with Horizontal(classes="form-row"):
             yield Label(key)
             if key in sd.BOOL_KEYS:
-                yield Checkbox("on", id=f"f-{key}")
+                yield Checkbox("on", id=f"f-{key}")      # "on" / "off": the state in words, not colour alone
             else:
                 short = key in sd.INT_KEYS or key == "target_chat"
                 yield Input(id=f"f-{key}", compact=True, classes="short" if short else "",
                             placeholder=str(sd.DEFAULTS[key]) if key in sd.INT_KEYS else "default")
-            yield Static(FORM_HELP.get(key, ""), classes="help muted")
+            yield Static(FORM_HELP.get(key, ""), id=f"help-{key}", classes="help muted")
 
     def _compose_chats(self) -> ComposeResult:
         yield Static(id="chat-note", classes="muted")
@@ -597,7 +597,19 @@ class SettingsPane(Vertical):
             self.edited.pop(key, None)
         else:
             self.edited[key] = v
+        self.show_switches()
         self.changed()
+
+    def show_switches(self) -> None:
+        """Each switch says "on" or "off" (not by colour alone, and still while focused), and the
+        notification switches say when they can't do anything (no bot token, a dry run)."""
+        for key in sd.BOOL_KEYS:
+            for box in self.query(f"#f-{key}").results(Checkbox):
+                box.label = "on" if box.value else "off"
+        note = sd.notify_note(self.edited)
+        for key in sd.NOTIFY_KEYS:
+            for help_ in self.query(f"#help-{key}").results(Static):
+                help_.update(FORM_HELP[key] + (f". {note[0].upper()}{note[1:]}" if note else ""))
 
     @property
     def dirty(self) -> bool:
@@ -658,6 +670,7 @@ class SettingsPane(Vertical):
             for key in sd.BOOL_KEYS:
                 v = self.edited.get(key, sd.BOOL_KEYS[key])
                 self.query_one(f"#f-{key}", Checkbox).value = bool(v)
+        self.show_switches()
         for sec in LIST_SECTIONS:
             picker = self.query_one(f"#picker-{sec}", OptionList)
             editor = self.query_one(f"#editor-{sec}", KeywordEditor)
