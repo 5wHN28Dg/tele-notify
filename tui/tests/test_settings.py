@@ -935,3 +935,27 @@ async def test_a_focused_switch_is_readable(paths, cfg_path, theme):
         assert "".join(c.ch for c in word) in ("on", "off")
         for c in word:
             assert svg.contrast(c.fg, c.bg) >= 4.5, (theme, c)
+
+
+
+@pytest.mark.parametrize("flag", [False, True])
+async def test_the_dry_run_note_follows_the_saved_config_and_the_flag(paths, cfg_path, services, flag):
+    """#131 run 4: after saving dry_run off, the note said "a dry run" (the flag was guessed from the
+    config as opened). Opened with --dry-run, the flag keeps it a dry run whatever the config says."""
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg_path.write_text(json.dumps(cfg | {"notify_bot_token": "1:abc", "dry_run": True}), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path, dry_run=True, dry_run_flag=flag), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        note = lambda: str(pane.query_one("#help-notify_review", Static).render())
+        assert "a dry run" in note()
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        await pilot.click(pane.query_one("#f-dry_run", Checkbox))
+        await pilot.pause()
+        assert ("a dry run" in note()) == flag
+        await save(pilot)
+        await pilot.press("n")
+        await pilot.pause()
+        assert json.loads(cfg_path.read_text(encoding="utf-8"))["dry_run"] is False
+        assert ("a dry run" in note()) == flag
