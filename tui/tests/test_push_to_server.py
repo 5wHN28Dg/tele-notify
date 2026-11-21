@@ -296,6 +296,7 @@ def test_a_bot_that_does_not_stay_up_is_rolled_back(tmp_path, health):
     s.assert_old_set_in_place()
     assert s.calls().count("systemctl --user restart tele-notify") == 2   # the new, then the old
     assert "systemctl --user reset-failed tele-notify" in s.calls()        # past the start limit
+    assert s.leftovers() == []                                            # nor the failed build
 
 
 @pytest.mark.parametrize("fail", ["restart", "daemon-reload"])
@@ -305,6 +306,7 @@ def test_a_failing_systemctl_after_the_swap_rolls_back(tmp_path, fail):
     assert r.returncode != 0, r.stdout
     assert "rolled back" in r.stderr
     s.assert_old_set_in_place()
+    assert s.leftovers() == []
 
 
 def test_a_dropped_connection_after_the_swap_still_rolls_back(tmp_path):
@@ -336,6 +338,24 @@ def test_a_rollback_after_two_changing_pushes_goes_back_to_the_first(tmp_path):
     assert (s.lib / "tui-venv").resolve() == first
     assert (first / "bin" / "telenotify-tui").exists()
     assert os.access(s.bin / "telenotify-tui", os.X_OK)
+    assert s.leftovers() == []
+
+
+def test_two_changing_pushes_switch_to_the_new_screen(tmp_path):
+    s = Server(tmp_path, active=True)
+    assert s.run().returncode == 0
+    first = (s.lib / "tui-venv").resolve()
+    (s.repo / "tui" / "pyproject.toml").write_text('[project]\nname = "telenotify-tui"\nversion = "2"\n')
+    _git(s.repo, "commit", "-q", "-am", "v2")
+    s.set_health("ok")
+    r = s.run()
+    assert r.returncode == 0, r.stderr
+    second = (s.lib / "tui-venv").resolve()
+    assert second != first and second.name.startswith("tui-venv.build-")
+    assert (second / "bin" / "telenotify-tui").exists()
+    assert (s.lib / "tui-venv.prev").resolve() == first
+    assert list(s.lib.rglob(".tui-venv*.lnk")) == []
+    assert s.leftovers() == []
 
 
 def test_the_screen_command_is_linked_when_missing(tmp_path):

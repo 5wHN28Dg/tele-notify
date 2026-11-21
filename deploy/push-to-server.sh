@@ -29,11 +29,12 @@
 # on the server (any login shell):
 #   sh -c 'cd ~ && for f in .local/bin/telenotify .local/lib/tele-notify/libtdjson.so .local/lib/tele-notify/tui-venv .config/systemd/user/tele-notify.service; do if [ -e $f.prev ] || [ -L $f.prev ]; then rm -f $f; mv -T $f.prev $f; fi; done; systemctl --user daemon-reload; systemctl --user restart tele-notify'
 #
-# The server needs python3 with venv, and flock. TDLib comes from
-# lib/libtdjson.so, else this machine's installed copy. The bot and TDLib need
-# glibc, libssl and libsqlite3 on the server, no older than the ones they were
-# built against (compare `ldd --version` on both; install libssl and libsqlite3
-# there). The check on the server stops the push before any change if not.
+# The server needs python3 with venv, flock and GNU coreutils (mv -T). TDLib
+# comes from lib/libtdjson.so, else this machine's installed copy. The bot and
+# TDLib need glibc, libssl and libsqlite3 on the server, no older than the ones
+# they were built against (compare `ldd --version` on both; install libssl and
+# libsqlite3 there). The check on the server stops the push before any change
+# if not.
 set -eu
 
 usage="usage: deploy/push-to-server.sh [--allow-dirty] USER@HOST [ssh options...]"
@@ -238,7 +239,10 @@ esac
 # From here on, finish whatever happens to the connection: swap, restart,
 # check, and roll back if needed.
 trap "" HUP PIPE INT TERM
-tmps=$d
+# the staged files stay on the cleanup list: once moved into place they are
+# gone from their temp names, and if a step fails, cleanup removes them. The
+# new build is removed by the rollback (it is installed otherwise).
+tmps="$d $new_bot $new_unit $new_td $new_link $prev_link $prev_bot $prev_td $prev_unit"
 
 restore() {
   if [ -e "$1.prev" ] || [ -L "$1.prev" ]; then
@@ -256,6 +260,12 @@ rollback() {
     restore "$lib/tui-venv"
   fi
   ln -sf "$lib/tui-venv/bin/telenotify-tui" "$bin/telenotify-tui" || true
+  if [ -n "$new_venv" ] && [ "$(readlink -f "$lib/tui-venv" || true)" != "$(readlink -f "$new_venv")" ]; then
+    rm -rf "$new_venv" || warn "could not delete the failed screen build $new_venv"
+  fi
+  if [ -n "$legacy" ]; then
+    rmdir "$legacy" 2>/dev/null || true
+  fi
   systemctl --user daemon-reload || true
   if [ "$running" = 1 ]; then
     systemctl --user reset-failed tele-notify || true
