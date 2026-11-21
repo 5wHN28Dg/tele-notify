@@ -95,19 +95,50 @@ proc forgetKeptAddresses*() =
     keptAddresses.clear()
     failedLookups.clear()
 
+proc addressKey(host: string, port: Port, allowPrivate: bool): string =
+  ## Kept per host, port and whether private addresses were allowed: one kept
+  ## for kittygram on 127.0.0.1 is never used by a fetch that refuses them.
+  host & ":" & $port.int & (if allowPrivate: ":private" else: "")
+
+proc forgetAddress(host: string, port: Port, allowPrivate: bool) =
+  ## The next fetch looks the name up again; the old address stays the
+  ## fallback while lookups fail (marked expired, not deleted: a network that
+  ## drops takes the resolver with it, and must not then fail every send for
+  ## a minute when it's back).
+  {.cast(gcsafe).}:
+    let key = addressKey(host, port, allowPrivate)
+    if key in keptAddresses:
+      let k = keptAddresses[key]
+      keptAddresses[key] = (k[0], k[1], 0.0)
+
+proc keepAddressExpired*(host: string, port: Port, allowPrivate: bool, ip: string) =
+  ## Tests: an address kept before, now expired (as after a failed connect).
+  {.cast(gcsafe).}:
+    keptAddresses[addressKey(host, port, allowPrivate)] =
+      (ip, (if ':' in ip: Domain.AF_INET6 else: Domain.AF_INET), 0.0)
+
+proc keptAddressFor*(host: string, port: Port, allowPrivate: bool): string =
+  ## Tests: the address kept for this host, expired or not ("" for none).
+  {.cast(gcsafe).}: keptAddresses.getOrDefault(addressKey(host, port, allowPrivate))[0]
+
 proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
   ## `keepMs` > 0: reuse the address found for this host for that long (the
-  ## lookup is synchronous, so a slow resolver then blocks once per period).
-  let key = host & ":" & $port.int & (if allowPrivate: ":private" else: "")
+  ## lookup is synchronous, so a slow resolver then blocks once per period),
+  ## unless connecting to it fails (the name may point elsewhere now).
+  let key = addressKey(host, port, allowPrivate)
   if keepMs > 0:
     {.cast(gcsafe).}:
       let k = keptAddresses.getOrDefault(key)
       if k[0] != "" and epochTime() < k[2]: return (k[0], k[1])
       # a lookup that failed a moment ago fails again at once: a resolver that
       # times out would otherwise block the program once per message (review run 3)
+      # (with an address known before, that one is used, expired or not: no
+      # lookup until the minute is over, whatever happens to the address)
       let f = failedLookups.getOrDefault(key)
-      if f[0] != "" and epochTime() < f[1]: raise newException(FetchError, f[0])
+      if f[0] != "" and epochTime() < f[1]:
+        if k[0] != "": return (k[0], k[1])
+        raise newException(FetchError, f[0])
   {.cast(gcsafe).}: inc addressLookups
   var info: ptr AddrInfo
   try:
@@ -116,12 +147,12 @@ proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string,
     let why = "cannot resolve " & host & ": " & e.msg.splitLines[0]
     if keepMs > 0:
       {.cast(gcsafe).}:
+        failedLookups[key] = (why, epochTime() + 60)
         let k = keptAddresses.getOrDefault(key)
         if k[0] != "":
           # the address found before still works more often than not: keep using it a minute
           keptAddresses[key] = (k[0], k[1], epochTime() + 60)
           return (k[0], k[1])
-        failedLookups[key] = (why, epochTime() + 60)
     raise newException(FetchError, why)
   defer: freeAddrInfo(info)
   var first = ""
@@ -192,7 +223,11 @@ proc getOnce(live: Live, url: string, allowPrivate: bool, keepMs = 0): Future[(i
   let (ip, domain) = resolve(host, Port(port), allowPrivate, keepMs)
   let sock = newAsyncSocket(domain, SockType.SOCK_STREAM, Protocol.IPPROTO_TCP, buffered = true)
   live.sock = sock
-  await sock.connect(ip, Port(port))
+  try:
+    await sock.connect(ip, Port(port))
+  except CatchableError as e:
+    if keepMs > 0: forgetAddress(host, Port(port), allowPrivate)   # look it up again next time
+    raise e
   if scheme == "https":
     when defined(ssl):
       let ctx = newContext(verifyMode = CVerifyPeer)
@@ -289,6 +324,16 @@ proc fetch*(url: string, timeoutMs = 20_000, allowPrivate = false, keepAddressMs
   if await withTimeout(fut, timeoutMs):
     return fut.read
   live.closeQuietly()   # cancels a connect or read in progress
+  if keepAddressMs > 0:
+    # a kept address that stopped answering usually hangs rather than refusing:
+    # look the name up again next time (the cancelled connect may never say so)
+    try:
+      let u = parseUri(live.current)
+      let host = u.hostname.strip(chars = {'[', ']'})
+      var port = if u.scheme.toLowerAscii == "https": 443 else: 80
+      if u.port != "": port = parseInt(u.port)
+      forgetAddress(host, Port(port), allowPrivate)
+    except CatchableError: discard
   let limit = if timeoutMs mod 1000 != 0: $timeoutMs & " ms" else: $(timeoutMs div 1000) & " s"
   return Fetched(ok: false, finalUrl: live.current, error: "timed out after " & limit)
 

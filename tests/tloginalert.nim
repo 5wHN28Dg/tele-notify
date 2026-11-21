@@ -4,6 +4,8 @@
 import std/[unittest, os, strutils, asyncdispatch, json, times]
 import telenotify/[state, commands, notify, listener, config, telegram, fetch, gather]
 
+notifyPaceMs = 0   # no pacing between messages to your bot here (tnotify tests it)
+
 let dir = getTempDir() / "tn-login-alert-test"
 removeDir(dir)
 createDir(dir)
@@ -102,3 +104,42 @@ suite "login needed":
     l.outbox.push "last"
     waitFor finishNotifying(l, st, "", dryRun = false, nil)     # a normal stop: flushed too
     check sent == @["last"]
+
+
+suite "a log-out at a stop (#127)":
+  test "the flush waits longer after a log-out, so a send waiting out a 429 doesn't lose the alert":
+    let st = openState(dir / "state-429.sqlite3")
+    defer: st.close()
+    var j = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j["target_chat"] = %(-999)
+    let l = newListener(parseConfig(j), Telegram(), st, defaultFetcher(), defaultOcr(), false)
+    l.log = proc (line: string) {.closure, gcsafe.} = discard
+    var sent: seq[string]
+    l.outbox = newNotifyQueue(proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      if text == "a post": await sleepAsync(400)          # waiting out a 429
+      {.cast(gcsafe).}: sent.add text
+      return "", l.log)
+    l.outbox.push "a post"
+    waitFor finishNotifying(l, st, "authorizationStateLoggingOut", dryRun = false,
+                            loginTeller(l.outbox, alerts = true), stopFlushMs = 100, afterLogOutMs = 2000)
+    check sent.len == 2 and sent[1].startsWith("⚠️ tele-notify: Logged out of Telegram.")
+
+
+  test "a plain stop waits the short time, not the log-out one":
+    let st = openState(dir / "state-stop.sqlite3")
+    defer: st.close()
+    var j = parseFile(currentSourcePath.parentDir / "keywords.json")
+    j["target_chat"] = %(-999)
+    let l = newListener(parseConfig(j), Telegram(), st, defaultFetcher(), defaultOcr(), false)
+    l.log = proc (line: string) {.closure, gcsafe.} = discard
+    var sent: seq[string]
+    l.outbox = newNotifyQueue(proc (text: string): Future[string] {.async, closure, gcsafe.} =
+      await sleepAsync(400)
+      {.cast(gcsafe).}: sent.add text
+      return "", l.log)
+    l.outbox.push "a post"
+    l.outbox.push "another post"
+    let t0 = epochTime()
+    waitFor finishNotifying(l, st, "", dryRun = false, nil, stopFlushMs = 100, afterLogOutMs = 2000)
+    check epochTime() - t0 < 0.5
+    check sent.len < 2
