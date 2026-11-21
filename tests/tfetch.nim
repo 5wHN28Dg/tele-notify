@@ -202,6 +202,7 @@ suite "name lookups for your bot (#122, review run 2)":
     check addressLookups == plain + 2
 
   test "the bot's fetcher keeps it for 10 minutes":
+    forgetKeptAddresses()                     # an earlier test kept 127.0.0.1 already
     let f = botFetcher(allowPrivate = true)
     let before = addressLookups
     # 127.0.0.1, not localhost: CI's localhost answers ::1 first, and the test server is IPv4 only

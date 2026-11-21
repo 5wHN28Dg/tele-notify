@@ -89,6 +89,12 @@ var
   keptAddresses: Table[string, (string, Domain, float)]   # key: address, domain, kept until
   failedLookups: Table[string, (string, float)]           # key: why, remembered until
 
+proc forgetKeptAddresses*() =
+  ## Tests: start without any kept address or remembered failure.
+  {.cast(gcsafe).}:
+    keptAddresses.clear()
+    failedLookups.clear()
+
 proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
   ## `keepMs` > 0: reuse the address found for this host for that long (the
