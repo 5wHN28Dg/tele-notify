@@ -25,7 +25,7 @@
 ## Messages go out at most about one a second (Telegram's Bot FAQ asks that
 ## per chat).
 
-import std/[asyncdispatch, deques, json, strutils, strformat, uri, unicode, times]
+import std/[asyncdispatch, deques, json, strutils, strformat, uri, unicode, times, monotimes]
 import fetch, state
 
 const
@@ -36,8 +36,15 @@ const
   keepBotAddressMs* = 600_000     ## api.telegram.org's address is looked up this often at most
   maxRetryAfterMs* = 30_000       ## the longest wait after a 429
   transientRetryMs* = 2000        ## the wait before trying a timed-out or 5xx send again
-  logOutFlushMs* = maxRetryAfterMs + 4 * sendTimeoutMs + transientRetryMs + 1000
-    ## at a stop after a log-out: long enough for a send waiting out a 429, then the alert
+  oneSendMs* = 2 * sendTimeoutMs + transientRetryMs
+    ## the longest one message takes when it's tried twice (12 s)
+  stopFlushMs* = oneSendMs + 1000
+    ## at a stop: long enough for the message being sent, tried twice
+  logOutFlushMs* = 70_000
+    ## at a stop after a log-out: the message being sent (its link 5 s, a send,
+    ## a 429's wait of up to 30 s, the send again: 45 s), the pace (1 s), then
+    ## the alert tried twice (12 s) is 58 s; with room to spare, under systemd's
+    ## 90 s stop limit. An alert that itself meets a 429 may not make it.
   unreachableKey = "notify_unreachable"
   onKey = "notify_on_for"         ## the user id told "notifications are on"
   unreachableAlert* = "Your notification bot can't reach you: press Start in its chat, " &
@@ -124,7 +131,9 @@ proc botNotifier*(token: string, chatId: ChatId, fetcher: Fetcher, st: State = n
         r = await fetcher(url)
       elif r.status == 0 or r.status >= 500:
         # a timeout, a lost connection, a failed lookup or Telegram's own
-        # trouble: often gone a moment later (MSG3)
+        # trouble: often gone a moment later (MSG3). A timeout or a 502/504
+        # can come after Telegram took the message, and the Bot API can't
+        # tell a repeat: then you get it twice, which beats not at all.
         await sleepAsync(transientWaitMs)
         r = await fetcher(url)
       if r.ok:
@@ -203,7 +212,7 @@ type
     sending: bool
     dropped: bool        # already said so, until the queue empties
     gapMs: int           # the least time between two sends
-    lastSend: float      # when the last send started (epochTime)
+    lastSend: MonoTime   # when the last send started (not the wall clock: it can be set back)
 
 proc newNotifyQueue*(send: Notifier, log: LogProc, cap = 50, gapMs = -1): NotifyQueue =
   ## `gapMs`: the least time between two sends; -1: `notifyPaceMs`.
@@ -222,9 +231,9 @@ proc drain(q: NotifyQueue) {.async.} =
       var err = ""
       try:
         let text = await later()
-        let wait = q.lastSend + q.gapMs / 1000 - epochTime()
-        if wait > 0: await sleepAsync(int(wait * 1000))
-        q.lastSend = epochTime()
+        let wait = q.gapMs - (getMonoTime() - q.lastSend).inMilliseconds.int
+        if wait > 0: await sleepAsync(min(wait, q.gapMs))
+        q.lastSend = getMonoTime()
         err = await q.send(text)
       except CatchableError as e: err = e.msg.splitLines()[0]
       if err != "": q.log "   (could not notify you through your bot: " & err & ")"
@@ -267,6 +276,10 @@ proc flush*(q: NotifyQueue, timeoutMs = 10_000) {.async.} =
   if not q.idle:
     let left = q.pending.len + (if q.sending: 1 else: 0)
     q.log &"   ({left} notifications not sent: stopped waiting for your bot)"
+
+proc anyNotifications*(published, review, alerts: bool): bool =
+  ## Is any kind of message to your bot on? Else "notifications are on" isn't said.
+  published or review or alerts
 
 proc announceOn*(st: State, send: Notifier, chatId: ChatId, dryRun: bool, anyOn = true) {.async.} =
   ## "Notifications are on", once: at the first start with a working token,

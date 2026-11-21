@@ -238,3 +238,11 @@ suite "kept addresses (#127)":
     let before = addressLookups
     check not waitFor(fetch(url, allowPrivate = true, keepAddressMs = 600_000)).ok
     check addressLookups == before + 1
+
+  test "a kept address whose fetch times out is looked up again next time (a hang, not a refusal)":
+    forgetKeptAddresses()
+    let slow = "http://127.0.0.1:" & $port & "/slow"
+    check not waitFor(fetch(slow, timeoutMs = 200, allowPrivate = true, keepAddressMs = 600_000)).ok
+    let before = addressLookups
+    check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 600_000)).ok
+    check addressLookups == before + 1

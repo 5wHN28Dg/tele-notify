@@ -54,11 +54,11 @@ proc isLogOut*(authState: string): bool =
 
 proc finishNotifying*(l: Listener, st: State, sessionLost: string, dryRun: bool,
                       tell: proc (text: string) {.closure, gcsafe.},
-                      stopFlushMs = 2 * sendTimeoutMs, afterLogOutMs = logOutFlushMs) {.async.} =
+                      stopFlushMs = notify.stopFlushMs, afterLogOutMs = logOutFlushMs) {.async.} =
   ## At a stop: a log-out is one alert (screen, and your bot through `tell`),
-  ## then what's still queued for your bot is sent: for at most 10 s, or
+  ## then what's still queued for your bot is sent: for at most 13 s, or
   ## after a log-out long enough for a send waiting out a 429 and then the
-  ## alert (`logOutFlushMs`, under systemd's 90 s stop limit).
+  ## alert (`logOutFlushMs`, 70 s, under systemd's 90 s stop limit).
   if sessionLost.isLogOut:
     recordLoginNeeded(st, sessionLost, dryRun, tell)   # before closing the state: the screen shows it
     await l.flushNotifications(afterLogOutMs)
@@ -225,7 +225,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   yield connecting
   if connecting.failed:
     # not logged in: give the alert a moment to reach your bot
-    if outbox != nil: await outbox.flush(2 * sendTimeoutMs)
+    if outbox != nil: await outbox.flush(stopFlushMs)
     raise connecting.readError
   let s = connecting.read
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
@@ -234,7 +234,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   # "notifications are on", once (and after another account logs in)
   if notifier != nil:
     asyncCheck announceOn(st, notifier, chatId, dry,
-                          anyOn = cfg.notifyPublished or cfg.notifyReview or cfg.alerts)
+                          anyOn = anyNotifications(cfg.notifyPublished, cfg.notifyReview, cfg.alerts))
   l.instagram = instagramFor(cfg.instagramFrontend, defaultOcr())
   if l.instagram != nil: l.log "instagram links: read through " & cfg.instagramFrontend
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"

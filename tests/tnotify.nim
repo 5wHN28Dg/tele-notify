@@ -3,7 +3,8 @@
 import std/[unittest, asyncdispatch, strutils, uri, unicode, times, os, asyncnet, net, sequtils]
 import telenotify/[notify, fetch, state]
 
-doAssert notifyPaceMs == 1000    # the bot paces messages to about one a second (#127)
+const notifyPaceDefault = 1000
+doAssert notifyPaceMs == notifyPaceDefault    # the bot paces messages to about one a second (#127)
 notifyPaceMs = 0                 # but these tests don't wait for it, apart from the pacing test
 
 proc utf16Len(s: string): int =
@@ -392,6 +393,15 @@ suite "notification reliability (#127)":
     waitFor announceOn(st, send, fixedId(42), dryRun = false, anyOn = true)
     check sent.len == 1
 
-  test "at a stop after a log-out, the flush outlasts a 429 wait (under systemd's 90 s)":
-    check logOutFlushMs >= maxRetryAfterMs + 2 * sendTimeoutMs + transientRetryMs + 2 * sendTimeoutMs
+  test "the waits at a stop fit what they wait for (under systemd's 90 s)":
+    check oneSendMs == sendTimeoutMs + transientRetryMs + sendTimeoutMs        # a send tried twice
+    check stopFlushMs >= oneSendMs
+    let linkMs = sendTimeoutMs                     # tellWithLink asks TDLib for the post's link first
+    let inFlight = linkMs + sendTimeoutMs + maxRetryAfterMs + sendTimeoutMs   # a send waiting out a 429
+    check logOutFlushMs >= inFlight + notifyPaceDefault + oneSendMs
     check logOutFlushMs < 90_000
+
+  test "\"notifications are on\" follows whether any kind is on":
+    check anyNotifications(true, false, false) and anyNotifications(false, true, false)
+    check anyNotifications(false, false, true)
+    check not anyNotifications(false, false, false)

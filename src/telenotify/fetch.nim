@@ -302,6 +302,16 @@ proc fetch*(url: string, timeoutMs = 20_000, allowPrivate = false, keepAddressMs
   if await withTimeout(fut, timeoutMs):
     return fut.read
   live.closeQuietly()   # cancels a connect or read in progress
+  if keepAddressMs > 0:
+    # a kept address that stopped answering usually hangs rather than refusing:
+    # look the name up again next time (the cancelled connect may never say so)
+    try:
+      let u = parseUri(live.current)
+      let host = u.hostname.strip(chars = {'[', ']'})
+      var port = if u.scheme.toLowerAscii == "https": 443 else: 80
+      if u.port != "": port = parseInt(u.port)
+      forgetAddress(host, Port(port), allowPrivate)
+    except CatchableError: discard
   let limit = if timeoutMs mod 1000 != 0: $timeoutMs & " ms" else: $(timeoutMs div 1000) & " s"
   return Fetched(ok: false, finalUrl: live.current, error: "timed out after " & limit)
 
