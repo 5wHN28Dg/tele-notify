@@ -10,6 +10,7 @@ current settings what they would say now.
   check`, links not followed); `J` follows links too and shows the text the
   filter read. Then and now are shown side by side.
 * `p` opens a box to paste any post and judge it, for trying things out.
+* `y` copies the selected post's text.
 
 Searching never blocks the screen: the state file is read in a thread
 ("searching…" shows meanwhile), a newer search replaces one still running,
@@ -34,7 +35,7 @@ from textual.worker import get_current_worker
 
 from .. import bot
 from ..clean import clean
-from ..postview import PostView
+from ..postview import PostView, copy_post
 from ..rtl import Block, visual
 from ..store import Judged
 from . import search_data
@@ -121,6 +122,7 @@ class SearchPane(Vertical):
         Binding("j", "rejudge(False)", "Re-judge"),
         Binding("J", "rejudge(True)", "Re-judge + links"),
         Binding("p", "paste", "Paste a post"),
+        Binding("y", "copy_post", "Copy post"),
         Binding("escape", "close_paste", "Back", show=False),
     ]
 
@@ -415,6 +417,7 @@ class SearchPane(Vertical):
 
     def _show_detail(self, j: Judged | None, keep_result: bool = False) -> None:
         self._selected = j
+        self.refresh_bindings()   # y (copy) is on only with a post open
         head = self.query_one("#search-detail-head", Static)
         reasons = self.query_one("#detail-reasons", Static)
         text = self.query_one("#search-detail-text", Static)
@@ -453,6 +456,19 @@ class SearchPane(Vertical):
         for b in buttons:
             b.disabled = not can
         note.update(Text(binary_note))
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "copy_post" and self.is_mounted:
+            ok = not self.has_class("pasting") and self._selected is not None and bool(self._selected.text.strip())
+            return True if ok else None   # shown, but off with no post open
+        return True
+
+    def action_copy_post(self) -> None:
+        """Copy the selected post's text, as stored (reading order, not the order it is drawn in)."""
+        j = self._selected
+        if self.has_class("pasting") or j is None or not j.text.strip():
+            return
+        copy_post(self.app, j.text)
 
     # ---------------------------------------------------------- re-judge
 
@@ -500,6 +516,7 @@ class SearchPane(Vertical):
     def action_paste(self) -> None:
         self._deferred_judge = None   # a j waiting for results never judges the paste box
         self.add_class("pasting")
+        self.refresh_bindings()
         self.query_one("#paste-text", TextArea).focus()
 
     @on(TextArea.Changed, "#paste-text")
@@ -514,6 +531,7 @@ class SearchPane(Vertical):
     def action_close_paste(self) -> None:
         if self.has_class("pasting"):
             self.remove_class("pasting")
+            self.refresh_bindings()
             self.query_one("#results", DataTable).focus()
 
     @on(Button.Pressed, "#paste-close")

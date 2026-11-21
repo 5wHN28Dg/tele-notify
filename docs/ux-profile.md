@@ -127,7 +127,7 @@ day.
   - Low vision: the terminal's own font size; checked as the cell grid a 200 % font gives on the typical screen
     (A4, about 80 × 24 on a 1920 × 1080 laptop).
   - Motor: keyboard only or mouse only (A18). Chords (`ctrl+s`, `ctrl+r`, `ctrl+q`) need an alternative (A22).
-    Copying a post needs a mouse drag today (A20, #78).
+    Copying a post: `y` in Review and Search, or a mouse drag (A20, #78).
   - Tremor: the review double-tap guard (`DECIDE_DELAY`) and the safe focus in dialogs (S2, #55).
   - One hand: every main-task key is a single key or has a button; chords are the gap (A22).
   - Cognitive: plain words (A24), one decision per dialog, nothing to remember (the footer shows the keys).
@@ -171,7 +171,7 @@ day.
   All truecolour.
 - **Sizes:** 80 × 24 smallest (80 × 23 inside `tmux` with its status line, also checked); 120 × 40 typical; 200 × 50 largest checked.
 - **Themes:** `textual-dark` (default) and `textual-light`, switched in Textual's command palette (`ctrl+p`), not
-  saved between runs (#73). The palette also offers 17 other themes that aren't supported (#81; the two ansi themes were removed in #116).
+  saved between runs (#73). The palette offers only these two (#81; the ansi themes were removed in #116, the other 17 in #81).
 - **Inputs:** the keyboard and the mouse are both first-class in the screen; the keyboard alone in the command line.
 - **Assistive technology:** the terminal's font size; GNOME's High Contrast and Large Text through the terminal;
   GNOME's Reduced Motion and animations off (Textual's own animations must follow them, A11; Textual has
@@ -189,7 +189,7 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 |---|---|---|---|---|
 | Matching jobs reach my channel on their own | owner, recipients | continuous | each match is forwarded once | ALERT1 latency below; ALERT2 score |
 | See whether the bot is fine | owner | daily | service state, connection, dry run or real, pending reviews and alerts read on the Dashboard | 0 actions (screen just opened); first useful screen within 2 s warm on the 1M-post state file |
-| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K 2 once keys exist (#83; today Tab presses, at most 6) |
+| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K 2 (`S`, `X` or `R`, then `y`; #83) |
 | Review an unsure post (sends to the public channel) | owner | daily | the post is sent, discarded or kept, labelled, with undo offered | K/M 1 per post (Review open, post read); from Dashboard +1 |
 | Undo a review decision | owner | weekly | any decision the bot hasn't acted on is back in the queue, its label removed | K/M 1 for the last one; K/M 3 for an older one from History (today only the last of this run, #76) |
 | Find why a post got its verdict | owner | weekly | the post's verdict and reasons are on screen | K: `3` + the words + 1; M: 1 + the words + 1 (Dashboard open) |
@@ -341,7 +341,7 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
 | D7 | no updater of its own (`deploy/install.sh` is run by hand) |
 | MSG4's command menu | it acts as a user account, not a bot; its controls live in the screen (MSG4 says so) |
 
-Not N/A, so they apply: A20 (copying needs a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
+Not N/A, so they apply: A20 (copying: `y`, or a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
 Dashboard's alert count, #79), A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
 targets: terminal cells, and a destructive button spaced from others; Delete sits beside Edit and Add, and Discard
 beside Send: checked in the first full audit, #87), A22, T2 and T4 (a Telegram session; the bot

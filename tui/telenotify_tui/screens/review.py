@@ -5,7 +5,7 @@ Left, the posts waiting for a decision; right, the one under the cursor.
 `k` keeps it as a match without sending it (for a post that already reached
 the channel another way, e.g. the old bot forwarded it), `n` / down moves on, `o` opens the post in the browser, `r` shows what the
 filter read (it runs `telenotify check` with link scraping), `h` shows what
-was decided recently.
+was decided recently, `y` copies the open post's text.
 
 `u` undoes the last decision made here, unless the bot has already sent
 the post. For a moment after a new post appears, `s` / `d` are ignored, so
@@ -37,7 +37,7 @@ from textual.widgets.option_list import Option
 
 from .. import bot
 from ..clean import clean
-from ..postview import PostView
+from ..postview import PostView, copy_post
 from ..rtl import Block, visual
 from ..store import BUSY_NOTE, Review, is_busy
 from .review_data import history, remove_label, write_label
@@ -132,6 +132,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         Binding("r", "check", "Filter read"),
         Binding("h", "toggle_history", "History"),
         Binding("u", "undo", "Undo"),
+        Binding("y", "copy_post", "Copy post"),
         Binding("space", "scroll_post(1)", "Scroll post"),
         Binding("b", "scroll_post(-1)", "Scroll back", show=False),
     ]
@@ -213,9 +214,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self.note("no telenotify program: Filter read is off", "warn")
 
     def on_show(self) -> None:
-        self.call_after_refresh(self._focus_main)
+        self.call_after_refresh(self.focus_main)
 
-    def _focus_main(self) -> None:
+    def focus_main(self) -> None:
         # Only while this tab is still the one shown: focusing a widget in a
         # hidden tab would make the tabs jump back here.
         if not self._shown(self):
@@ -253,6 +254,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 return None
         if action == "undo" and self.is_mounted:
             return True if self._last is not None else None
+        if action == "copy_post" and self.is_mounted:
+            return True if self.current is not None and self.current.text else None
         return True
 
     def _sync_controls(self) -> None:
@@ -307,7 +310,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self.query_one(wid).display = wid == which
         focused = self.screen.focused
         if focused is None or focused is self or self in focused.ancestors:
-            self.call_after_refresh(self._focus_main)
+            self.call_after_refresh(self.focus_main)
 
     def _fill_queue(self, items: list[Review], exists: bool, has_table: bool) -> None:
         if not items:
@@ -489,6 +492,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             ol.highlighted = ids.index(r.id)
             self._sync_detail()
 
+    def action_copy_post(self) -> None:
+        """Copy the open post's text, as stored (reading order, not the order it is drawn in)."""
+        r = self.current
+        if r is None or not r.text:
+            return
+        copy_post(self.app, r.text)
+
     def action_send(self) -> None:
         self._decide("to_send")
 
@@ -556,7 +566,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._history_mode = not self._history_mode
         self.note("")
         self.reload()
-        self.call_after_refresh(self._focus_main)
+        self.call_after_refresh(self.focus_main)
 
     @on(Button.Pressed)
     def _button(self, event: Button.Pressed) -> None:

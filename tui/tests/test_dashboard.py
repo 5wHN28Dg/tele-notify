@@ -733,3 +733,71 @@ async def test_the_login_line_is_right_after_flipping_back(paths, now):
         await pilot.press("v")                      # Bot again, full width
         await settle(app, pilot)
         assert " ".join(text(app, "#status").split()).startswith("Not logged in to Telegram.")
+
+
+@pytest.mark.parametrize("key, action", [("S", "start"), ("X", "stop"), ("R", "restart")])
+async def test_service_keys_ask_first_then_act(paths, fake_systemctl, key, action):
+    """#83: Start, Stop and Restart have keys (S, X, R); each goes through the same question as
+    its button, and only a yes acts."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        shown = {b.binding.key: b for b in app.active_bindings.values()}
+        assert shown[key].enabled and shown[key].binding.description == action.capitalize()   # the keys panel
+        assert f"{key} {action}" in str(app.query_one("#dash-bot").border_subtitle)   # named under the Bot box
+        await pilot.press(key)
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        assert str(app.screen.query_one("#confirm-yes").label).startswith(f"{action.capitalize()} the bot")
+        await pilot.press("n")
+        await settle(app, pilot)
+        assert not [c for c in fake_systemctl if c[0] == "action"]
+        await pilot.press(key)
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", action)]
+
+
+async def test_service_keys_are_off_while_one_runs(paths, monkeypatch):
+    """#83: while a start / stop / restart runs, the keys are shown dimmed and ask nothing, as the
+    buttons are disabled."""
+    import asyncio
+
+    gate = asyncio.Event()
+
+    async def slow(mode, what):
+        await gate.wait()
+        return True, ""
+    monkeypatch.setattr(bot, "service_action", slow)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("R")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        await pilot.pause()
+        assert not app.query_one(DashboardPane).check_action("service", ("stop",))
+        await pilot.press("X")
+        await pilot.pause()
+        assert not isinstance(app.screen, ConfirmScreen)
+        gate.set()
+        await settle(app, pilot)
+        assert app.query_one(DashboardPane).check_action("service", ("stop",))
+
+
+async def test_a_service_key_in_a_narrow_window_shows_the_bot_box(paths, fake_systemctl):
+    """#83: under NARROW columns one top box shows at a time; S shows the Bot box, where the answer appears."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(DashboardPane)
+        pane.add_class("-show-activity")
+        await pilot.pause()
+        await pilot.press("S")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert not pane.has_class("-show-activity")
+        assert "done" in text(app, "#svc-result")

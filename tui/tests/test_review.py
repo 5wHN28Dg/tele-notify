@@ -840,3 +840,29 @@ async def test_a_footer_press_during_a_drag_leaves_nothing_behind(paths, state, 
         await pilot.pause()
         app.capture_mouse(None)
         assert not any(app.footer_downs.values())
+
+
+async def test_y_copies_the_open_post_in_reading_order(paths):
+    """#78: y copies the open post's text as stored (reading order; it is drawn right to left),
+    through the terminal's clipboard (OSC 52), and a toast says so."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("y")
+        await pilot.pause()
+        assert app.clipboard == UNCLEAR
+        assert any("Copied" in n.message for n in app._notifications)
+
+
+async def test_y_is_off_with_no_post_open(paths, state):
+    db = sqlite3.connect(state)
+    db.execute("UPDATE reviews SET status = 'discarded'")
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("y")
+        await pilot.pause()
+        assert app.clipboard == ""
+        assert not app.query_one(ReviewPane).check_action("copy_post", ())

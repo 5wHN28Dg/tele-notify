@@ -960,3 +960,24 @@ async def test_the_dry_run_note_follows_the_saved_config_and_the_flag(paths, cfg
         await pilot.pause()
         assert json.loads(cfg_path.read_text(encoding="utf-8"))["dry_run"] is False
         assert ("dry run" in note()) == flag
+
+
+@pytest.mark.parametrize("edit", [False, True])
+async def test_the_status_says_no_problems_whole_at_80x24(paths, cfg_path, edit):
+    """#58: with nothing to fix the status bar said nothing about problems; it says "no problems",
+    and the whole line fits the bar at 80 x 24 (saved or with an unsaved change)."""
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    sd.dedupe_all(cfg)                            # the shared config lists a few words twice (warnings)
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        if edit:
+            await add_keyword(pilot, pane, "filters", "extra_seniority", "lead")
+        await pilot.pause()
+        assert pane.problems == []
+        status = pane.query_one("#settings-status", Static)
+        shown = status.render()
+        assert "no problems" in str(shown)
+        assert ("unsaved change" in str(shown)) == edit
+        assert shown.cell_length <= status.content_region.width, (str(shown), status.content_region.width)

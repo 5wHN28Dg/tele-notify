@@ -28,6 +28,7 @@ from .screens.settings import ConfirmModal, SettingsPane
 from .store import Store
 
 REFRESH_SECONDS = 5
+THEMES = ("textual-dark", "textual-light")   # the themes offered: the ones whose colours are checked
 
 
 class TeleNotifyApp(App):
@@ -101,10 +102,13 @@ class TeleNotifyApp(App):
 
     def __init__(self, paths: Paths, refresh_seconds: float = REFRESH_SECONDS):
         super().__init__()
-        # the ansi themes take the terminal's own colours: dark in a dark terminal even as
-        # "light", and our hover and selection styles vanish in them (#112, the owner's check)
-        for name in ("ansi-dark", "ansi-light"):
-            self.unregister_theme(name)
+        # only the two themes whose colours are checked are offered (#81): the ansi themes take the
+        # terminal's own colours, dark in a dark terminal even as "light", and our hover and selection
+        # styles vanish in them (#112, the owner's check); in the other built-in themes the chart's
+        # series and some text fall below the contrast we need (#118)
+        for name in list(self.available_themes):
+            if name not in THEMES:
+                self.unregister_theme(name)
         # TEXTUAL_THEME may have named one: Textual already built its colours from it, so apply
         # the theme it falls back to now (#116, review run 1)
         self.theme = self.current_theme.name
@@ -183,11 +187,20 @@ class TeleNotifyApp(App):
         self.push_screen(ConfirmModal("Settings has unsaved changes. Quit and lose them?", "Quit"), done)
 
     def action_show(self, tab: str) -> None:
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == tab:
+            # already shown: no tab change brings focus back, so don't send it to the tab bar;
+            # the pane's main widget gets it, as when the tab is first shown (#60)
+            pane = self._active_pane()
+            focus_main = getattr(pane, "focus_main", None)
+            if callable(focus_main):
+                focus_main()
+            return
         # Hand focus to the tab bar first: if a widget inside the old tab kept
         # focus, Textual would move it to a sibling in that hidden tab and
         # TabbedContent would switch straight back.
         self.set_focus(self.query_one(Tabs))
-        self.query_one(TabbedContent).active = tab
+        tabs.active = tab
         self.call_after_refresh(self.action_reload)
 
     def on_tabbed_content_tab_activated(self, _event: TabbedContent.TabActivated) -> None:

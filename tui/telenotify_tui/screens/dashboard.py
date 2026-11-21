@@ -465,6 +465,12 @@ class DashboardPane(Vertical):
         Binding("p", "pick_period", "Period"),
         Binding("d", "custom_range", "Dates"),
         Binding("v", "flip_top", "Flip"),
+        # capitals, as a deliberate press; each asks first, as the buttons do (#83). Named under the
+        # Bot box and in the keys panel, not in the footer (at 80 columns they'd push the tab keys off
+        # it) nor on the buttons (at 100 columns the service name beside them would be cut)
+        Binding("S", "service('start')", "Start", show=False),
+        Binding("X", "service('stop')", "Stop", show=False),
+        Binding("R", "service('restart')", "Restart", show=False),
     ]
 
     def __init__(self) -> None:
@@ -533,6 +539,7 @@ class DashboardPane(Vertical):
         self.query_one("#dash-activity").border_title = "Activity"
         bot_box = self.query_one("#dash-bot")
         bot_box.border_title = "Bot"
+        self._top_titles()
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
         # the chart is drawn in the theme's colours (#102): draw it again when the theme changes
         self.app.theme_changed_signal.subscribe(self, self._theme_changed)
@@ -556,13 +563,15 @@ class DashboardPane(Vertical):
         self.call_after_refresh(self._show_status)
 
     def _top_titles(self) -> None:
-        hint = "v: activity" if self.has_class("-narrow") else ""
-        self.query_one("#dash-bot").border_subtitle = hint
+        keys = "S start · X stop · R restart"   # the service keys (#83)
+        self.query_one("#dash-bot").border_subtitle = keys + ("  ·  v: activity" if self.has_class("-narrow") else "")
         self.query_one("#dash-activity").border_title = "Activity" + ("  (v: bot)" if self.has_class("-narrow") else "")
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "flip_top":
             return self.has_class("-narrow")   # only while the two boxes don't fit side by side
+        if action == "service":
+            return None if self._busy else True   # shown, but off while one runs (as the buttons are)
         return True
 
     def action_flip_top(self) -> None:
@@ -598,7 +607,11 @@ class DashboardPane(Vertical):
         return (box.id == "dash-activity") == self.has_class("-show-activity")
 
     def on_show(self) -> None:
-        # Focus the feed when the tab is shown, so f / c / a and the arrow keys work at once.
+        self.focus_main()
+
+    def focus_main(self) -> None:
+        """Focus the feed when the tab is shown (or its key pressed again), so f / c / a and
+        the arrow keys work at once; focus already in this tab stays where it is."""
         focused = self.screen.focused
         if focused is None or self not in focused.ancestors:
             self.query_one("#feed", DataTable).focus()
@@ -984,9 +997,13 @@ class DashboardPane(Vertical):
     @on(Button.Pressed, "#svc-buttons Button")
     def _service_button(self, event: Button.Pressed) -> None:
         event.stop()
+        self.action_service(str(event.button.id).removeprefix("svc-"))
+
+    def action_service(self, action: str) -> None:
+        """Start, stop or restart this mode's service (a button or S / X / R), after asking."""
         if self._busy:
             return
-        action = str(event.button.id).removeprefix("svc-")
+        self._show_top("bot")   # a narrow window shows the Bot box, where the answer appears
         name = bot.SERVICES[self.mode]
 
         def answered(yes: bool | None) -> None:
@@ -1016,6 +1033,7 @@ class DashboardPane(Vertical):
         self._busy = True
         for b in self.query("#svc-buttons Button"):
             b.disabled = True
+        self.refresh_bindings()
         result.update(Text(f"{action} {name}…", style="dim"))
         try:
             ok, msg = await bot.service_action(self.mode, action)
@@ -1025,6 +1043,7 @@ class DashboardPane(Vertical):
             self._busy = False
             for b in self.query("#svc-buttons Button"):
                 b.disabled = False
+            self.refresh_bindings()
         if ok:
             result.update(Text(f"{action} {name}: done", style="green"))
         else:

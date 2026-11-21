@@ -11,6 +11,7 @@ presentation forms).
 
 from __future__ import annotations
 
+from textual.app import App
 from textual.content import Content
 from textual.geometry import Size
 from textual.selection import Selection
@@ -82,3 +83,11 @@ class PostView(Static):
                 picks.append((y - len(head), x0, x1))
         parts = head_text + ([logical(block.text, body, picks)] if picks else [])
         return "\n".join(parts), "\n"
+
+
+def copy_post(app: App, text: str) -> None:
+    """Put a post's text on the clipboard (OSC 52, through the terminal) and say so. The text is
+    copied as stored, in reading order, as a mouse selection in a PostView copies it (#78)."""
+    app.copy_to_clipboard(text)
+    n = len(text)
+    app.notify(f"Copied the post's text ({n} character{'s' if n != 1 else ''}).", markup=False)

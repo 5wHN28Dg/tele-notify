@@ -721,7 +721,14 @@ class SettingsPane(Vertical):
             t.append(f" · {errs} problem{'s' if errs != 1 else ''} to fix", style="bold red")
         if warns:
             t.append(f" · {warns} warning{'s' if warns != 1 else ''}", style="yellow")
-        t.append(f" · api_id {sec['api_id']} · api_hash {sec['api_hash']}", style="dim")
+        if not self.problems:   # said, not left out: the count is always in view (#58)
+            t.append(" · no problems")
+        # the secrets last and short: at 80 x 24 the bar has 50 columns, and what gets cut is these
+        if sec["api_id"] == sec["api_hash"]:
+            t.append(f" · API keys {sec['api_id']}", style="dim")
+        else:
+            missing = next(k for k, v in sec.items() if v == "missing")
+            t.append(f" · {missing} missing", style="dim")
         self.query_one("#settings-status", Static).update(t)
 
     def update_problems(self) -> None:
