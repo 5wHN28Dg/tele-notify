@@ -211,6 +211,97 @@ suite "listener":
     waitFor l.processQueue()
     check f.forwarded.len == 1
 
+  test "each post's own Telegram date is recorded; backlog posts are counted apart from live ones (#74)":
+    let f = FakeTg()
+    let posted = getTime().toUnix - 120
+    var a = msg(-1, 1, good)             # in the start-up backlog: caught up
+    a.date = posted
+    var r = msg(-1, 2, bad)
+    r.date = posted - 5
+    f.chats[-1] = @[a, r]
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    var live = msg(-2, 3, "We are hiring a junior network technician in Basra. Fresh graduates welcome.")  # live
+    live.date = getTime().toUnix - 2
+    l.enqueue live
+    waitFor l.processQueue()
+    check f.forwarded == @[(-1'i64, 1'i64), (-2'i64, 3'i64)]
+    check st.postedAt(-1, 1) == posted and st.postedAt(-1, 2) == posted - 5
+    check st.caughtUp(-1, 1) and st.caughtUp(-1, 2) and not st.caughtUp(-2, 3)
+    let lat = st.latency(1)
+    check lat.caughtUp.count == 1 and lat.caughtUp.median in 120'i64 .. 130
+    check lat.live.count == 1 and lat.live.median in 2'i64 .. 12
+    check lat.reviewed.count == 0
+
+  test "live messages held while the backlog is read are caught up, not live (#74)":
+    let f = FakeTg()
+    f.chats[-1] = @[msg(-1, 10, good)]
+    let (l, st) = setup(f)
+    var fired = false
+    f.duringUnread = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if not fired:
+          fired = true
+          l.enqueue msg(-2, 11, "We are hiring a junior network technician in Basra. Fresh graduates welcome.")
+    waitFor l.bootstrap()
+    check f.forwarded == @[(-1'i64, 10'i64), (-2'i64, 11'i64)]
+    check st.caughtUp(-2, 11)
+
+  test "messages that arrive while the connection is down or catching up are caught up, not live (#74)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    const tech = "We are hiring a junior network technician in Basra. Fresh graduates welcome."
+    l.onConnectionState("connectionStateConnecting")          # lost
+    l.enqueue msg(-2, 1, tech)
+    l.onConnectionState("connectionStateUpdating")            # back: TDLib replays what was missed
+    l.enqueue msg(-2, 2, tech & " Zubair")
+    l.onConnectionState("connectionStateReady")               # caught up
+    l.enqueue msg(-2, 3, tech & " Umm Qasr")
+    waitFor l.processQueue()
+    check st.seen(-2, 1) and st.seen(-2, 2) and st.seen(-2, 3)
+    check st.caughtUp(-2, 1) and st.caughtUp(-2, 2) and not st.caughtUp(-2, 3)
+
+  test "a chat's backlog read on retry is caught up too (#74)":
+    let f = FakeTg()
+    f.chats[-2] = @[msg(-2, 5, "We are hiring a junior network technician in Basra. Fresh graduates welcome.")]
+    f.unreadFails.incl -2
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    f.unreadFails.clear
+    waitFor l.retryFailedChats()
+    waitFor l.processQueue()
+    check f.forwarded == @[(-2'i64, 5'i64)]
+    check st.caughtUp(-2, 5)
+
+  test "an edited post judged again is timed from its edit (#74)":
+    let f = FakeTg()
+    var teaser = msg(-1, 30, "اعلان وظائف قريبا")
+    teaser.date = getTime().toUnix - 6 * 3600     # the teaser went up 6 hours ago
+    f.chats[-1] = @[teaser]
+    let (l, st) = setup(f)
+    waitFor l.bootstrap()
+    check st.previous(-1, 30).action == "rejected"
+    var real = msg(-1, 30, good & " حقل الرميلة")
+    real.edited = true
+    real.date = teaser.date
+    real.editDate = getTime().toUnix - 30          # edited into the real ad 30 s ago
+    l.enqueue real
+    waitFor l.processQueue()
+    check st.previous(-1, 30).action == "forwarded"
+    check st.postedAt(-1, 30) == real.editDate and not st.caughtUp(-1, 30)
+    check st.latency(1).live.median in 30'i64 .. 40
+    var noDate = msg(-1, 31, "اعلان وظائف قريبا")  # an edit without its time: left out
+    f.chats[-1].add noDate
+    let (l2, st2) = setup(f)
+    waitFor l2.bootstrap()
+    noDate.text = good
+    noDate.edited = true
+    noDate.date = 1_700_000_000
+    l2.enqueue noDate
+    waitFor l2.processQueue()
+    check st2.previous(-1, 31).action == "forwarded" and st2.postedAt(-1, 31) == 0
+
   test "dry run: judged and recorded, nothing forwarded or marked read":
     let f = FakeTg()
     f.chats[-1] = @[msg(-1, 1, good), msg(-1, 2, unclear)]

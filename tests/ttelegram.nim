@@ -20,6 +20,12 @@ suite "parseMessage":
     check m.buttons == @["https://taeen.iq/ar/jobs/x"]   # the callback button is ignored
     check m.photoFileId == 0
 
+  test "the post's date and its last edit's (#74)":
+    let m = parseMessage(%*{"id": 9, "chat_id": 1, "date": 1700000000, "edit_date": 1700003600,
+      "content": {"@type": "messageText", "text": {"text": "x"}}})
+    check m.date == 1700000000 and m.editDate == 1700003600
+    check parseMessage(%*{"id": 9, "chat_id": 1, "date": 5}).editDate == 0   # never edited
+
   test "photo: caption and the largest reasonable size":
     let m = parseMessage(%*{"id": 5, "chat_id": 1, "content": {"@type": "messagePhoto",
       "caption": {"text": "#Basrah", "entities": []},

@@ -29,6 +29,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS processed (
   chat_id INTEGER, msg_id INTEGER, chat_title TEXT, verdict TEXT, role TEXT,
   reasons TEXT, action TEXT, at INTEGER, text_hash TEXT, raw_text TEXT, album_id INTEGER,
+  posted_at INTEGER, caught_up INTEGER,
   PRIMARY KEY (chat_id, msg_id));
 CREATE INDEX IF NOT EXISTS processed_at ON processed (at);
 CREATE INDEX IF NOT EXISTS processed_chat_at ON processed (chat_id, at);
@@ -168,9 +169,9 @@ def small_state(path: Path, now: int | None = None, *, dry_run: bool = True,
         ci = i % min(len(titles), 10)
         rows.append((chat_ids[ci], 100 + i, titles[ci], v, ROLES[i % len(ROLES)],
                      REASONS[v][i % len(REASONS[v])], ACTIONS[v], now - 40 - i * 1500, _hash(text), text,
-                     None))
+                     None, now - 100 - i * 1500, 0))   # posted_at: a minute before it was judged; live (#74)
     if "processed" not in skip_tables:
-        db.executemany("INSERT INTO processed VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        db.executemany("INSERT INTO processed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     if "reviews" not in skip_tables:
         pending = [r for r in rows if r[3] == "review"][:8]
         for j, r in enumerate(pending):
@@ -250,7 +251,8 @@ def build_big(path: Path, posts: int = BIG_POSTS, reviews: int = BIG_REVIEWS, ch
     db.execute("PRAGMA synchronous=OFF")
     create(db)
     start = now - SPAN_DAYS * 86400
-    db.executemany("INSERT INTO processed VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    db.executemany("INSERT INTO processed (chat_id, msg_id, chat_title, verdict, role, reasons, action, at, "
+                   "text_hash, raw_text, album_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                    _big_rows(posts, chats, start, SPAN_DAYS * 86400, rng))
     picked = db.execute("SELECT chat_id, msg_id, chat_title, role, reasons, at FROM processed "
                         "WHERE verdict = 'review' ORDER BY at DESC LIMIT ?", (reviews,)).fetchall()
