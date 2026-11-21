@@ -122,7 +122,7 @@ class SearchPane(Vertical):
         Binding("j", "rejudge(False)", "Re-judge"),
         Binding("J", "rejudge(True)", "Re-judge + links"),
         Binding("p", "paste", "Paste a post"),
-        Binding("y", "copy_post", "Copy post"),
+        Binding("y", "copy_post", "Copy post", show=False),   # in the keys panel; the footer keeps the tab keys at 80 columns
         Binding("escape", "close_paste", "Back", show=False),
     ]
 

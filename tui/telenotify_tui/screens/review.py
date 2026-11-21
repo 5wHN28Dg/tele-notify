@@ -132,7 +132,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         Binding("r", "check", "Filter read"),
         Binding("h", "toggle_history", "History"),
         Binding("u", "undo", "Undo"),
-        Binding("y", "copy_post", "Copy post"),
+        Binding("y", "copy_post", "Copy post", show=False),   # in the keys panel; the footer keeps the tab keys at 80 columns
         Binding("space", "scroll_post(1)", "Scroll post"),
         Binding("b", "scroll_post(-1)", "Scroll back", show=False),
     ]
