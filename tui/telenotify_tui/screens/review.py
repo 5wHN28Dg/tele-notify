@@ -283,9 +283,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 self.note(f"{self._unrecorded}  ·  {problem}", "bad")
             else:
                 self.note(problem, "warn")
-            if self._history_mode or not self._items:
-                said = BUSY_NOTE if busy else f"Can't read the state file: {e}"
-                self.query_one("#review-empty", Static).update(Content(clean(said)))
+            if self._history_mode or not self._items:   # the note above says why, once (#106)
+                self.query_one("#review-empty", Static).update(Content("Nothing to show until the state file can be read."))
                 self._show_only("#review-empty")
             self._sync_controls()
             return

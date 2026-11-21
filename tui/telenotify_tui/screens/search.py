@@ -36,7 +36,7 @@ from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
-from ..store import Judged
+from ..store import BUSY, Judged, is_busy, unreadable_note
 from . import search_data
 
 DEBOUNCE_SECONDS = 0.35
@@ -277,6 +277,7 @@ class SearchPane(Vertical):
         # While the bot holds a lock, wait for it in short steps, so a replaced
         # search or quitting the screen doesn't sit out a 10 s busy timeout.
         deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        note = ""   # a failed read, in words, where the selected post's details go
         while True:
             try:
                 found, rows, problem = self._read(worker, query, verdict, chat_id, chats)
@@ -286,12 +287,14 @@ class SearchPane(Vertical):
                     return
                 if _locked(e) and time.monotonic() < deadline:
                     continue
-                found, rows, problem = None, [], f"couldn't read the state: {e}"
+                # the Dashboard's words, short in the count (it shares its row at 80 columns), whole beside it
+                found, rows, problem = None, [], "file busy" if is_busy(e) else "can't read"
+                note = f"{BUSY}. ctrl+r searches again." if is_busy(e) else unreadable_note(self._service())
                 break
         if worker.is_cancelled:
             return
         try:
-            self.app.call_from_thread(self._apply, generation, found, rows, problem, focus_results)
+            self.app.call_from_thread(self._apply, generation, found, rows, problem, focus_results, note)
         except RuntimeError:   # the app closed while we read
             pass
 
@@ -318,8 +321,11 @@ class SearchPane(Vertical):
                 return found, [], "nothing judged yet"
             return found, search_data.search(s, query, verdict, chat_id, limit=LIMIT), ""
 
+    def _service(self) -> str:
+        return bot.SERVICES["dry-run" if self.app.paths.dry_run else "real"]
+
     def _apply(self, generation: int, chats: list[tuple[int, str]] | None, rows: list[Judged], problem: str,
-               focus_results: bool) -> None:
+               focus_results: bool, note: str = "") -> None:
         if generation != self._generation or not self.is_mounted:
             return   # a newer search is on its way
         self._pending = None
@@ -332,6 +338,8 @@ class SearchPane(Vertical):
         moved = focus_results and self.app.focused is table
         self._fill(rows, cursor=table.cursor_row if moved else None)
         count = self.query_one("#count", Static)
+        if note:
+            self.query_one("#search-detail-head", Static).update(Text(note, style="bold"))
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:

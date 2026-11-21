@@ -175,6 +175,8 @@ class TeleNotifyApp(App):
         if not settings.dirty:
             self.exit()
             return
+        if isinstance(self.screen, ConfirmModal):   # a held ctrl+q: one question is enough (#92)
+            return
 
         def done(yes: bool | None) -> None:
             if yes:

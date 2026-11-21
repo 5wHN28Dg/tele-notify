@@ -40,6 +40,7 @@ from textual.widgets.option_list import Option
 from .. import bot
 from ..clean import clean
 from ..rtl import visual
+from ..store import BUSY, is_busy
 from . import settings_data as sd
 from .armed import Armed
 
@@ -646,7 +647,11 @@ class SettingsPane(Vertical):
                 self.store_chats = s.chats()
         except (sqlite3.Error, OSError, ValueError) as e:  # a locked or broken state file mustn't break settings
             self.has_chat_table, self.store_chats = False, []
-            self.notify(f"Couldn't read the chat list: {e}", severity="warning", markup=False)
+            if is_busy(e):   # the Dashboard's words for a lock (#105)
+                self.notify(f"{BUSY}, so the chat list wasn't read. Opening this tab again retries.",
+                            severity="warning", markup=False)
+            else:
+                self.notify(f"Couldn't read the chat list: {e}", severity="warning", markup=False)
 
     def reload(self) -> None:
         """Called by the app when the tab is shown and on ctrl+r."""

@@ -960,3 +960,36 @@ async def test_the_dry_run_note_follows_the_saved_config_and_the_flag(paths, cfg
         await pilot.pause()
         assert json.loads(cfg_path.read_text(encoding="utf-8"))["dry_run"] is False
         assert ("dry run" in note()) == flag
+
+
+async def test_a_locked_state_file_is_worded_as_on_the_dashboard(paths, cfg_path, monkeypatch):
+    """#105: Settings said "Couldn't read the chat list: database is locked"; the Dashboard
+    and Review say the state file is busy, in the same words."""
+    from telenotify_tui.store import BUSY, Store
+
+    monkeypatch.setattr(TeleNotifyApp, "store", lambda self, timeout=10: Store(self.paths.state, 0.1))
+    holder = sqlite3.connect(paths.state, isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_settings(pilot)
+            said = messages(app)
+            assert BUSY in said and "chat list" in said
+            assert "database is locked" not in said
+    finally:
+        holder.close()
+
+
+async def test_holding_ctrl_q_asks_once(paths, cfg_path):
+    """#92: holding ctrl+q with unsaved edits stacked one quit question per repeat."""
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        await add_keyword(pilot, pane, "roles", "level_keywords_en", "new grad")
+        await pilot.press("ctrl+q", "ctrl+q", "ctrl+q", "ctrl+q")
+        await pilot.pause()
+        assert sum(isinstance(s, ConfirmModal) for s in app.screen_stack) == 1
+        await pilot.press("n")
+        await pilot.pause()
+        assert not isinstance(app.screen, ConfirmModal) and app.is_running and pane.dirty
