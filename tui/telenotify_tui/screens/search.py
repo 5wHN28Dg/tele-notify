@@ -83,6 +83,15 @@ def _locked(e: Exception) -> bool:
     return isinstance(e, sqlite3.OperationalError) and "locked" in str(e)
 
 
+def _set_options(sel: Select, options: list, value) -> None:
+    """New options and value, without a Changed message. The shown label follows even when
+    the value stays the same ("all"): setting an equal value doesn't redraw it."""
+    with sel.prevent(Select.Changed):
+        sel.set_options(options)
+        sel.value = value
+        sel.mutate_reactive(Select.value)
+
+
 def row_key(j: Judged) -> str:
     return f"{j.chat_id}:{j.msg_id}"
 
@@ -244,9 +253,7 @@ class SearchPane(Vertical):
         if [o[1] for o in options] != [o[1] for o in getattr(self, "_chat_options", [])] or not self._chats_shown:
             self._chats_shown = True
             self._chat_options = options
-            with sel.prevent(Select.Changed):
-                sel.set_options(options)
-                sel.value = current if any(o[1] == current for o in options) else "all"
+            _set_options(sel, options, current if any(o[1] == current for o in options) else "all")
 
     def _chat_dropdown_toggled(self, expanded: bool) -> None:
         if not expanded and self._chats_waiting is not None:
@@ -343,9 +350,7 @@ class SearchPane(Vertical):
             self.query_one("#search-detail-head", Static).update(Text(note, style="bold"))
             sel = self.query_one("#chat", Select)
             if not self._chats_shown and not sel.expanded:   # not "loading" any more
-                with sel.prevent(Select.Changed):
-                    sel.set_options([(CHATS_NOT_READ, "all")])
-                    sel.value = "all"
+                _set_options(sel, [(CHATS_NOT_READ, "all")], "all")
         if problem:
             count.update(Text(clean(problem), style="yellow"))
         else:

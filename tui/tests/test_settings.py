@@ -1106,3 +1106,34 @@ async def test_an_unreadable_chat_list_stays_said_in_the_chat_note(paths, cfg_pa
         await pilot.pause()
         said = [m.message for m in app._notifications][-1:]
         assert len(chat_toasts(app)) == n + 1 and "wasn't read either" in said[0], [m.message for m in app._notifications]
+
+
+async def test_the_retry_words_follow_unsaved_edits(paths, cfg_path):
+    """Review run 3: the note said "ctrl+r retries" after an edit, where ctrl+r offers to revert."""
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        holder = hold_lock(paths.state)
+        try:
+            pane = await open_settings(pilot)
+            await pilot.pause()
+            assert "ctrl+r retries" in str(pane.query_one("#chat-note", Static).render())
+            await add_keyword(pilot, pane, "roles", "level_keywords_en", "new grad")
+            assert pane.dirty
+            note = str(pane.query_one("#chat-note", Static).render())
+            assert "ctrl+r" not in note and "opening this tab again retries" in note
+        finally:
+            holder.kill()
+            holder.wait()
+
+
+async def test_the_log_command_ends_the_chat_note(paths, cfg_path):
+    """Review run 3: "…-u tele-notify-dryrun Edit chat IDs…": a copy of the command took the advice too."""
+    paths.state.write_bytes(b"this is not a database" * 100)
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(200, 50)) as pilot:
+        pane = await open_settings(pilot)
+        await pilot.pause()
+        note = str(pane.query_one("#chat-note", Static).render())
+        assert note.startswith("Edit chat IDs directly")
+        assert note.endswith("journalctl --user -u tele-notify-dryrun")

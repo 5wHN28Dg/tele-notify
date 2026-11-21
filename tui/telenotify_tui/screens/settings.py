@@ -524,7 +524,7 @@ class SettingsPane(Vertical):
         self.problems: list[sd.Problem] = []
         self.has_chat_table = False
         self.store_chats: list = []
-        self.chats_problem = ""   # why the last chat-list read failed, in words ("" when it worked)
+        self.chats_error = ""   # why the last chat-list read failed: "busy", "unreadable" or "" (it worked)
         self.chat_filter = ""
         self._tab_label: str | None = None
         self.has_dups = False   # some list has an entry twice: "Remove duplicates" is offered
@@ -652,17 +652,24 @@ class SettingsPane(Vertical):
             with self.app.store(CHATS_TIMEOUT) as s:  # type: ignore[attr-defined]
                 self.has_chat_table = s.has_table("chats")
                 self.store_chats = s.chats()
-            self.chats_problem = ""
+            self.chats_error = ""
         except (sqlite3.Error, OSError, ValueError) as e:  # a locked or broken state file mustn't break settings
             self.has_chat_table, self.store_chats = False, []
-            if is_busy(e):   # the Dashboard's words (#105)
-                retry = "opening this tab again retries" if self.dirty else "ctrl+r retries"
-                self.chats_problem = f"{BUSY}, so the chat list wasn't read; {retry}."
-            else:
-                self.chats_problem = f"The chat list wasn't read. {unreadable_note(bot.service(self.paths.dry_run))}"
+            self.chats_error = "busy" if is_busy(e) else "unreadable"
             if say:
                 self.notify(self.chats_problem, severity="warning", markup=False)
         return self.chats_problem
+
+    @property
+    def chats_problem(self) -> str:
+        """The failed chat-list read in the Dashboard's words (#105), "" when it worked. Built
+        when said: with unsaved edits, ctrl+r reverts instead of retrying."""
+        if self.chats_error == "busy":
+            retry = "opening this tab again retries" if self.dirty else "ctrl+r retries"
+            return f"{BUSY}, so the chat list wasn't read; {retry}."
+        if self.chats_error:
+            return f"The chat list wasn't read. {unreadable_note(bot.service(self.paths.dry_run))}"
+        return ""
 
     def reload(self) -> None:
         """Called by the app when the tab is shown and on ctrl+r."""
@@ -789,7 +796,8 @@ class SettingsPane(Vertical):
         self.query_one("#chat-ids").set_class(named, "hidden")
         note = self.query_one("#chat-note", Static)
         if not named and self.chats_problem:   # not "not yet": the list couldn't be read
-            note.update(Text(f"{self.chats_problem} Edit chat IDs directly meanwhile.", style="bold"))
+            # the advice first: the note ends with the command, so it copies cleanly
+            note.update(Text(f"Edit chat IDs directly for now. {self.chats_problem}", style="bold"))
             self.query_one("#editor-chats", KeywordEditor).refresh_items()
             return
         if not named:

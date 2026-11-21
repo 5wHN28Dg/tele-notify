@@ -7,6 +7,7 @@ it is visible, so the numbers stay live while the bot runs.
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from typing import ClassVar
 from weakref import WeakKeyDictionary
@@ -28,6 +29,7 @@ from .screens.settings import ConfirmModal, SettingsPane
 from .store import Store
 
 REFRESH_SECONDS = 5
+RELOAD_LOST_SECONDS = 1.0   # a queued tab reload that hasn't run by then never will
 
 
 class TeleNotifyApp(App):
@@ -113,7 +115,7 @@ class TeleNotifyApp(App):
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
         self.refresh_seconds = refresh_seconds
-        self._reload_queued = False
+        self._reload_queued: float | None = None   # when a reload was queued (monotonic), until it runs
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
 
     def notify(self, message: str, *, title: str = "", severity="information",
@@ -157,6 +159,7 @@ class TeleNotifyApp(App):
             pane.reload()
 
     def action_reload(self) -> None:
+        self._reload_queued = None   # a queued reload is done by this one
         pane = self._active_pane()
         if pane is not None and hasattr(pane, "reload"):
             pane.reload()
@@ -204,12 +207,10 @@ class TeleNotifyApp(App):
     def _reload_soon(self) -> None:
         """Reload the shown tab after this refresh. Asked again before it runs (start-up,
         a tab shown at once), it still reloads once: a read of a locked file takes time."""
-        if self._reload_queued:
+        now = time.monotonic()
+        # Textual runs the callback on the screen on top: if that screen goes away first,
+        # the callback is dropped. A request older than a second is taken as lost.
+        if self._reload_queued is not None and now - self._reload_queued < RELOAD_LOST_SECONDS:
             return
-        self._reload_queued = True
-
-        def reload() -> None:
-            self._reload_queued = False
-            self.action_reload()
-
-        self.call_after_refresh(reload)
+        self._reload_queued = now
+        self.call_after_refresh(self.action_reload)

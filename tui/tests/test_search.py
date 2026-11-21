@@ -18,6 +18,15 @@ from telenotify_tui.screens.search import SearchPane, row_key
 from telenotify_tui.store import Store
 
 
+def search_bar(app) -> str:
+    """The search bar's row as drawn (the cell grid of a screenshot)."""
+    from audit import svg
+    w, h = app.size
+    lines = svg.text(app.export_screenshot(), w, h).splitlines()
+    bar = app.query_one("#search-bar").region
+    return "\n".join(lines[bar.y:bar.bottom])
+
+
 def text_of(app, selector: str) -> str:
     """What the widget shows, in reading order (a post body is drawn right to
     left where it should be; test_rtl.py checks how it is drawn)."""
@@ -622,5 +631,15 @@ async def test_an_unreadable_state_file_is_said_in_words(paths):
         assert count == "can't read"
         assert "Can't read the state file." in head and "journalctl --user -u tele-notify-dryrun" in head
         assert "DatabaseError" not in count + head and "not a database" not in count + head
-        sel = app.query_one("#chat", Select)                     # review run 2: not "loading chats…"
-        assert [str(label) for label, _ in sel._options] == ["chats not read"]
+        assert "chats not read" in search_bar(app)              # review runs 2 and 3: as drawn
+        assert "loading chats" not in search_bar(app)
+
+
+async def test_the_chat_picker_shows_all_chats_once_read(paths):
+    """Review run 3: the picker kept showing "loading chats…" after the chats were read,
+    because the value stayed "all" and an equal value doesn't redraw the label."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_search(app, pilot)
+        assert "4 results" in search_bar(app)
+        assert "all chats" in search_bar(app) and "loading chats" not in search_bar(app)
