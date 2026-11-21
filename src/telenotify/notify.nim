@@ -38,8 +38,9 @@ const
   transientRetryMs* = 2000        ## the wait before trying a timed-out or 5xx send again
   oneSendMs* = 2 * sendTimeoutMs + transientRetryMs
     ## the longest one message takes when it's tried twice (12 s)
-  stopFlushMs* = oneSendMs + 1000
-    ## at a stop: long enough for the message being sent, tried twice
+  stopFlushMs* = sendTimeoutMs + 1000 + oneSendMs
+    ## at a stop: long enough for the message being sent (its link, the pace,
+    ## tried twice: 18 s)
   logOutFlushMs* = 70_000
     ## at a stop after a log-out: the message being sent (its link 5 s, a send,
     ## a 429's wait of up to 30 s, the send again: 45 s), the pace (1 s), then
@@ -269,10 +270,9 @@ proc pushFirst*(q: NotifyQueue, text: string) =
 proc flush*(q: NotifyQueue, timeoutMs = 10_000) {.async.} =
   ## Wait until everything queued is sent, at most `timeoutMs`. Gives up
   ## with one log line saying how many weren't sent.
-  var waited = 0
-  while not q.idle and waited < timeoutMs:
+  let start = getMonoTime()     # time that passed, not sleeps counted: a blocking lookup counts too
+  while not q.idle and (getMonoTime() - start).inMilliseconds < timeoutMs:
     await sleepAsync(20)
-    waited += 20
   if not q.idle:
     let left = q.pending.len + (if q.sending: 1 else: 0)
     q.log &"   ({left} notifications not sent: stopped waiting for your bot)"

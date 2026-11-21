@@ -395,8 +395,8 @@ suite "notification reliability (#127)":
 
   test "the waits at a stop fit what they wait for (under systemd's 90 s)":
     check oneSendMs == sendTimeoutMs + transientRetryMs + sendTimeoutMs        # a send tried twice
-    check stopFlushMs >= oneSendMs
     let linkMs = sendTimeoutMs                     # tellWithLink asks TDLib for the post's link first
+    check stopFlushMs >= linkMs + notifyPaceDefault + oneSendMs
     let inFlight = linkMs + sendTimeoutMs + maxRetryAfterMs + sendTimeoutMs   # a send waiting out a 429
     check logOutFlushMs >= inFlight + notifyPaceDefault + oneSendMs
     check logOutFlushMs < 90_000

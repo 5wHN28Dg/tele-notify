@@ -246,3 +246,15 @@ suite "kept addresses (#127)":
     let before = addressLookups
     check waitFor(fetch("http://127.0.0.1:" & $port & "/ok", allowPrivate = true, keepAddressMs = 600_000)).ok
     check addressLookups == before + 1
+
+
+  test "after a failed connect, a failing lookup still falls back to the address kept before":
+    forgetKeptAddresses()
+    let probe = newSocket()
+    probe.bindAddr(Port(0), "127.0.0.1")
+    let closed = probe.getLocalAddr()[1]
+    probe.close()
+    # the address stays in the table, expired: resolve's fallback for a lookup that fails
+    check not waitFor(fetch("http://127.0.0.1:" & $closed & "/x", allowPrivate = true,
+                            keepAddressMs = 600_000)).ok
+    check keptAddressFor("127.0.0.1", closed, allowPrivate = true) == "127.0.0.1"   # kept, only expired

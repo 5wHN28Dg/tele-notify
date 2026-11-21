@@ -101,7 +101,19 @@ proc addressKey(host: string, port: Port, allowPrivate: bool): string =
   host & ":" & $port.int & (if allowPrivate: ":private" else: "")
 
 proc forgetAddress(host: string, port: Port, allowPrivate: bool) =
-  {.cast(gcsafe).}: keptAddresses.del(addressKey(host, port, allowPrivate))
+  ## The next fetch looks the name up again; the old address stays the
+  ## fallback while lookups fail (marked expired, not deleted: a network that
+  ## drops takes the resolver with it, and must not then fail every send for
+  ## a minute when it's back).
+  {.cast(gcsafe).}:
+    let key = addressKey(host, port, allowPrivate)
+    if key in keptAddresses:
+      let k = keptAddresses[key]
+      keptAddresses[key] = (k[0], k[1], 0.0)
+
+proc keptAddressFor*(host: string, port: Port, allowPrivate: bool): string =
+  ## Tests: the address kept for this host, expired or not ("" for none).
+  {.cast(gcsafe).}: keptAddresses.getOrDefault(addressKey(host, port, allowPrivate))[0]
 
 proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
