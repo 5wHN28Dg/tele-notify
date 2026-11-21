@@ -20,7 +20,8 @@
 ## * **Review posts stay in tele-notify's review queue** (`telenotify
 ##   review`), not in Saved Messages, as you wanted. `review` only writes
 ##   your decision to the database (so it works while the bot runs); the
-##   running bot sends the posts you approved (`sendApproved`).
+##   running bot sends the posts you approved (`sendApproved`) once their
+##   30-second undo window is over (#62).
 ## * **Dry run** (`--dry-run` or `"dry_run": true`): judge and record
 ##   everything, but forward nothing and mark nothing read. That's stage 4:
 ##   running next to the Python bot to compare.
@@ -563,11 +564,16 @@ proc retryFailedChats*(l: Listener) {.async.} =
     finally: l.retrying = false
     l.tellSummary()
 
-proc sendApproved*(l: Listener) {.async.} =
-  ## Send the posts you approved in `telenotify review`. A failure puts the
-  ## post back in the review queue, with the reason.
-  for r in l.state.approvedReviews():
+proc sendApproved*(l: Listener, at = 0'i64) {.async.} =
+  ## Send the posts you approved (`telenotify review`, the terminal screen)
+  ## whose undo window is over at `at` (0: now). Each is claimed first
+  ## (`claimReview`): one you undid meanwhile is skipped, and one being sent
+  ## can't be undone any more. A failure puts the post back in the review
+  ## queue, with the reason.
+  let at = if at == 0: getTime().toUnix else: at
+  for r in l.state.dueReviews(at):
     if l.stop[]: return
+    if not l.state.claimReview(r.id, at): continue   # undone since it was listed
     var link = r.link
     try:
       if not await l.tg.forward(l.cfg.targetChat, r.chatId, r.albumIds):
@@ -575,7 +581,7 @@ proc sendApproved*(l: Listener) {.async.} =
         if link == "": raise newException(ValueError, "no link to the post")
         await l.tg.sendText(l.cfg.targetChat, "match: " & r.role & "\npost link: " & link)
       l.state.addPublished(r.chatId, r.msgId, r.text)
-      discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
+      discard l.state.decideReview(r.id, "sent", fromStatus = "sending")
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
       if l.cfg.notifyPublished:
         l.tell "✅ Published after your review: " & isolated(r.role) & "\n" &

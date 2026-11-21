@@ -149,6 +149,11 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     st.setMeta("mode", if dry: "dry-run" else: "real")
     st.setMeta("started_at", $getTime().toUnix)
     st.setMeta("connection", "starting")
+    # a post this bot was sending when it last stopped: back to the queue,
+    # for you to check, never sent twice
+    let reopened = st.reopenInterruptedSends()
+    if reopened > 0:
+      echo &"   {reopened} approved post(s) were being sent when the bot stopped: back in the review queue"
   except CatchableError as e:
     echo "   could not update the state database: ", e.msg
   var l: Listener
@@ -273,10 +278,27 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     raise newException(ValueError, "the Telegram session ended (" & sessionLost &
       "). If you logged out, run `telenotify login` again")
 
-proc cmdReview*(cfg: Config, dryRun: bool) =
-  ## Go through the review queue: approve each post or discard it. This
-  ## only records your decision, so it works while the bot runs; the
-  ## running bot sends what you approved within a few seconds.
+proc stdinIsTerminal(): bool = isatty(getFileHandle(stdin)) == 1
+
+proc askYesNo*(question: string, input: File = stdin, interactive = stdinIsTerminal()): bool =
+  ## Ask `question` and wait for an answer: true only for y / yes. When the
+  ## input isn't a terminal (a pipe, a script), the answer is no without
+  ## reading anything: sending and discarding need a person (#62).
+  stdout.write question & " [y/N] "
+  stdout.flushFile
+  if not interactive:
+    echo "no (not asked: the input isn't a terminal)"
+    return false
+  var answer = ""
+  if not input.readLine(answer): return false
+  answer.strip.toLowerAscii in ["y", "yes"]
+
+proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, interactive = stdinIsTerminal()) =
+  ## Go through the review queue: approve each post or discard it, each
+  ## after a y/N question. This only records your decision, so it works
+  ## while the bot runs; the running bot sends what you approved once its
+  ## undo window (`undoWindowSeconds`) is over. Until then, and for anything
+  ## discarded, the terminal screen's Review tab (History, u) can take it back.
   let st = openState(statePath(cfg, dryRun))
   defer: st.close()
   let pending = st.pendingReviews()
@@ -301,16 +323,22 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
       stdout.write "[s]end to channel  [d]iscard  [n]ext  [q]uit > "
       stdout.flushFile
       var answer = ""
-      if not stdin.readLine(answer): answer = "q"    # end of input
+      if not input.readLine(answer): answer = "q"    # end of input
       case answer.strip.toLowerAscii
       of "s":
-        if st.decideReview(r.id, "to_send"):
+        if not askYesNo("Send this post to the channel?", input, interactive):
+          echo "not sent; still waiting for review"
+        elif st.decideReview(r.id, "to_send"):
           inc approved
-          echo "approved ✅"
+          if dryRun: echo "approved ✅ (dry run: recorded, never sent)"
+          else: echo &"approved ✅ (sent in {undoWindowSeconds} s; until then the terminal screen's Review tab can undo it)"
         else: echo "already decided elsewhere"
         done = true
       of "d":
-        echo (if st.decideReview(r.id, "discarded"): "discarded" else: "already decided elsewhere")
+        if not askYesNo("Discard?", input, interactive):
+          echo "not discarded; still waiting for review"
+        else:
+          echo (if st.decideReview(r.id, "discarded"): "discarded" else: "already decided elsewhere")
         done = true
       of "n", "": done = true
       of "q":
@@ -320,7 +348,7 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
     if quitting: break
   if approved > 0:
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
-    else: echo &"\n{approved} approved: the running bot sends them within seconds (or when it next starts)."
+    else: echo &"\n{approved} approved: the running bot sends them after {undoWindowSeconds} s (or when it next starts)."
 
 proc fitColumn*(s: string, width: int): string =
   ## `s` cut or padded to `width` characters (not bytes: channel names are

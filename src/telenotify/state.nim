@@ -9,7 +9,7 @@
 ## |---|---|
 ## | `processed` | every message judged: chat, id, verdict, role, reasons, when, and the post's own Telegram date (`posted_at`, for forwarding latency, #74). Lets the bot skip messages it has already seen (restarts, the startup backlog overlapping live updates) and gives the numbers for `telenotify stats` (#12–#15) |
 ## | `published` | the text of what was published, for duplicate detection |
-## | `reviews` | the review queue: unclear posts waiting for you to send or discard them (`telenotify review`). Your decisions double as labels for the test corpus |
+## | `reviews` | the review queue: unclear posts waiting for you to send or discard them (`telenotify review`). Your decisions double as labels for the test corpus. An approved post waits `undoWindowSeconds` (`send_after`) before the bot sends it, so it can be taken back (#62) |
 ## | `meta` | small values: the last heartbeat (downtime alerts), the watched chats you lost access to (`chat_access:<chat>`), your user id for your own bot (`notify_chat_id`) |
 ##
 ## You can open the file with any SQLite tool (`sqlite3 state.sqlite3`).
@@ -32,14 +32,21 @@ type
     chatId*, msgId*: int64
     chatTitle*, text*, reasons*, role*, link*, status*: string
     at*: int64
+    sendAfter*: int64       ## approved posts: not sent before this time (Unix seconds); 0 = at once
     albumIds*: seq[int64]   ## the messages to forward: the album, or just msgId
 
 proc now(): int64 = getTime().toUnix
 
-const schemaVersion* = 1
+const schemaVersion* = 2
   ## SQLite's `user_version` of a file this build has set up. Files from
   ## before versions existed read as 0.
   ##   1  processed.posted_at: the post's own Telegram date (#74)
+  ##   2  reviews.send_after: an approved post's undo window (#62)
+
+const undoWindowSeconds* = 30
+  ## How long an approved review waits before the bot sends it, so you can
+  ## undo it in the terminal screen's Review tab (#62; the owner's choice,
+  ## 2026-11-21). The screen (tui/telenotify_tui/store.py) uses the same.
 
 proc backupPath*(path: string, version: int): string =
   ## Where the copy of a version-`version` state file is kept before it's upgraded.
@@ -161,18 +168,23 @@ proc createTables(db: DbConn) =
   #   reviews.album_ids    every message of an album, so approving sends it all
   #   other_bot.album_id   pictures of one album count as one post
   #   processed.album_id   so a late picture of an album counts as handled
-  # and in schema version 1:
+  # in schema version 1:
   #   processed.posted_at  the post's own Telegram date, or the edit's for an
   #                        edited post judged again; Unix seconds (#74). NULL
   #                        for posts judged before it was kept
   #   processed.caught_up  1: read from a backlog (start-up, or a chat read
   #                        again after it failed), 0: a live update (#74)
+  # and in schema version 2:
+  #   reviews.send_after   an approved post isn't sent before this time (Unix
+  #                        seconds): the undo window (#62). NULL (posts approved
+  #                        before it was kept) means at once
   # (Declare the type: values are bound as text, and only an INTEGER
   # column turns "0" back into the number 0.)
   for (table, column) in [("processed", "text_hash TEXT"), ("processed", "raw_text TEXT"),
                           ("processed", "album_id INTEGER"), ("processed", "posted_at INTEGER"),
                           ("processed", "caught_up INTEGER"),
-                          ("reviews", "album_ids TEXT"), ("other_bot", "album_id INTEGER")]:
+                          ("reviews", "album_ids TEXT"), ("reviews", "send_after INTEGER"),
+                          ("other_bot", "album_id INTEGER")]:
     var has = false
     for row in db.fastRows(sql("PRAGMA table_info(" & table & ")")):
       if row[1] == column.split(' ')[0]: has = true
@@ -307,13 +319,16 @@ proc addReview*(s: State, chat, msg: int64, title, text, reasons, role, link: st
     (chat_id, msg_id, chat_title, text, reasons, role, link, at, album_ids) VALUES (?,?,?,?,?,?,?,?,?)""",
     chat, msg, title, text, reasons, role, link, now(), ids.join(","))
 
-proc reviewsWithStatus(s: State, status: string): seq[Review] =
+proc reviewsWithStatus(s: State, status: string, dueBy = high(int64)): seq[Review] =
   for r in s.db.fastRows(sql"""SELECT id, chat_id, msg_id, chat_title, text, reasons, role, link,
-                               status, at, COALESCE(album_ids, '') FROM reviews
-                               WHERE status = ? ORDER BY at""", status):
+                               status, at, COALESCE(album_ids, ''), COALESCE(send_after, 0) FROM reviews
+                               WHERE status = ? AND (send_after IS NULL OR send_after <= CAST(? AS INTEGER))
+                               ORDER BY at""",
+                         status, dueBy):
     var rv = Review(id: parseBiggestInt(r[0]), chatId: parseBiggestInt(r[1]),
                     msgId: parseBiggestInt(r[2]), chatTitle: r[3], text: r[4], reasons: r[5],
-                    role: r[6], link: r[7], status: r[8], at: parseBiggestInt(r[9]))
+                    role: r[6], link: r[7], status: r[8], at: parseBiggestInt(r[9]),
+                    sendAfter: parseBiggestInt(r[11]))
     for i in r[10].split(','):
       if i != "": rv.albumIds.add parseBiggestInt(i)
     if rv.albumIds.len == 0: rv.albumIds = @[rv.msgId]
@@ -324,25 +339,57 @@ proc pendingReviews*(s: State): seq[Review] =
   s.reviewsWithStatus("pending")
 
 proc approvedReviews*(s: State): seq[Review] =
-  ## Posts you chose to send; the running bot sends them (`sendApproved`).
+  ## Posts you chose to send and haven't been sent yet, in their undo
+  ## window or not.
   s.reviewsWithStatus("to_send")
+
+proc dueReviews*(s: State, at = now()): seq[Review] =
+  ## Approved posts whose undo window is over at `at`: the ones the running
+  ## bot may send now (`sendApproved`), once it has claimed each (`claimReview`).
+  s.reviewsWithStatus("to_send", dueBy = at)
 
 proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"): bool =
   ## Move a review from `fromStatus` to `status`: "to_send" (you approved
-  ## it; the bot will send it), "sent" (published), "discarded" or "kept"
-  ## (a match you don't want sent, e.g. the old bot already forwarded it;
-  ## set by the terminal screen, never sent or counted as forwarded). Does
-  ## nothing and returns false if it's no longer in `fromStatus` (e.g.
-  ## another `review` window already decided it), so a post is never
-  ## approved, and sent, twice.
-  s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
-            status, now(), id, fromStatus)
+  ## it; the bot sends it once its undo window, `undoWindowSeconds`, is
+  ## over), "sent" (published), "discarded" or "kept" (a match you don't
+  ## want sent, e.g. the old bot already forwarded it; set by the terminal
+  ## screen, never sent or counted as forwarded). Does nothing and returns
+  ## false if it's no longer in `fromStatus` (e.g. another `review` window
+  ## already decided it), so a post is never approved, and sent, twice.
+  let t = now()
+  if status == "to_send":
+    s.db.exec(sql"""UPDATE reviews SET status = ?, decided_at = ?, send_after = ?
+                     WHERE id = ? AND status = ?""", status, t, t + undoWindowSeconds, id, fromStatus)
+  else:
+    s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
+              status, t, id, fromStatus)
+  s.db.getValue(sql"SELECT changes()") == "1"
+
+proc claimReview*(s: State, id: int64, at = now()): bool =
+  ## The bot takes an approved post to send it: "to_send" becomes "sending",
+  ## in one statement, only if it is still approved and its undo window is
+  ## over. The terminal screen's undo is the same kind of statement on
+  ## "to_send" (store.py `undo`), so exactly one of the two wins: an undone
+  ## post is never sent, and a post being sent can't be undone (#62, #76).
+  s.db.exec(sql"""UPDATE reviews SET status = 'sending'
+                   WHERE id = ? AND status = 'to_send'
+                         AND (send_after IS NULL OR send_after <= CAST(? AS INTEGER))""", id, at)
   s.db.getValue(sql"SELECT changes()") == "1"
 
 proc reopenReview*(s: State, id: int64, problem: string) =
   ## Sending failed: put it back in the queue, with the reason.
-  s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = reasons || '; could not send: ' || ?
-                   WHERE id = ? AND status = 'to_send'""", problem, id)
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL,
+                   reasons = reasons || '; could not send: ' || ?
+                   WHERE id = ? AND status IN ('to_send', 'sending')""", problem, id)
+
+proc reopenInterruptedSends*(s: State): int =
+  ## At start: posts the bot was sending when it stopped (a crash, a power
+  ## cut). Whether they reached the channel isn't known, so they go back to
+  ## the queue with a note, for you to check, rather than out a second time.
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL,
+                   reasons = reasons || '; the bot stopped while sending it: check the channel before sending it again'
+                   WHERE status = 'sending'""")
+  parseInt(s.db.getValue(sql"SELECT changes()"))
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)

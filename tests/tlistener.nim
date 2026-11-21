@@ -95,7 +95,12 @@ const
   unclear = "شركة في البصرة تعلن عن حاجتها الى مهندس كهرباء\nارسال السيرة الذاتية"
   bad = "مطلوب محاسب خبرة 5 سنوات في بغداد"
 
+proc afterWindow(): int64 =
+  ## A time when every post approved so far is past its undo window (#62).
+  getTime().toUnix + undoWindowSeconds + 1
+
 var n = 0
+proc statePathOf(i: int): string = getTempDir() / ("tn-listener-" & $i) / "state.sqlite3"
 proc setup(f: FakeTg, dryRun = false): (Listener, State) =
   inc n
   let dir = getTempDir() / ("tn-listener-" & $n)
@@ -381,11 +386,54 @@ suite "listener":
     st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "")
     st.addReview(-2, 8, "chat2", unclear, "no level", "مهندس كهرباء", "")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.forwarded == @[(-1'i64, 7'i64)]
     check f.texts.len == 1 and "post link: https://t.me/c/2/8" in f.texts[0][1]   # link fetched now
     check st.approvedReviews().len == 0 and st.pendingReviews().len == 0
     check duplicateOf(unclear, st.recentPublished()) != ""
+
+  test "an approved post waits out its 30 s undo window before it is sent (#62)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "")
+    let t0 = getTime().toUnix
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    let r = st.approvedReviews()
+    check r.len == 1 and r[0].sendAfter >= t0 + undoWindowSeconds
+    waitFor l.sendApproved(r[0].sendAfter - 1)        # the window is still open
+    check f.forwarded.len == 0 and st.approvedReviews().len == 1
+    waitFor l.sendApproved(r[0].sendAfter)            # it's over
+    check f.forwarded == @[(-1'i64, 7'i64)] and st.approvedReviews().len == 0
+
+  test "undo racing the send: the post being sent stays sent, one undone in time is never sent (#62, #76)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let path = statePathOf(n)
+    st.addReview(-1, 7, "chat1", unclear, "no level", "role", "")
+    st.addReview(-1, 8, "chat1", unclear & " 2", "no level", "role", "")
+    var ids: seq[int64]
+    for r in st.pendingReviews():
+      check st.decideReview(r.id, "to_send")
+      ids.add r.id
+    # the terminal screen, another process, presses u on both while the bot
+    # is forwarding the first: its undo is one UPDATE on 'to_send' (store.py)
+    var undone = new seq[string]
+    f.afterForward = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if undone[].len > 0: return
+        let screen = open(path, "", "", "")
+        defer: screen.close()
+        for id in ids:
+          screen.exec(sql"""UPDATE reviews SET status = 'pending', decided_at = NULL, send_after = NULL
+                            WHERE id = ? AND status = 'to_send'""", id)
+          undone[].add screen.getValue(sql"SELECT changes()")
+    waitFor l.sendApproved(afterWindow())
+    check undone[] == @["0", "1"]                      # the first was claimed; the second wasn't yet
+    check f.forwarded == @[(-1'i64, 7'i64)]            # the undone one never went out
+    let db = open(path, "", "", "")
+    defer: db.close()
+    check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[0]) == "sent"
+    check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[1]) == "pending"
 
   test "an approved post that can't be sent goes back to the queue with the reason":
     let f = FakeTg()
@@ -394,7 +442,7 @@ suite "listener":
     let (l, st) = setup(f)
     st.addReview(-2, 8, "chat2", unclear, "no level", "role", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     let r = st.pendingReviews()
     check r.len == 1 and "could not send: no link" in r[0].reasons
 
@@ -565,7 +613,7 @@ suite "listener":
     let r = st.pendingReviews()
     check r.len == 1 and r[0].albumIds == @[80'i64, 81]
     check st.decideReview(r[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.forwarded == @[(-1'i64, 80'i64), (-1'i64, 81'i64)]
 
   test "a message rejected before fingerprints existed is not judged again on an edit":
@@ -969,7 +1017,7 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "https://t.me/c/1/7")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     waitFor l.flushNotifications()
     check sent[].len == 1 and sent[0].startsWith("✅ Published after your review") and "https://t.me/c/1/7" in sent[0]
 
@@ -981,7 +1029,7 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     st.addReview(-1, 8, "chat1", unclear, "no level", "مهندس كهرباء", "")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     waitFor l.flushNotifications()
     check f.texts.len == 1 and "https://t.me/c/1/8" in f.texts[0][1]
     check sent[].len == 1 and "https://t.me/c/1/8" in sent[0]
@@ -1018,7 +1066,7 @@ suite "notifications through your own bot (#122)":
     st.addReview(-1, 7, "chat1", unclear, "no level", "role", "https://t.me/c/1/7")
     for r in st.pendingReviews():
       if r.msgId == 7: check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     waitFor l.flushNotifications()
     check sent[] == @["📥 Backlog read: 1 for review\n" & reviewHint,
                       "🔎 For review: \u2068مهندس كهرباء\u2069\nchat1\nhttps://t.me/c/1/21\n" & reviewHint]

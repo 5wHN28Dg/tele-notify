@@ -385,12 +385,13 @@ suite "state":
       if stage == "locked":
         let other = open(old, "", "", "")
         other.exec(sql"ALTER TABLE processed ADD COLUMN posted_at INTEGER")
-        other.exec(sql"PRAGMA user_version = 1")
+        other.exec(sql("PRAGMA user_version = " & $schemaVersion))
         other.close()
     defer: upgradeTestHook = nil
     let up = openState(old)
     up.close()
     check not fileExists(backupPath(old, 0))     # nothing to copy any more: it's upgraded
+    check not fileExists(backupPath(old, 1))
     check "caught_up" in columnsOf(old)
 
   test "a copy not yet confirmed on the disk says so, and the file is not upgraded (#74)":
@@ -415,6 +416,71 @@ suite "state":
       check false
     except IOError as e:
       check "left as it was" in e.msg and "Free some disk space" in e.msg
+
+  test "a version-1 state file gets the undo window, with a copy kept first (#62)":
+    let old = dir / "v1.sqlite3"
+    let raw = open(old, "", "", "")
+    raw.exec(sql"""CREATE TABLE processed (chat_id INTEGER, msg_id INTEGER, chat_title TEXT,
+      verdict TEXT, role TEXT, reasons TEXT, action TEXT, at INTEGER, text_hash TEXT, raw_text TEXT,
+      album_id INTEGER, posted_at INTEGER, caught_up INTEGER, PRIMARY KEY (chat_id, msg_id))""")
+    raw.exec(sql"""CREATE TABLE reviews (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER,
+      chat_title TEXT, text TEXT, reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending',
+      at INTEGER, decided_at INTEGER, album_ids TEXT, UNIQUE (chat_id, msg_id))""")
+    raw.exec(sql"""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at,
+      decided_at) VALUES (-1, 5, 'Jobs', 'approved before the window', 'x', 'r', '', 'to_send', 100, 110)""")
+    raw.exec(sql"PRAGMA user_version = 1")
+    raw.close()
+    let up = openState(old)
+    check fileExists(backupPath(old, 1))
+    # approved before the upgrade: no window, sent as before
+    let due = up.dueReviews()
+    check due.len == 1 and due[0].msgId == 5 and due[0].sendAfter == 0
+    up.close()
+    check versionOf(old) == $schemaVersion and schemaVersion == 2
+    let db = open(old, "", "", "")
+    defer: db.close()
+    var cols: seq[string]
+    for r in db.fastRows(sql"PRAGMA table_info(reviews)"): cols.add r[1]
+    check "send_after" in cols
+    let bak = open(backupPath(old, 1), "", "", "")
+    defer: bak.close()
+    check bak.getValue(sql"PRAGMA user_version") == "1"
+    check bak.getValue(sql"SELECT status FROM reviews WHERE msg_id = 5") == "to_send"
+
+  test "an approved post is due only after its window; the bot claims it once (#62)":
+    st.addReview(-700, 1, "Win", "post", "x", "r", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -700: id = r.id
+    let t0 = getTime().toUnix
+    check st.decideReview(id, "to_send")
+    var sendAfter = 0'i64
+    for r in st.approvedReviews():
+      if r.id == id: sendAfter = r.sendAfter
+    check sendAfter in t0 + undoWindowSeconds .. t0 + undoWindowSeconds + 2
+    proc dueIds(at: int64): seq[int64] =
+      for r in st.dueReviews(at): result.add r.id
+    check id notin dueIds(sendAfter - 1)
+    check not st.claimReview(id, sendAfter - 1)       # the window is still open
+    check id in dueIds(sendAfter)
+    check st.claimReview(id, sendAfter)
+    check not st.claimReview(id, sendAfter)           # once
+    check id notin dueIds(sendAfter + 100)
+    check st.decideReview(id, "sent", fromStatus = "sending")
+
+  test "a post the bot was sending when it stopped goes back to the queue, not out again":
+    st.addReview(-701, 1, "Crash", "post", "x", "r", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -701: id = r.id
+    check st.decideReview(id, "to_send")
+    check st.claimReview(id, getTime().toUnix + undoWindowSeconds + 1)
+    check st.reopenInterruptedSends() == 1
+    var back = false
+    for r in st.pendingReviews():
+      if r.id == id: back = "stopped while sending" in r.reasons
+    check back
+    check st.reopenInterruptedSends() == 0
 
 st.close()
 removeDir(dir)
