@@ -15,7 +15,8 @@ class Paths:
     data_dir: Path      # the bot's data folder (TDLib login + state)
     state: Path         # the SQLite state file this screen shows
     binary: Path | None # the telenotify program, if found
-    dry_run: bool
+    dry_run: bool       # the flag or the config's dry_run, when the screen was opened
+    dry_run_flag: bool = False   # the --dry-run flag alone
 
 
 def default_data_dir() -> Path:
@@ -80,4 +81,5 @@ def resolve(config: str | os.PathLike[str], dry_run: bool) -> Paths:
     data = data_dir_from(cfg, raw.get("data_dir"))
     dry = dry_run or raw.get("dry_run") is True
     state = data / ("state-dryrun.sqlite3" if dry else "state.sqlite3")
-    return Paths(config=cfg, data_dir=data, state=state, binary=find_binary(cfg), dry_run=dry)
+    return Paths(config=cfg, data_dir=data, state=state, binary=find_binary(cfg), dry_run=dry,
+                 dry_run_flag=dry_run)

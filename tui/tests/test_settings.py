@@ -9,7 +9,15 @@ from pathlib import Path
 
 import pytest
 from conftest import BAD, GOOD
-from textual.widgets import Button, DataTable, Input, OptionList, Static, TabbedContent
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Input,
+    OptionList,
+    Static,
+    TabbedContent,
+)
 
 from telenotify_tui import bot, rtl
 from telenotify_tui.app import TeleNotifyApp
@@ -818,3 +826,137 @@ async def test_revert_during_an_edit_of_an_added_item_cancels_it(paths, abc_cfg)
         assert editor.editing is None                            # "new" is gone: no stale index
         await retype(pilot, editor, "x")
         assert pane.edited["location_keywords_en"] == ["a", "A", "b", "c", "x"]
+
+
+async def test_each_kind_of_bot_notification_can_be_switched_off(paths, cfg_path, services):
+    """#127 (O1/MSG5): notify_published and notify_review, on by default, as the bot reads them."""
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        published = pane.query_one("#f-notify_published", Checkbox)
+        review = pane.query_one("#f-notify_review", Checkbox)
+        assert published.value and review.value                      # the bot's defaults
+        review.scroll_visible()
+        await pilot.pause()
+        await pilot.click(review)
+        await pilot.pause()
+        assert not review.value and pane.dirty
+        assert str(review.label) == "off" and str(published.label) == "on"   # in words, not colour alone
+        await save(pilot)
+        await pilot.press("n")                                          # don't restart the bot
+        await pilot.pause()
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg["notify_review"] is False
+    assert "notify_published" not in cfg                               # unchanged keys aren't written
+
+
+
+@pytest.mark.parametrize(("extra", "note"), [
+    ({}, "Sends nothing now: no notify_bot_token in config.json"),
+    ({"notify_bot_token": "  "}, "Sends nothing now: no notify_bot_token in config.json"),
+    ({"notify_bot_token": "garbage"}, "Sends nothing now: notify_bot_token isn't a bot token"),
+    ({"notify_bot_token": "123:ab cd"}, "Sends nothing now: notify_bot_token isn't a bot token"),
+    ({"notify_bot_token": 12345}, "Sends nothing now: notify_bot_token isn't a bot token"),
+    ({"notify_bot_token": "1:abc", "dry_run": True}, "Sends nothing now: a dry run"),
+    ({"notify_bot_token": " 1:abc_-Z "}, ""),
+    ({"notify_bot_token": "123:abc\u00a0"}, "Sends nothing now: notify_bot_token isn't a bot token"),   # the bot's
+    ({"notify_bot_token": "\u2003123:abc"}, "Sends nothing now: notify_bot_token isn't a bot token"),   # strip: ASCII
+])
+async def test_the_notification_switches_say_when_they_cant_do_anything(paths, cfg_path, extra, note):
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg.pop("notify_bot_token", None)
+    cfg_path.write_text(json.dumps(cfg | extra), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path, dry_run=False, dry_run_flag=False),
+                        refresh_seconds=0)   # the config decides
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        for key in ("notify_published", "notify_review"):
+            text = str(pane.query_one(f"#help-{key}", Static).render())
+            assert "(default on)" in text
+            assert (note in text) if note else ("Sends nothing" not in text)
+        if extra.get("dry_run"):                       # switching the dry run off updates it at once
+            pane.query_one("#sections", TabbedContent).active = "sec-bot"
+            await pilot.pause()
+            await pilot.click(pane.query_one("#f-dry_run", Checkbox))
+            await pilot.pause()
+            assert "Sends nothing" not in str(pane.query_one("#help-notify_review", Static).render())
+            assert str(pane.query_one("#f-dry_run", Checkbox).label) == "off"
+
+
+
+async def test_a_focused_switch_still_shows_on_or_off(paths, cfg_path):
+    """Run 2 of #131: Textual's focus border filled the one-row switch and hid its state. What is
+    drawn is checked (the screen's text, as the audit harness reads it), not the label property."""
+    from audit import svg
+
+    def row(app, key: str) -> str:
+        w, h = app.size
+        lines = svg.text(app.export_screenshot(), w, h).splitlines()
+        return next(line for line in lines if line.lstrip().startswith(key))
+
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        box = pane.query_one("#f-dry_run", Checkbox)
+        box.focus()
+        await pilot.pause()
+        before = row(app, "dry_run")
+        await pilot.press("space")
+        await pilot.pause()
+        after = row(app, "dry_run")
+        assert app.focused is box
+        assert {"on", "off"} == {before.split()[2], after.split()[2]}, (before, after)
+
+
+
+@pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
+async def test_a_focused_switch_is_readable(paths, cfg_path, theme):
+    """Run 3 of #131: with the focus border gone, Textual's focus pair on the label was 3.78:1 in
+    textual-dark. The drawn cells of the focused "on"/"off" must reach 4.5:1 (text contrast, A1)."""
+    from audit import svg
+
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.theme = theme
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        pane.query_one("#f-dry_run", Checkbox).focus()
+        await pilot.pause()
+        w, h = app.size
+        grid = svg.parse(app.export_screenshot(), w, h)
+        row = next(r for r, line in enumerate(grid.text()) if line.lstrip().startswith("dry_run"))
+        line = grid.text()[row]
+        start = line.index("\u258c") + 1                    # after the box's ▌
+        word = [c for c in grid.cells[row][start:start + 5] if c.ch.strip()]
+        assert "".join(c.ch for c in word) in ("on", "off")
+        for c in word:
+            assert svg.contrast(c.fg, c.bg) >= 4.5, (theme, c)
+
+
+
+@pytest.mark.parametrize("flag", [False, True])
+async def test_the_dry_run_note_follows_the_saved_config_and_the_flag(paths, cfg_path, services, flag):
+    """#131 run 4: after saving dry_run off, the note said "a dry run" (the flag was guessed from the
+    config as opened). Opened with --dry-run, the flag keeps it a dry run whatever the config says."""
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg_path.write_text(json.dumps(cfg | {"notify_bot_token": "1:abc", "dry_run": True}), encoding="utf-8")
+    app = TeleNotifyApp(replace(paths, config=cfg_path, dry_run=True, dry_run_flag=flag), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        note = lambda: str(pane.query_one("#help-notify_review", Static).render())
+        assert "a dry run" in note()
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        await pilot.click(pane.query_one("#f-dry_run", Checkbox))
+        await pilot.pause()
+        assert ("dry run" in note()) == flag
+        await save(pilot)
+        await pilot.press("n")
+        await pilot.pause()
+        assert json.loads(cfg_path.read_text(encoding="utf-8"))["dry_run"] is False
+        assert ("dry run" in note()) == flag

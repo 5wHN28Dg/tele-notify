@@ -100,7 +100,9 @@ def binary() -> Path:
 @pytest.fixture
 def paths(config: Path, state: Path, tmp_path: Path) -> Paths:
     b = REPO / "telenotify"
-    return Paths(config=config, data_dir=state.parent, state=state, binary=b if b.exists() else None, dry_run=True)
+    # a dry run by the flag, as resolve() makes it for a config without dry_run
+    return Paths(config=config, data_dir=state.parent, state=state, binary=b if b.exists() else None, dry_run=True,
+                 dry_run_flag=True)
 
 
 @pytest.fixture(autouse=True)

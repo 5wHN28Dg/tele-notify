@@ -104,3 +104,11 @@ def test_binary_next_to_config_wins_over_path(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(bindir))
     assert find_binary(tmp_path / "config.json") == tmp_path / "telenotify"      # a build being tried out
     assert find_binary(tmp_path / "cfg" / "config.json") == bindir / "telenotify"  # nothing there: the installed one
+
+
+@pytest.mark.parametrize(("config_dry", "flag"), [(True, False), (False, True), (True, True), (False, False)])
+def test_the_flag_is_kept_apart_from_the_config(tmp_path, config_dry, flag):
+    """#131 run 5: Settings needs the --dry-run flag alone (the config's dry_run can be edited there)."""
+    p = resolve(write(tmp_path, dry_run=config_dry, data_dir=str(tmp_path / "d")), dry_run=flag)
+    assert p.dry_run_flag is flag
+    assert p.dry_run is (config_dry or flag)

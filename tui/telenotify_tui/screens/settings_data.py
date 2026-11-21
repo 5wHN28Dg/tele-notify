@@ -18,6 +18,7 @@ import copy
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -52,12 +53,37 @@ LIST_KEYS: dict[str, str] = {
     "extra_job_sites": "More career sites whose job pages carry a schema.org JobPosting",
 }
 INT_KEYS: dict[str, int] = {"max_experience_years": 1, "alert_after_minutes": 10}
-BOOL_KEYS: dict[str, bool] = {"publish_when_unsure": False, "dry_run": False, "alerts": True}
+BOOL_KEYS: dict[str, bool] = {"publish_when_unsure": False, "dry_run": False, "alerts": True,
+                              "notify_published": True, "notify_review": True}
 STR_KEYS: dict[str, str] = {"data_dir": "", "tdlib_path": ""}
 CHAT_KEYS = ("chats", "target_chat")
 SECRET_KEYS = ("api_id", "api_hash")
 # never handed to `telenotify` for the corpus test either: your notification bot's token (#122)
 TEMP_LEFT_OUT = (*SECRET_KEYS, "notify_bot_token")
+
+NOTIFY_KEYS = ("notify_published", "notify_review")
+
+
+def notify_note(cfg: dict, dry_run_flag: bool = False) -> str:
+    """Why the notification switches do nothing in this config, or "" (they work).
+
+    The bot sends through your notification bot only with `notify_bot_token`, and a dry run sends
+    no per-post messages (only its alerts). `dry_run_flag`: the screen was opened for a dry run
+    started with --dry-run, whatever the config says."""
+    token = cfg.get("notify_bot_token", "")
+    ascii_space = " \t\v\r\n\f"     # what the bot's strip removes: not NBSP or other Unicode spaces
+    if token is None or (isinstance(token, str) and not token.strip(ascii_space)):
+        return "Sends nothing now: no notify_bot_token in config.json"
+    # as the bot checks it (notify.nim validToken): digits, a colon, then letters, digits, _ or -
+    if not (isinstance(token, str) and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token.strip(ascii_space))):
+        return "Sends nothing now: notify_bot_token isn't a bot token"
+    if cfg.get("dry_run") is True:
+        return "Sends nothing now: a dry run"
+    if dry_run_flag:
+        # --dry-run only picks the state shown here: the real bot may run and send meanwhile
+        return "The dry run shown here sends none"
+    return ""
+
 
 ROLE_KEYS = ("entry_level_role_en", "entry_level_role_ar", "mid_level_general_role_en",
              "mid_level_general_role_ar", "field_keywords_en", "field_keywords_ar")
@@ -70,7 +96,8 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                   "extra_job_signals", "extra_not_a_job", "extra_job_sites",
                                   "max_experience_years", "publish_when_unsure"]),
     ("chats", "Chats", list(CHAT_KEYS)),
-    ("bot", "Bot", ["dry_run", "alerts", "alert_after_minutes", "data_dir", "tdlib_path"]),
+    ("bot", "Bot", ["dry_run", "alerts", "alert_after_minutes", "notify_published", "notify_review",
+                     "data_dir", "tdlib_path"]),
 ]
 
 DEFAULTS: dict[str, Any] = {**{k: [] for k in LIST_KEYS}, **INT_KEYS, **BOOL_KEYS, **STR_KEYS,

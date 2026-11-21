@@ -335,3 +335,11 @@ def test_dedupe_only_merges_what_the_bot_sees_as_the_same():
     cfg = {"extra_not_a_job": ["kurs straße", "kurs strasse", "ﬁle", "file", "A  b", "a b"]}
     assert sd.dedupe_all(cfg) == {"extra_not_a_job": ["a b"]}
     assert sd.duplicates(cfg["extra_not_a_job"]) == []
+
+
+def test_a_dry_run_started_with_the_flag_sends_no_notifications():
+    """#131 run 3: --dry-run, not only the config's dry_run."""
+    cfg = {"notify_bot_token": "1:abc"}
+    assert sd.notify_note(cfg) == ""
+    assert sd.notify_note(cfg, dry_run_flag=True) == "The dry run shown here sends none"   # the real bot may send
+    assert sd.notify_note(cfg | {"dry_run": True}, dry_run_flag=True) == "Sends nothing now: a dry run"
