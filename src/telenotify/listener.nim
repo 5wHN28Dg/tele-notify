@@ -38,7 +38,7 @@
 ##   to your Saved Messages.
 
 import std/[asyncdispatch, deques, strutils, times, strformat, sequtils, algorithm, tables, sets]
-import config, classify, gather, fetch, telegram, state, dedup, boards, notify
+import config, classify, gather, fetch, telegram, state, dedup, boards, notify, instagram
 
 type
   Listener* = ref object
@@ -47,6 +47,7 @@ type
     state*: State
     fetcher*: Fetcher
     ocr*: Ocr
+    instagram*: Instagram   ## linked Instagram posts (#114); nil: off
     dryRun*: bool
     queue: Deque[TgMessage]
     bootstrapping: bool
@@ -315,14 +316,19 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       except CatchableError as e:
         photoProblem = "photo download failed: " & e.msg
         l.say "   " & photoProblem
-    let g = await gather(post, l.fetcher, l.ocr, @defaultJobPostingSites & l.cfg.extraJobSites)
+    let g = await gather(post, l.fetcher, l.ocr, @defaultJobPostingSites & l.cfg.extraJobSites,
+                         instagram = l.instagram)
     for n in g.notes:
       if n.startsWith("OCR failed"): photoProblem = n
+    var unread: seq[string]
+    if photoProblem != "": unread.add "the picture could not be read"
+    if g.unreadable != "": unread.add g.unreadable   # a short post whose link was the whole ad
+    let guess = unread.join(" and ") & ", so this is a guess"
     var d = classify(g.text, l.cfg)
-    if d.verdict == vReject and photoProblem != "":
+    if d.verdict == vReject and unread.len > 0:
       # The picture is often the whole ad: unread, it's unknown, not bad.
       d.verdict = vReview
-      d.reasons.add "the picture could not be read, so this is a guess"
+      d.reasons.add guess
     verdict = $d.verdict
     role = d.role
     reasons = (g.notes & d.reasons).join("; ")

@@ -33,7 +33,7 @@
 ##   review or stats to look at it.
 
 import std/[parseopt, json, strutils, strformat, tables, os, math, asyncdispatch]
-import telenotify/[config, classify, normalize, gather, fetch, boards, commands]
+import telenotify/[config, classify, normalize, gather, fetch, boards, commands, instagram]
 
 const usage = """
 usage:
@@ -61,7 +61,8 @@ proc cmdCheck(cfg: Config, path: string, images, buttons: seq[string],
     try: post.images.add readFile(img)
     except IOError: quit "cannot read image " & img
   let g = waitFor gather(post, defaultFetcher(), defaultOcr(),
-                         @defaultJobPostingSites & cfg.extraJobSites, scrape)
+                         @defaultJobPostingSites & cfg.extraJobSites, scrape,
+                         instagram = instagramFor(cfg.instagramFrontend, defaultOcr()))
   for n in g.notes: echo "note: ", n
   if showText:
     echo "----- text the filter reads -----"

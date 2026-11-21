@@ -1,7 +1,7 @@
 ## The commands that talk to Telegram: login, chats, run, review, stats.
 
 import std/[asyncdispatch, json, os, strutils, strformat, tables, times, posix, unicode]
-import config, td, session, telegram, state, listener, fetch, gather, compare, notify
+import config, td, session, telegram, state, listener, fetch, gather, compare, notify, instagram
 
 var stopRequested = new bool   # set by Ctrl-C or `systemctl stop` (SIGTERM)
 
@@ -212,6 +212,8 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   l.outbox = outbox     # your private chat with your bot has your user id
   # "notifications are on", once (and after another account logs in)
   if notifier != nil: asyncCheck announceOn(st, notifier, chatId, dry)
+  l.instagram = instagramFor(cfg.instagramFrontend, defaultOcr())
+  if l.instagram != nil: l.log "instagram links: read through " & cfg.instagramFrontend
   if l.dryRun: l.log "DRY RUN: nothing will be forwarded or marked read"
   await s.loadAllChats()
   for chat in cfg.chats:
