@@ -87,6 +87,7 @@ proc isPrivateIp*(ip: IpAddress): bool =
 var
   addressLookups* = 0   ## name lookups made (tests count them)
   keptAddresses: Table[string, (string, Domain, float)]   # key: address, domain, kept until
+  failedLookups: Table[string, (string, float)]           # key: why, remembered until
 
 proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string, Domain) =
   ## A checked address to connect to. Raises FetchError when refused.
@@ -97,12 +98,25 @@ proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string,
     {.cast(gcsafe).}:
       let k = keptAddresses.getOrDefault(key)
       if k[0] != "" and epochTime() < k[2]: return (k[0], k[1])
+      # a lookup that failed a moment ago fails again at once: a resolver that
+      # times out would otherwise block the program once per message (review run 3)
+      let f = failedLookups.getOrDefault(key)
+      if f[0] != "" and epochTime() < f[1]: raise newException(FetchError, f[0])
   {.cast(gcsafe).}: inc addressLookups
   var info: ptr AddrInfo
   try:
     info = getAddrInfo(host, port, Domain.AF_UNSPEC)
   except OSError as e:
-    raise newException(FetchError, "cannot resolve " & host & ": " & e.msg.splitLines[0])
+    let why = "cannot resolve " & host & ": " & e.msg.splitLines[0]
+    if keepMs > 0:
+      {.cast(gcsafe).}:
+        let k = keptAddresses.getOrDefault(key)
+        if k[0] != "":
+          # the address found before still works more often than not: keep using it a minute
+          keptAddresses[key] = (k[0], k[1], epochTime() + 60)
+          return (k[0], k[1])
+        failedLookups[key] = (why, epochTime() + 60)
+    raise newException(FetchError, why)
   defer: freeAddrInfo(info)
   var first = ""
   var domain = Domain.AF_INET
@@ -118,7 +132,9 @@ proc resolve(host: string, port: Port, allowPrivate: bool, keepMs = 0): (string,
     it = it.ai_next
   if first == "": raise newException(FetchError, "no address for " & host)
   if keepMs > 0:
-    {.cast(gcsafe).}: keptAddresses[key] = (first, domain, epochTime() + keepMs / 1000)
+    {.cast(gcsafe).}:
+      keptAddresses[key] = (first, domain, epochTime() + keepMs / 1000)
+      failedLookups.del(key)
   (first, domain)
 
 # ------------------------------------------------------------ one request

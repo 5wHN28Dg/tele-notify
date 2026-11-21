@@ -730,7 +730,7 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     waitFor l.bootstrap()
     waitFor l.flushNotifications()
-    check sent[] == @["📥 Since the bot started: 1 published, 2 for review\n" & reviewHint]
+    check sent[] == @["📥 Backlog read: 1 published, 2 for review\n" & reviewHint]
     l.live(msg(-1, 20, unclear & " 3"))
     check sent[].len == 2 and sent[1].startsWith("🔎 For review")
 
@@ -878,12 +878,12 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     waitFor l.bootstrap()
     waitFor l.flushNotifications()
-    check sent[] == @["📥 Since the bot started: 1 published, 0 for review"]
+    check sent[] == @["📥 Backlog read: 1 published, 0 for review"]
     f.unreadFails.clear
     waitFor l.retryFailedChats()
     waitFor l.processQueue()
     waitFor l.flushNotifications()
-    check sent[].len == 2 and sent[1] == "📥 Since the bot started: 1 published, 2 for review\n" & reviewHint
+    check sent[].len == 2 and sent[1] == "📥 Backlog read: 1 published, 2 for review\n" & reviewHint
     check (-2'i64, 8'i64) in f.read                     # marked read once handled
     l.live(msg(-1, 20, unclear & " 3"))                 # live again: one by one
     check sent[].len == 3 and sent[2].startsWith("🔎 For review")
@@ -902,7 +902,7 @@ suite "notifications through your own bot (#122)":
       if r.msgId == 7: check st.decideReview(r.id, "to_send")
     waitFor l.sendApproved()
     waitFor l.flushNotifications()
-    check sent[] == @["📥 Since the bot started: 1 for review\n" & reviewHint,
+    check sent[] == @["📥 Backlog read: 1 for review\n" & reviewHint,
                       "🔎 For review: \u2068مهندس كهرباء\u2069\nchat1\nhttps://t.me/c/1/21\n" & reviewHint]
     waitFor l.alert("still on")                         # alerts follow "alerts"
     waitFor l.flushNotifications()

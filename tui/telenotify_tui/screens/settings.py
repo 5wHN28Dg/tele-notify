@@ -48,7 +48,7 @@ FORM_HELP = {
     "publish_when_unsure": "Publish a job with your role and place that says nothing about level "
                            "(off: send it to review)",
     "dry_run": "Judge and record, but forward nothing",
-    "alerts": "Send a message to Saved Messages after downtime",
+    "alerts": "Tell you about problems (downtime, lost access, log-out) in Saved Messages and through your notification bot",
     "alert_after_minutes": "Downtime shorter than this is only logged (default 10)",
     "data_dir": "TDLib login and state (default ~/.local/share/tele-notify); empty = default",
     "tdlib_path": "Path to libtdjson.so if it isn't found automatically; empty = automatic",

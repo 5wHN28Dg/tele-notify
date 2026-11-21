@@ -130,7 +130,7 @@ proc tellSummary(l: Listener) =
   var parts: seq[string]
   if l.cfg.notifyPublished: parts.add &"{l.awayPublished} published"
   if l.cfg.notifyReview: parts.add &"{l.awayReview} for review"
-  l.tell "📥 Since the bot started: " & parts.join(", ") &
+  l.tell "📥 Backlog read: " & parts.join(", ") &
          (if l.awayReview > 0: "\n" & reviewHint else: "")
 
 proc alertText*(text: string, dryRun: bool): string =

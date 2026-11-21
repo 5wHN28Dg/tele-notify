@@ -37,7 +37,7 @@
 ##   review, when one is published, and for every alert, the log-out alert
 ##   included (#122). It says "🔔 tele-notify notifications are on" once,
 ##   at the first start that reaches you. A backlog (after downtime, or a
-##   chat read on retry) is one summary ("📥 Since the bot started: 3
+##   chat read on retry) is one summary ("📥 Backlog read: 3
 ##   published, 5 for review"), not a message per post. A dry run sends no
 ##   per-post notifications, only its alerts, marked "[dry run]". A token
 ##   that isn't `digits:letters` turns notifications off with one log line;
