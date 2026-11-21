@@ -91,7 +91,7 @@ async def test_send_outside_dry_run_says_bot_sends(paths, state):
         await open_review(pilot)
         await pilot.press("s")
         await pilot.pause()
-        assert "the bot will send it in a few seconds" in note(app)
+        assert "sent to the channel in 30 s (u undoes)" in note(app) or "in 29 s" in note(app)
 
 
 async def test_discard_second_item_writes_false(paths, state, labels, now):
@@ -497,6 +497,240 @@ async def test_undo_after_the_bot_sent_it_is_too_late(paths, state, labels):
         assert "too late" in note(app) and "already sent" in note(app)
         assert status_of(state, 11) == "sent"
     assert [l["label"] for l in read_labels(labels)] == ["TRUE"]   # it did go out: the label stays
+
+
+# ------------------------------------------------- the undo window (#62) and History undo (#76)
+
+def set_row(state: Path, msg_id: int, **cols) -> None:
+    db = sqlite3.connect(state)
+    sets = ", ".join(f"{k} = ?" for k in cols)
+    db.execute(f"UPDATE reviews SET {sets} WHERE msg_id = ?", (*cols.values(), msg_id))
+    db.commit()
+    db.close()
+
+
+def send_after_of(state: Path, msg_id: int) -> int | None:
+    db = sqlite3.connect(state)
+    try:
+        return db.execute("SELECT send_after FROM reviews WHERE msg_id = ?", (msg_id,)).fetchone()[0]
+    finally:
+        db.close()
+
+
+async def test_approving_counts_down_then_says_it_was_sent(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        before = int(time.time())
+        await pilot.press("s")
+        await pilot.pause()
+        assert before + 30 <= send_after_of(state, 11) <= int(time.time()) + 30   # the bot waits 30 s
+        assert "sent to the channel in 3" in note(app) and "u undoes" in note(app)
+        set_row(state, 11, send_after=int(time.time()) + 5)
+        pane._countdown()                                    # a second later, and so on
+        await pilot.pause()
+        assert "in 5 s" in note(app) or "in 4 s" in note(app)
+        set_row(state, 11, send_after=int(time.time()) - 1)
+        pane._countdown()
+        await pilot.pause()
+        assert "sends it within seconds" in note(app)
+        assert pane.check_action("undo", ()) is True          # not claimed yet: still undoable
+        set_row(state, 11, status="sent")                     # the bot sent it
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == "#11 sent to the channel"
+        assert pane.check_action("undo", ()) is None          # no undo offered once sent
+        assert not app.query_one("#btn-undo", Button).display
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "sent" and note(app) == "#11 sent to the channel"
+    assert [l["label"] for l in read_labels(labels)] == ["TRUE"]
+
+
+async def test_the_countdown_runs_by_itself(paths, state):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=3600)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, send_after=int(time.time()) + 9)
+        await pilot.pause(1.5)                                # the 1-second timer redraws it
+        assert any(f"in {n} s" in note(app) for n in (9, 8, 7))
+
+
+async def test_u_within_the_window_puts_it_back(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send" and send_after_of(state, 11) > time.time()
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending" and send_after_of(state, 11) is None
+        assert "back in the queue" in note(app)
+    assert read_labels(labels) == []
+
+
+async def test_u_once_the_bot_has_started_sending_is_too_late(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        # the window is over and the bot claimed it (state.nim claimReview) before the screen looked again
+        set_row(state, 11, send_after=int(time.time()) - 1, status="sending")
+        await pilot.press("u")
+        await pilot.pause()
+        assert "too late to undo" in note(app) and "sending #11" in note(app)
+        assert status_of(state, 11) == "sending"
+    assert [l["label"] for l in read_labels(labels)] == ["TRUE"]
+
+
+async def history_row(pilot, app, msg_id: int) -> None:
+    pane = app.query_one(ReviewPane)
+    table = app.query_one("#review-history", DataTable)
+    table.move_cursor(row=[r.msg_id for r in pane._past].index(msg_id))
+    await pilot.pause()
+
+
+async def test_history_undoes_any_decision_not_yet_sent(paths, state, labels, now):
+    add_pending(state, 7, "discarded elsewhere", now - 30)
+    add_pending(state, 8, "kept earlier", now - 20)
+    with Store(state) as st:
+        ids = {r.msg_id: r.id for r in st.reviews("pending")}
+        assert st.decide(ids[7], "discarded") and st.decide(ids[8], "kept") and st.decide(ids[11], "to_send")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        labels_shown = {r.msg_id: str(table.get_row_at(i)[1]) for i, r in enumerate(pane._past)}
+        assert labels_shown[11].startswith("sends in ") and labels_shown[9] == "sent"
+        await history_row(pilot, app, 9)                      # sent: no undo
+        assert pane.check_action("undo", ()) is None and not app.query_one("#btn-undo", Button).display
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 9) == "sent"
+        for msg_id in (7, 8, 11):                             # discarded, kept, approved in its window
+            await history_row(pilot, app, msg_id)
+            assert app.query_one("#btn-undo", Button).display
+            await pilot.press("u")
+            await pilot.pause()
+            assert status_of(state, msg_id) == "pending", msg_id
+            assert f"#{msg_id} is back in the queue" in note(app)
+        assert [r.msg_id for r in pane._past] == [9]
+        await pilot.press("h")
+        await pilot.pause()
+        assert app.query_one("#review-list", OptionList).option_count == 3
+
+
+async def test_history_counts_down_and_shows_the_send(paths, state, now):
+    with Store(state) as st:
+        assert st.decide(st.reviews("pending")[0].id, "to_send")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        set_row(state, 11, send_after=int(time.time()) + 12)
+        pane._countdown()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) in ("sends in 12 s", "sends in 11 s")
+        set_row(state, 11, status="sending")
+        pane._countdown()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "sending now" and pane.check_action("undo", ()) is None
+        set_row(state, 11, status="sent")
+        pane._countdown()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "sent"
+
+
+async def test_a_decision_from_the_command_line_is_undone_in_history(paths, state, now):
+    """`telenotify review` writes it as the bot does (state.nim decideReview): the screen can take it back."""
+    with Store(state) as st:
+        rid = st.reviews("pending")[0].id
+    db = sqlite3.connect(state)                               # the command line, another process
+    db.execute("UPDATE reviews SET status = 'to_send', decided_at = ?, send_after = ? WHERE id = ? AND status = 'pending'",
+               (now, now + 30, rid))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        await history_row(pilot, app, 11)
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending"
+
+
+def run_review_cli(binary: Path, config: Path, typed: str) -> str:
+    """`telenotify review --dry-run` on a terminal (a pty: it asks y/N only there), with `typed` as the keys."""
+    import pty
+    import select
+    import subprocess
+    master, slave = pty.openpty()
+    p = subprocess.Popen([str(binary), "review", f"--config:{config}", "--dry-run"],
+                         stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+    os.close(slave)
+    os.write(master, typed.encode())
+    out = b""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        r, _, _ = select.select([master], [], [], 0.5)
+        if r:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:   # the program ended
+                break
+            if not chunk:
+                break
+            out += chunk
+        elif p.poll() is not None:
+            break
+    p.wait(timeout=10)
+    os.close(master)
+    return out.decode("utf-8", "replace")
+
+
+async def test_the_real_command_line_asks_and_the_screen_undoes_it(paths, state, config, binary):
+    out = run_review_cli(binary, config, "s\ny\n")
+    assert "Send this post to the channel? [y/N]" in out, out
+    assert status_of(state, 11) == "to_send" and send_after_of(state, 11) > time.time()
+    app = TeleNotifyApp(dataclasses.replace(paths, binary=binary), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        await history_row(pilot, app, 11)
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending"
+
+
+async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 7, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.pause(0.5)
+        assert not app.query_one("#btn-send", Button).disabled
+        await pilot.press("n")                                      # a new post appears
+        assert app.query_one("#btn-send", Button).disabled          # greyed while s / d wait
+        assert app.query_one("#btn-discard", Button).disabled
+        assert not app.query_one("#btn-next", Button).disabled
+        await pilot.pause(0.6)
+        assert not app.query_one("#btn-send", Button).disabled
+        assert not app.query_one("#btn-discard", Button).disabled
 
 
 # ------------------------------------------------- odd data in the state file

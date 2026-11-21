@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS published (
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, chat_title TEXT, text TEXT,
   reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER,
-  decided_at INTEGER, album_ids TEXT, UNIQUE (chat_id, msg_id));
+  decided_at INTEGER, album_ids TEXT, send_after INTEGER, UNIQUE (chat_id, msg_id));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY, at INTEGER, text TEXT);
 CREATE TABLE IF NOT EXISTS chats (
@@ -204,7 +204,7 @@ def small_state(path: Path, now: int | None = None, *, dry_run: bool = True,
 
 # ------------------------------------------------------------ large file
 
-BIG_VERSION = 1
+BIG_VERSION = 2
 BIG_POSTS, BIG_REVIEWS, BIG_CHATS = 1_000_000, 2_000, 300
 TEXT_KEPT = 20_000      # the latest posts keep their text (the bot clears it after keep_text_days)
 SPAN_DAYS = 730

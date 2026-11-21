@@ -25,7 +25,7 @@ CREATE INDEX processed_chat_album ON processed (chat_id, album_id, msg_id);
 CREATE TABLE published (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, text TEXT, at INTEGER);
 CREATE TABLE reviews (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, chat_title TEXT, text TEXT,
   reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER, decided_at INTEGER,
-  album_ids TEXT, UNIQUE (chat_id, msg_id));
+  album_ids TEXT, send_after INTEGER, UNIQUE (chat_id, msg_id));
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE alerts (id INTEGER PRIMARY KEY, at INTEGER, text TEXT);
 CREATE TABLE chats (id INTEGER PRIMARY KEY, title TEXT, kind TEXT, watched INTEGER, status TEXT,
