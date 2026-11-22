@@ -83,6 +83,11 @@ proc toTelegram(f: FakeTg): Telegram =
       if chat in f.accessError: raise newException(IOError, f.accessError[chat])
       return f.access.getOrDefault(chat, ChatAccess(title: "chat" & $(-chat), status: "ok"))
 
+proc tail(reason: string): string =
+  ## a held-back reason as stored, after its "not posted: " lead-in (a count
+  ## may go right after the lead-in)
+  problemText(reason)["not posted: ".len .. ^1]
+
 proc noFetch(): Fetcher =
   result = proc (url: string): Future[Fetched] {.closure, gcsafe.} =
     var fut = newFuture[Fetched]("nofetch")
@@ -205,7 +210,7 @@ suite "listener":
     check f.forwarded.len == 0 and f.texts.len == 0
     check st.processedRow(-2, 5)[1].action == "queued for review"     # not an error
     let r = st.pendingReviews()
-    check r.len == 1 and r[0].msgId == 5 and privateHeldBack in r[0].reasons and "error" notin r[0].reasons
+    check r.len == 1 and r[0].msgId == 5 and tail(privateHeldBack) in r[0].reasons and "error" notin r[0].reasons
     check r[0].link == "https://t.me/c/2/5"            # for you: you're a member
     check st.recentPublished().len == 0 and st.stats(1)[0].forwarded == 0
 
@@ -234,7 +239,7 @@ suite "listener":
     waitFor l.bootstrap()
     check f.texts.len == 0
     let r = st.pendingReviews()
-    check r.len == 1 and privateHeldBack in r[0].reasons
+    check r.len == 1 and tail(privateHeldBack) in r[0].reasons
     check "Review's Send can't post it" in r[0].reasons and "post it yourself in Telegram" in r[0].reasons
 
   test "forward_fallback summary: a public post with no link isn't summarized without it; review gets it":
@@ -295,7 +300,7 @@ suite "listener":
     waitFor l.sendApproved()
     check f.texts.len == 0 and f.forwarded.len == 0
     let r = st.pendingReviews()
-    check r.len == 1 and privateHeldBack in r[0].reasons
+    check r.len == 1 and tail(privateHeldBack) in r[0].reasons
 
   test "forward_fallback summary: a held-back post approved again and again keeps one copy of the reason":
     let f = FakeTg()
@@ -310,8 +315,8 @@ suite "listener":
       check st.decideReview(st.pendingReviews()[0].id, "to_send")
       waitFor l.sendApproved()                           # bounces back each time
     let r = st.pendingReviews()
-    check f.texts.len == 0 and r.len == 1 and r[0].reasons.count(privateHeldBack) == 1
-    check r[0].reasons.endsWith(privateHeldBack & " (4 tries)")    # held live, then 3 approvals
+    check f.texts.len == 0 and r.len == 1 and r[0].reasons.count(tail(privateHeldBack)) == 1
+    check r[0].reasons.endsWith("not posted (4 tries): " & tail(privateHeldBack))   # held live, then 3 approvals
     var said = 0
     for x in lines:
       if "not posted:" in x:
@@ -325,7 +330,36 @@ suite "listener":
         if x.msgId == 9: check st.decideReview(x.id, "to_send")
       waitFor l.sendApproved()
     for x in st.pendingReviews():
-      if x.msgId == 9: check x.reasons.count(emptyHeldBack) == 1 and x.reasons.count("could not send: ") == 1
+      if x.msgId == 9:
+        check x.reasons.count(tail(emptyHeldBack)) == 1 and "could not send" notin x.reasons
+        check x.reasons.endsWith("not posted (2 tries): " & tail(emptyHeldBack))
+
+  test "reasons read cleanly after approval: no stacked lead-ins, no \".;\" (#142 run 6: R4b, R6c)":
+    # R4b: approved, then held back (an upgraded group): no "could not send: not posted: …"
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.access[-2] = ChatAccess(title: "Old group", status: "upgraded", newChat: -1000000000009)
+    let (l, st) = setup(f, fallback = "summary")
+    st.addReview(-2, 8, "chat2", good & " على الواتساب", "no level", "مهندس كهرباء", "")
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    waitFor l.sendApproved()
+    check f.texts.len == 0
+    check st.pendingReviews()[0].reasons == "no level; " & problemText(privateHeldBack)
+    # R6c: held live (private), then a public channel whose link fails: one reason after the other
+    let g = FakeTg()
+    g.noForward.incl -2
+    g.access[-2] = ChatAccess(title: "G", status: "ok", public: false, channel: false)
+    g.chats[-2] = @[msg(-2, 5, good)]
+    let (m, sm) = setup(g, fallback = "summary")
+    waitFor m.bootstrap()
+    g.access[-2] = ChatAccess(title: "G", status: "ok", public: true, channel: true)
+    g.linkFails = true
+    check sm.decideReview(sm.pendingReviews()[0].id, "to_send")
+    waitFor m.sendApproved()
+    let r = sm.pendingReviews()[0].reasons
+    check ".; " notin r and "could not send: not posted" notin r
+    check r.endsWith(problemText(privateHeldBack) & "; could not send: no link to the post from Telegram " &
+                     "(no link), so no summary was sent. Approve it again to retry")
 
   test "forward_fallback summary: an approved review with no role and no way to apply goes back to review":
     let f = FakeTg()
@@ -337,7 +371,7 @@ suite "listener":
     waitFor l.sendApproved()
     check f.texts.len == 0
     let r = st.pendingReviews()
-    check r.len == 1 and emptyHeldBack in r[0].reasons
+    check r.len == 1 and tail(emptyHeldBack) in r[0].reasons
 
   test "the summary's link is read back for compare, the old English line too; a title can't stand in (#80)":
     let f = FakeTg()

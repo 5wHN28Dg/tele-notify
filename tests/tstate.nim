@@ -78,26 +78,26 @@ suite "state":
     check withProblem("role x; " & held, "no link") == "role x; " & held & "; could not send: no link"
     var r = "role x"
     for _ in 1 .. 3: r = withProblem(r, "FLOOD_WAIT")
-    check r == "role x; could not send: FLOOD_WAIT (3 tries)"
+    check r == "role x; could not send (3 tries): FLOOD_WAIT"
     # a reason the live post was held back for (or the filter wrote) is its first try
     r = "role x; not posted: it isn't from a public channel"
     r = withProblem(r, "not posted: it isn't from a public channel")
-    check r == "role x; not posted: it isn't from a public channel (2 tries)"
+    check r == "role x; not posted (2 tries): it isn't from a public channel"
     r = withProblem(r, "not posted: it isn't from a public channel")
-    check r == "role x; not posted: it isn't from a public channel (3 tries)"
+    check r == "role x; not posted (3 tries): it isn't from a public channel"
     check withProblem("", "no link") == "could not send: no link"
 
   test "a live error isn't repeated on approval; old copies fold; counts stay sane (#142 run 5)":
     # the live post's "error: <problem>" is the same reason
     let e = "no link to the post from Telegram (no link), so no summary was sent. Approve it again to retry"
-    check withProblem("role x; error: " & e, e) == "role x; error: " & e & " (2 tries)"
+    check withProblem("role x; error: " & e, e) == "role x; error (2 tries): " & e   # the count after "error"
     # copies an older bot wrote are folded into one, with their tries summed
     check withProblem("no level; could not send: FLOOD_WAIT; could not send: FLOOD_WAIT", "FLOOD_WAIT") ==
-      "no level; could not send: FLOOD_WAIT (3 tries)"
+      "no level; could not send (3 tries): FLOOD_WAIT"
     check withProblem("x; could not send: A (2 tries); error: A; could not send: A", "A") ==
-      "x; could not send: A (5 tries)"
+      "x; could not send (5 tries): A"
     # a problem never holds "; ": it can't match a piece of another reason
-    check withProblem("could not send: a, b", "a; b") == "could not send: a, b (2 tries)"
+    check withProblem("could not send: a, b", "a; b") == "could not send (2 tries): a, b"
     check problemText("a; b\nAsync traceback: …") == "a, b"
     # a count that can't be right isn't trusted: a new part instead, never an overflow
     check withProblem("could not send: A (9223372036854775807 tries)", "A") ==
@@ -105,7 +105,7 @@ suite "state":
     check withProblem("could not send: A (1000001 tries)", "A") ==
       "could not send: A (1000001 tries); could not send: A"
     check withProblem("could not send: A (-3 tries)", "A") == "could not send: A (-3 tries); could not send: A"
-    check withProblem("could not send: A (1000000 tries)", "A") == "could not send: A (1000000 tries)"
+    check withProblem("could not send: A (1000000 tries)", "A") == "could not send (1000000 tries): A"
     # through the database
     st.addReview(-300, 1, "Jobs", "text", "no level", "role", "")
     var id = 0'i64
@@ -115,7 +115,29 @@ suite "state":
       check st.decideReview(id, "to_send")
       st.reopenReview(id, "level")
     for x in st.pendingReviews():
-      if x.chatId == -300: check x.reasons == "no level; could not send: level (2 tries)"
+      if x.chatId == -300: check x.reasons == "no level; could not send (2 tries): level"
+
+  test "reasons read cleanly: no stacked lead-ins, no \".;\", a fixed text for no message (#142 run 6)":
+    # held back on approval: added as it is, not after "could not send: " (wp6 P13)
+    let empty = problemText("not posted: the summary would say nothing. Otherwise discard it.")
+    let priv = "not posted: it isn't from a public channel. Otherwise discard it."
+    check withProblem("role x; " & empty, priv, heldBack = true) == "role x; " & empty & "; " & problemText(priv)
+    check problemText(priv) == "not posted: it isn't from a public channel. Otherwise discard it"
+    check ".; " notin withProblem("role x; " & empty, "no link", heldBack = false)
+    # no message at all: a fixed text, counted like any other (wp6 P3, P4)
+    check problemText("") == unknownProblem and problemText("  \n ") == unknownProblem
+    var r = withProblem("role", "")
+    check r == "role; could not send: unknown error"
+    r = withProblem(r, "  \n ")
+    check r == "role; could not send (2 tries): unknown error"
+    # a problem that itself ends like a count still folds (wp6 P1b)
+    r = "role"
+    for _ in 1 .. 3: r = withProblem(r, "boom (2 tries)")
+    check r == "role; could not send (3 tries): boom (2 tries)"
+    r = "role; boom (2 tries)"                           # written by the filter: its first try
+    r = withProblem(r, "boom (2 tries)")
+    check r == "role; boom (2 tries) (2 tries)"
+    check withProblem(r, "boom (2 tries)") == "role; boom (2 tries) (3 tries)"
 
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")

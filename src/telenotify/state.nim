@@ -342,68 +342,97 @@ proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"):
 const couldNotSend = "could not send: "
 
 const maxTries = 1_000_000   ## a stored count above this isn't trusted (a new part is added)
+const unknownProblem* = "unknown error"   ## a failure with no message
+const leads = ["could not send", "error", "not posted"]
+  ## a reason part's lead-in ("error: …"): a count goes right after it
 
 proc problemText*(msg: string): string =
   ## A failure's message as one reason part: its first line (a debug build
   ## adds an async traceback), with "; " (which separates the parts)
-  ## written ", ".
+  ## written ", ", and no closing "." (another part may follow it). No
+  ## message at all is "unknown error".
   let lines = msg.strip.splitLines
-  (if lines.len > 0: lines[0].strip else: "").replace("; ", ", ")
+  result = (if lines.len > 0: lines[0].strip else: "").replace("; ", ", ")
+  if result.endsWith(".") and not result.endsWith(".."): result.setLen result.len - 1
+  result = result.strip
+  if result == "": result = unknownProblem
+
+proc parseTries(words: string): int =
+  ## "3 tries" / "1 try" -> 3 / 1; -1 if it isn't a count in 0 .. maxTries.
+  let w = words.split(' ')
+  if w.len != 2 or w[1] notin ["try", "tries"]: return -1
+  try:
+    let n = parseInt(w[0])
+    if n in 0 .. maxTries: return n
+  except ValueError: discard
+  -1
 
 proc splitCount(part: string): tuple[base: string, tries: int] =
-  ## "<base> (N tries)" / "<base> (N try)" -> (base, N); else (part, -1).
-  ## A count outside 0 .. maxTries isn't one.
+  ## A part with its count taken out: "error (3 tries): x" -> ("error: x",
+  ## 3); "x (3 tries)" -> ("x", 3); no count -> (part, -1).
   result = (part, -1)
+  for lead in leads:
+    if part.startsWith(lead & " ("):
+      let close = part.find("): ", lead.len)
+      if close > 0:
+        let n = parseTries(part[lead.len + 2 ..< close])
+        if n >= 0: return (lead & ": " & part[close + 3 .. ^1], n)
   if not part.endsWith(")"): return
   let open = part.rfind(" (")
   if open < 0: return
-  let words = part[open + 2 ..< part.len - 1].split(' ')
-  if words.len != 2 or words[1] notin ["try", "tries"]: return
-  try:
-    let n = parseInt(words[0])
-    if n in 0 .. maxTries: result = (part[0 ..< open], n)
-  except ValueError: discard
+  let n = parseTries(part[open + 2 ..< part.len - 1])
+  if n >= 0: result = (part[0 ..< open], n)
 
-proc withProblem*(reasons, problem: string): string =
-  ## `reasons` ("a; b; …") after a failed send for `problem`. If it already
-  ## has that reason as a whole part (`problem` itself, held back live
-  ## (#80) or written by the filter; "error: <problem>" from the live post;
-  ## or "could not send: <problem>" from an earlier try), it isn't added
-  ## again: the first such part gets the number of tries instead, "(2
-  ## tries)", counting each of those parts (one without a count is one
-  ## try; copies an older bot wrote are folded into it). Otherwise
-  ## "could not send: <problem>" is added. The problem is `problemText`:
-  ## one line, with no "; " in it, so it's always compared as a whole.
+proc withCount(base: string, n: int): string =
+  ## `base` with "(n tries)" where it reads naturally: after its lead-in
+  ## ("error (3 tries): …"), else at the end.
+  let count = "(" & $n & (if n == 1: " try)" else: " tries)")
+  for lead in leads:
+    if base.startsWith(lead & ": "): return lead & " " & count & ": " & base[lead.len + 2 .. ^1]
+  base & " " & count
+
+proc withProblem*(reasons, problem: string, heldBack = false): string =
+  ## `reasons` ("a; b; …") after a failed send for `problem` (`heldBack`:
+  ## it was held back on purpose, #80, and is added as it is, not after
+  ## "could not send: "). If it already has that reason as a whole part
+  ## (`problem` itself, held back live or written by the filter; "error:
+  ## <problem>" from the live post; or "could not send: <problem>"), with
+  ## or without a count, it isn't added again: the first such part gets
+  ## the number of tries instead, "error (2 tries): …", counting each of
+  ## those parts (one without a count is one try; copies an older bot
+  ## wrote are folded into it). The problem is `problemText`: one line,
+  ## with no "; " in it, so it's always compared as a whole.
   let p = problemText(problem)
   var parts = if reasons == "": newSeq[string]() else: reasons.split("; ")
-  if p != "":
-    let forms = [p, "error: " & p, couldNotSend & p]
-    var first = -1
-    var total = 0
-    var kept: seq[string]
-    for part in parts:
-      let (base, tries) = splitCount(part)
-      if base in forms:
-        total += (if tries >= 0: tries else: 1)
-        if first < 0:
-          first = kept.len
-          kept.add base
-        continue                      # a copy: folded into the first
-      kept.add part
-    if first >= 0:
-      let n = min(total + 1, maxTries)
-      kept[first] = kept[first] & " (" & $n & (if n == 1: " try)" else: " tries)")
-      return kept.join("; ")
-  parts.add couldNotSend & p
+  let forms = [p, "error: " & p, couldNotSend & p]
+  var first = -1
+  var total = 0
+  var kept: seq[string]
+  for part in parts:
+    # the whole part first: the problem itself may end in something count-like
+    var (base, tries) = (part, -1)
+    if part notin forms: (base, tries) = splitCount(part)
+    if base in forms:
+      total += (if tries >= 0: tries else: 1)
+      if first < 0:
+        first = kept.len
+        kept.add base
+      continue                      # a copy: folded into the first
+    kept.add part
+  if first >= 0:
+    kept[first] = withCount(kept[first], min(total + 1, maxTries))
+    return kept.join("; ")
+  parts.add (if heldBack: p else: couldNotSend & p)
   parts.join("; ")
 
-proc reopenReview*(s: State, id: int64, problem: string) =
-  ## Sending failed: put it back in the queue, with the reason
-  ## (`withProblem`: a reason it already has is counted, not repeated).
+proc reopenReview*(s: State, id: int64, problem: string, heldBack = false) =
+  ## Sending failed (or was held back, `heldBack`): put it back in the
+  ## queue, with the reason (`withProblem`: a reason it already has is
+  ## counted, not repeated).
   let row = s.db.getRow(sql"SELECT COALESCE(reasons, '') FROM reviews WHERE id = ? AND status = 'to_send'", id)
   if row.len == 0: return
   s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = ?
-                   WHERE id = ? AND status = 'to_send'""", withProblem(row[0], problem), id)
+                   WHERE id = ? AND status = 'to_send'""", withProblem(row[0], problem, heldBack), id)
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)
