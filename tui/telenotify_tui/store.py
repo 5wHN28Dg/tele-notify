@@ -198,7 +198,12 @@ class Store:
         record a clean stop. (A crash is noticed once the heartbeat is ALIVE_SECONDS old.)"""
         alive = self.last_alive()
         return (alive is not None and time.time() - alive < ALIVE_SECONDS
-                and self.meta("connection") != "stopped")
+                and self.meta("connection") not in ("stopped", "logged out"))   # a log-out stops it too
+
+    def logged_out(self) -> bool:
+        """Telegram logged the account out (or it never logged in): `telenotify login` first,
+        as the Dashboard says. (state.nim loggedOut)"""
+        return self.meta("connection") == "logged out" or self.meta("login_needed") == "1"
 
     def bot_sending(self) -> bool:
         """Is the bot running and sending approved posts? Its worker has started (`sending_ready`,

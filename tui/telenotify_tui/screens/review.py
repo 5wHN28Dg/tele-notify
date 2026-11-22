@@ -95,7 +95,8 @@ def cut(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def status_label(r: Review, dry_run: bool, bot_up: bool = True, now: float | None = None) -> str:
+def status_label(r: Review, dry_run: bool, bot_up: bool = True, now: float | None = None,
+                 logged_out: bool = False) -> str:
     """A decided post's status in a few words (History's column: 15 characters at most, so the
     post column still starts on an 80-column screen), with an approved post's countdown (#62).
     `bot_up`: the bot is running; without it nothing is sent, and nothing is promised."""
@@ -103,7 +104,7 @@ def status_label(r: Review, dry_run: bool, bot_up: bool = True, now: float | Non
         if dry_run:
             return "approved"
         if not bot_up:
-            return "waits for bot"
+            return "needs login" if logged_out else "waits for bot"
         left = (r.send_after or 0) - int(time.time() if now is None else now)
         return f"sends in {left} s" if left > 0 else "sending soon"
     if r.status == "sending":
@@ -224,6 +225,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._past: list[Review] = []              # the History rows, in table order
         self._bot_up = True                        # the bot was sending when the state was last read
         self._bot_starting = False                 # it runs, but hasn't started sending yet (backlog)
+        self._bot_logged_out = False               # Telegram logged it out: `telenotify login` first
         self._hist_cols: list = []                 # History's column keys
         self._hist_row_id: int | None = None       # the History row under the cursor ...
         self._hist_shown_at = 0.0                  # ... since when (u waits DECIDE_DELAY, as s / d do)
@@ -431,7 +433,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 exists, has_table = st.exists, st.has_table("reviews")
                 items = st.reviews("pending")
                 past = history(st) if self._history_mode else []
-                bot_up, starting = st.bot_sending(), st.bot_running()
+                bot_up, starting, logged_out = st.bot_sending(), st.bot_running(), st.logged_out()
                 last_now = st.review(self._last[0].id) if self._watching_last() else None
         except (sqlite3.Error, OSError, ValueError) as e:   # a lock, a broken file, a value that isn't a number
             self._read_error = True
@@ -450,6 +452,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._read_error = False
             self.note(self._unrecorded, "bad") if self._unrecorded else self.note("")
         self._bot_up, self._bot_starting = bot_up, starting and not bot_up
+        self._bot_logged_out = logged_out
         if self._watching_last() and self._last is not None:
             self._show_last(self._last[0], last_now)
         mode = " · dry run" if paths.dry_run else ""
@@ -536,7 +539,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         dry, now = self.app.paths.dry_run, time.time()
 
         def cells(r: Review) -> tuple:
-            return (when(r.decided_at or r.at), Text(status_label(r, dry, self._bot_up, now)),
+            return (when(r.decided_at or r.at),
+                    Text(status_label(r, dry, self._bot_up, now, self._bot_logged_out)),
                     Text(visual(cut(r.chat_title, 20))), Text(visual(cut(r.role, 22))),
                     Text(visual(cut(r.text, 40))))
         ids = [r.id for r in past]
@@ -619,21 +623,23 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             try:
                 with self.app.store(TICK_TIMEOUT) as st:
                     past = history(st)
-                    bot_up, starting = st.bot_sending(), st.bot_running()
+                    bot_up, starting, logged_out = st.bot_sending(), st.bot_running(), st.logged_out()
                     exists, has_table = st.exists, st.has_table("reviews")
             except (sqlite3.Error, OSError, ValueError):
                 return   # busy or broken: the next second tries again
             self._bot_up, self._bot_starting = bot_up, starting and not bot_up
+            self._bot_logged_out = logged_out
             self._fill_history(past, exists, has_table)
             self._sync_controls()
         elif self._last is not None:
             try:
                 with self.app.store(TICK_TIMEOUT) as st:
                     now = st.review(self._last[0].id)
-                    bot_up, starting = st.bot_sending(), st.bot_running()
+                    bot_up, starting, logged_out = st.bot_sending(), st.bot_running(), st.logged_out()
             except (sqlite3.Error, OSError, ValueError):
                 return
             self._bot_up, self._bot_starting = bot_up, starting and not bot_up
+            self._bot_logged_out = logged_out
             self._show_last(self._last[0], now)
         self._arm()
 
@@ -645,12 +651,18 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             return sd.INT_KEYS["undo_seconds"]
 
     def _approved_note(self, r: Review, send_after: int | None, up: bool | None = None,
-                       starting: bool | None = None, now: float | None = None) -> str:
-        """An approval's note as things are (`up`, `starting`: the bot, as last read)."""
+                       starting: bool | None = None, now: float | None = None,
+                       logged_out: bool | None = None) -> str:
+        """An approval's note as things are (`up`, `starting`, `logged_out`: the bot, as last read)."""
         up = self._bot_up if up is None else up
         starting = self._bot_starting if starting is None else starting
+        logged_out = self._bot_logged_out if logged_out is None else logged_out
         if self.app.paths.dry_run:
             return f"#{r.msg_id} approved: recorded only (dry run, nothing is sent) (u undoes)"
+        if logged_out and not up and not starting:
+            # the Dashboard's words for a log-out
+            return (f"#{r.msg_id} approved. Not logged in to Telegram: it will be sent once you run "
+                    "telenotify login and start the bot (u undoes)")
         if starting and not up:
             return (f"#{r.msg_id} approved. The bot is starting: it will be sent once it has caught up "
                     "(u undoes)")
@@ -725,11 +737,16 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             n.styles.min_height = None
             return
         decided = self._last[0]
-        texts = [self._approved_note(decided, int(time.time()) + 60, up, starting)
-                 for up, starting in ((True, False), (False, False), (False, True))]
-        texts.append(self._approved_note(decided, 0, True, False))
-        for status, reasons in (("sending", ""), ("sent", ""),
-                                ("pending", decided.reasons + "; could not send: " + "x" * 60)):
+        texts = [self._approved_note(decided, int(time.time()) + 60, up, starting, logged_out=out)
+                 for up, starting, out in ((True, False, False), (False, False, False), (False, True, False),
+                                           (False, False, True))]
+        texts.append(self._approved_note(decided, 0, True, False, logged_out=False))
+        # a failed send, with each plain-words reason it can show: the table's, TDLib's flood
+        # wait at its longest, and an unknown reason cut to 60 characters (in words and unbroken)
+        reasons = [*SEND_ERRORS, "Too Many Requests: retry after 86400", "x" * 60, "wait " * 12]
+        cases = [("sending", ""), ("sent", "")]
+        cases += [("pending", decided.reasons + "; could not send: " + why) for why in reasons]
+        for status, reasons in cases:
             for up in (True, False):
                 self._bot_up, was = up, self._bot_up
                 texts.append(self._status_texts(decided, dataclasses.replace(decided, status=status,
@@ -790,6 +807,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 now_status = now.status if now is not None and not ok else None
                 self._bot_up = st.bot_sending()
                 self._bot_starting = st.bot_running() and not self._bot_up
+                self._bot_logged_out = st.logged_out()
         except (sqlite3.Error, OSError) as e:   # the bot holds a lock, or the file is broken
             self._unrecorded = f"#{r.msg_id} NOT recorded (the state file can't be written: {e}); try again"
             self._refresh_note()

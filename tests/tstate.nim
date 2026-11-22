@@ -538,5 +538,34 @@ suite "state":
     st.setMeta("connection", "stopped")
     check not st.botRunning(t) and not st.botSending(t)
 
+  test "a run's start is written all or nothing, and clears a crashed bot's sending_ready (review run 4)":
+    st.setMeta("connection", "ready")
+    st.setMeta("sending_ready", "1")                # a bot that crashed a moment ago
+    st.markRunStarting(false, at = 1234)
+    check st.getMeta("mode") == "real" and st.getMeta("started_at") == "1234"
+    check st.getMeta("connection") == "starting" and st.getMeta("sending_ready") == "0"
+    # the fourth write fails: none of them stays
+    st.setMeta("connection", "ready")
+    st.setMeta("sending_ready", "1")
+    let raw = open(dir / "state.sqlite3", "", "", "")
+    raw.exec(sql"""CREATE TRIGGER fail_ready BEFORE INSERT ON meta WHEN NEW.key = 'sending_ready'
+                   BEGIN SELECT RAISE(ABORT, 'disk full'); END""")
+    expect DbError:
+      st.markRunStarting(true, at = 5678)
+    raw.exec(sql"DROP TRIGGER fail_ready")
+    raw.close()
+    check st.getMeta("mode") == "real" and st.getMeta("started_at") == "1234"
+    check st.getMeta("connection") == "ready" and st.getMeta("sending_ready") == "1"
+
+  test "a log-out is not a running bot; it needs a new login (review run 4, R4-2)":
+    let t = getTime().toUnix
+    st.setMeta("last_alive", $(t - 10))
+    st.setMeta("sending_ready", "0")
+    st.setMeta("login_needed", "")
+    st.setMeta("connection", "logged out")
+    check not st.botRunning(t) and not st.botSending(t) and st.loggedOut()
+    st.setMeta("connection", "ready")
+    check st.botRunning(t) and not st.loggedOut()
+
 st.close()
 removeDir(dir)

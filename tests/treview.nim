@@ -135,6 +135,20 @@ suite "what review promises (review run 2)":
       st.setMeta("last_alive", $getTime().toUnix)
       st.setMeta("connection", "starting")
       st.setMeta("sending_ready", "0")
+    block:                                    # Telegram logged the account out (R4-2)
+      let st = openState(statePath(cfg, false))
+      defer: st.close()
+      st.setMeta("connection", "logged out")
+    addOne(10)
+    f = answers("loggedout.txt", "s\ny\n")
+    shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)
+    f.close()
+    check "not logged in to Telegram: it is sent once you run telenotify login and start the bot" in shown
+    check "starting" notin shown
+    block:
+      let st = openState(statePath(cfg, false))
+      defer: st.close()
+      st.setMeta("connection", "starting")
     addOne(9)
     f = answers("starting.txt", "s\ny\n")
     shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)

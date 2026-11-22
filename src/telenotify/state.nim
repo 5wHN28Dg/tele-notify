@@ -412,9 +412,15 @@ proc botRunning*(s: State, at = now()): bool =
   ## minute) is under 120 s old and it didn't record a clean stop. The
   ## terminal screen asks the same (store.py `bot_running`).
   let alive = s.getMeta("last_alive")
-  if alive == "" or s.getMeta("connection") == "stopped": return false
+  # a log-out: it stopped (and won't start again until you log in)
+  if alive == "" or s.getMeta("connection") in ["stopped", "logged out"]: return false
   try: at - parseBiggestInt(alive) < 120
   except ValueError: false
+
+proc loggedOut*(s: State): bool =
+  ## Telegram logged this account out (or it never logged in): `telenotify
+  ## login` is needed before the bot can run (the Dashboard says the same).
+  s.getMeta("connection") == "logged out" or s.getMeta("login_needed") == "1"
 
 proc botSending*(s: State, at = now()): bool =
   ## Is it also sending approved posts: its worker has started, after the
@@ -534,6 +540,22 @@ proc addAlert*(s: State, text: string) =
   ## Keep an alert so the terminal screen can list it. Only the newest 500.
   s.db.exec(sql"INSERT INTO alerts (at, text) VALUES (?, ?)", now(), text)
   s.db.exec(sql"DELETE FROM alerts WHERE id <= (SELECT MAX(id) FROM alerts) - 500")
+
+proc markRunStarting*(s: State, dryRun: bool, at = now()) =
+  ## A run has TDLib's lock: it is this file's bot now. Its mode, start time,
+  ## "starting" and "not sending yet" (a crashed bot's `sending_ready` = 1
+  ## mustn't promise sends during the new run's login), all or nothing.
+  s.db.exec(sql"BEGIN IMMEDIATE")
+  try:
+    s.setMeta("mode", if dryRun: "dry-run" else: "real")
+    s.setMeta("started_at", $at)
+    s.setMeta("connection", "starting")
+    s.setMeta("sending_ready", "0")       # until the worker starts, after the backlog
+    s.db.exec(sql"COMMIT")
+  except CatchableError as e:
+    try: s.db.exec(sql"ROLLBACK")
+    except CatchableError: discard
+    raise e
 
 proc markLoginNeeded*(s: State, alert: string): bool {.discardable.} =
   ## The account isn't logged in: the connection says so, and `alert` is kept

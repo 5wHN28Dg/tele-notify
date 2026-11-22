@@ -162,7 +162,15 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   var titles = initTable[int64, string]()
   let watched = cfg.chats
   var accessReady = false   # the start-up check reads the current state first
-  let connecting = loggedInOrRecord(st, dry, connect(cfg, interactive = false, onUpdate =
+  # Once TDLib holds its lock (before the login is checked, which can take a
+  # while): this run is the bot now, so it says "starting" and "not sending
+  # yet" at once, all four keys together. A second run that TDLib refuses
+  # never gets here, so it can't overwrite the running bot's state (review
+  # runs 3 and 4).
+  let locked = proc () {.closure, gcsafe.} =
+    try: st.markRunStarting(dry)
+    except CatchableError as e: echo "   could not update the state database: ", e.msg
+  let connecting = loggedInOrRecord(st, dry, connect(cfg, interactive = false, onLocked = locked, onUpdate =
     proc (u: JsonNode) {.closure, gcsafe.} =
       if l == nil: return
       case u{"@type"}.getStr
@@ -220,18 +228,9 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     raise connecting.readError
   let s = connecting.read
   # Telegram's session is open, so this run holds TDLib's lock on the data
-  # folder: no other bot on this state file is running. Only now does it say
-  # it runs (a second `telenotify run` that TDLib refuses must not overwrite
-  # the running bot's state, review run 3), and a post the last run was
-  # sending when it stopped goes back to the queue, for you to check, never
-  # out twice.
-  try:
-    st.setMeta("mode", if dry: "dry-run" else: "real")
-    st.setMeta("started_at", $getTime().toUnix)
-    st.setMeta("connection", "starting")
-    st.setMeta("sending_ready", "0")       # until the worker starts, after the backlog
-  except CatchableError as e:
-    echo "   could not update the state database: ", e.msg
+  # folder: no other bot on this state file is running. A post the last run
+  # was sending when it stopped goes back to the queue, for you to check,
+  # never out twice.
   try:
     let reopened = st.reopenInterruptedSends()
     if reopened > 0:
@@ -343,6 +342,7 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
     return 0
   let botUp = st.botSending()
   let botStarting = not botUp and st.botRunning()
+  let needsLogin = not botUp and not botStarting and st.loggedOut()
   let sendQuestion = if dryRun: "Record as approved (dry run, nothing is sent)?"
                      else: "Send this post to the channel?"
   let discardQuestion = if dryRun: "Record as discarded (dry run)?" else: "Discard?"
@@ -373,6 +373,9 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
         elif st.decideReview(r.id, "to_send", undoSeconds = cfg.undoSeconds):
           inc approved
           if dryRun: echo "approved ✅ (dry run: recorded, never sent)"
+          elif needsLogin:
+            echo "approved ✅ (not logged in to Telegram: it is sent once you run telenotify login and " &
+                 "start the bot; until then the terminal screen's Review tab can undo it)"
           elif botStarting:
             echo "approved ✅ (the bot is starting: it is sent once it has caught up; until then the " &
                  "terminal screen's Review tab can undo it)"
@@ -398,6 +401,8 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
     if quitting: break
   if approved > 0:
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
+    elif needsLogin: echo &"\n{approved} approved: not logged in to Telegram, so they are sent once you " &
+                          "run telenotify login and start the bot."
     elif botStarting: echo &"\n{approved} approved: the bot is starting, so they are sent once it has caught up."
     elif not botUp: echo &"\n{approved} approved: the bot isn't running, so they are sent when it starts."
     elif cfg.undoSeconds > 0: echo &"\n{approved} approved: the bot sends them after {cfg.undoSeconds} s."

@@ -34,8 +34,12 @@ proc ask(prompt: string, secret = false): string =
   stdin.readLine.strip
 
 proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
-                  onUpdate: UpdateHandler = nil): Future[Session] {.async.} =
-  ## `connect` with a given library (tests pass a fake one).
+                  onUpdate: UpdateHandler = nil,
+                  onLocked: proc () {.closure, gcsafe.} = nil): Future[Session] {.async.} =
+  ## `connect` with a given library (tests pass a fake one). `onLocked` is
+  ## called once TDLib has taken its database (setTdlibParameters answered:
+  ## it holds the lock on `<data_dir>/tdlib`, so no other bot on this folder
+  ## runs), before the login is checked.
   let c = newTdClient(lib)
   var authState = ""
   c.onUpdate = proc (u: JsonNode) {.closure, gcsafe.} =
@@ -53,6 +57,7 @@ proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
     case authState
     of "authorizationStateWaitTdlibParameters":
       discard await c.call(tdParams(cfg))
+      if onLocked != nil: onLocked()
     of "authorizationStateWaitPhoneNumber", "authorizationStateWaitCode",
        "authorizationStateWaitPassword", "authorizationStateWaitOtherDeviceConfirmation":
       if not interactive:
@@ -87,7 +92,8 @@ proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
         ". Log in once with an official Telegram app on this account, then try again")
 
 proc connect*(cfg: Config, interactive: bool,
-              onUpdate: UpdateHandler = nil): Future[Session] {.async.} =
+              onUpdate: UpdateHandler = nil,
+              onLocked: proc () {.closure, gcsafe.} = nil): Future[Session] {.async.} =
   ## Start TDLib and wait until logged in. With `interactive`, asks for the
   ## phone number, code and password as needed; otherwise raises if not
   ## logged in.
@@ -95,7 +101,7 @@ proc connect*(cfg: Config, interactive: bool,
     raise newException(ValueError, "api_id and api_hash are missing from config.json")
   createDir(cfg.dataDir)
   setFilePermissions(cfg.dataDir, {fpUserRead, fpUserWrite, fpUserExec})  # your login lives here
-  return await connectWith(loadTdLib(cfg.tdlibPath), cfg, interactive, onUpdate)
+  return await connectWith(loadTdLib(cfg.tdlibPath), cfg, interactive, onUpdate, onLocked)
 
 proc loadAllChats*(s: Session) {.async.} =
   ## TDLib only knows chats it has loaded; ask for the main list and the

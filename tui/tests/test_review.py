@@ -1252,6 +1252,62 @@ async def test_the_undo_wait_warning_survives_a_reload(paths, state, now, monkey
         assert status_of(state, 50) == "discarded"
 
 
+# ------------------------------------------------- review run 4
+
+async def test_a_log_out_says_a_new_login_is_needed(paths, state):
+    """R4-2: with a fresh heartbeat but connection "logged out", not "the bot is starting"."""
+    set_meta(state, "sending_ready", "0")
+    set_meta(state, "connection", "logged out")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert ("#11 approved. Not logged in to Telegram: it will be sent once you run telenotify login "
+                "and start the bot (u undoes)") in note(app)
+        assert "starting" not in note(app) and not pane._counting()
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]) == "needs login"
+
+
+async def test_a_failed_send_beside_a_label_error_never_moves_the_post(paths, state, now, monkeypatch):
+    """R4-1: the protected-content failure (the longest plain words) beside a label error fits in the
+    height kept for the note. With this label error, at a note 87 or 88 columns wide, the failure is
+    the tallest thing the note can say, a line taller than with 60 unbroken characters (what was
+    measured before): every screen width around those."""
+    def no_label(review, decision):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(review_mod, "write_label", no_label)
+    why = "; could not send: Message has protected content and can't be forwarded (400)"
+    add_pending(state, 90, "the next post", now - 5)
+    moved, note_widths = [], set()
+    for width in range(95, 131):
+        set_row(state, 11, status="pending", send_after=None, decided_at=None, reasons="x")
+        set_meta(state, "last_alive", str(int(time.time())))      # the bot runs all along
+        app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+        async with app.run_test(size=(width, 30)) as pilot:
+            await open_review(pilot)
+            pane = app.query_one(ReviewPane)
+            await pilot.press("s")
+            await pilot.pause()
+            note_widths.add(app.query_one("#review-note").content_region.width)
+            y = app.query_one("#review-split").region.y
+            db = sqlite3.connect(state)
+            db.execute("UPDATE reviews SET status = 'pending', send_after = NULL, reasons = reasons || ? "
+                       "WHERE msg_id = 11", (why,))
+            db.commit()
+            db.close()
+            pane._countdown()
+            await pilot.pause()
+            assert "source doesn't allow forwarding" in note(app) and "No space left on device" in note(app)
+            if app.query_one("#review-split").region.y != y:
+                moved.append(width)
+    assert {87, 88} <= note_widths                    # the widths where it matters were reached
+    assert moved == []
+
+
 async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
     monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
     add_pending(state, 7, "second post", now - 10)

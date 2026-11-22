@@ -6,6 +6,7 @@ import telenotify/[session, tdjson, config, commands, state]
 var outbox = initDeque[string]()
 var current: string
 var nextState = "authorizationStateWaitEmailAddress"
+var paramsRefused = false     # like a second bot: TDLib can't lock its database
 
 proc authUpdate(s: string): string =
   $(%*{"@type": "updateAuthorizationState", "authorization_state": {"@type": s}})
@@ -14,6 +15,10 @@ proc fakeCreate(): cint {.cdecl, gcsafe.} = 1
 proc fakeExecute(req: cstring): cstring {.cdecl, gcsafe.} = nil
 proc fakeSend(id: cint, req: cstring) {.cdecl, gcsafe.} = {.cast(gcsafe).}:
   let r = parseJson($req)
+  if paramsRefused and r{"@type"}.getStr == "setTdlibParameters":
+    outbox.addLast $(%*{"@type": "error", "code": 400, "@extra": r["@extra"], "message":
+      "Can't lock file \"td.binlog\", because it is already in use; check for another program instance running"})
+    return
   outbox.addLast $(%*{"@type": "ok", "@extra": r["@extra"]})
   if r{"@type"}.getStr == "setTdlibParameters": outbox.addLast authUpdate(nextState)
 proc fakeReceive(timeout: cdouble): cstring {.cdecl, gcsafe.} = {.cast(gcsafe).}:
@@ -51,6 +56,18 @@ suite "session":
     check st.getMeta("login_needed") == "1"
     check st.getMeta("connection") == "logged out"
 
+  test "once TDLib holds its lock, before the login is checked, the run says it starts (review run 4)":
+    var calls = new seq[string]
+    nextState = "authorizationStateWaitPhoneNumber"       # a slow or missing login comes after
+    outbox.addLast authUpdate("authorizationStateWaitTdlibParameters")
+    let fut = connectWith(lib, cfg, interactive = false,
+                          onLocked = proc () {.closure, gcsafe.} = {.cast(gcsafe).}: calls[].add "locked")
+    for _ in 0 ..< 40:
+      if fut.finished: break
+      poll(50)
+    check fut.failed and fut.readError of NotLoggedIn
+    check calls[] == @["locked"]
+
   test "logged in again: cleared as soon as TDLib is ready, not after the chat list (#65)":
     let st = openState(getTempDir() / "tn-session-login" / "state.sqlite3")
     defer: st.close()
@@ -63,6 +80,21 @@ suite "session":
       poll(50)
     check fut.finished and not fut.failed
     check st.getMeta("login_needed") == ""
+    fut.read.client.stopped = true   # its pump would read the next test's updates
+
+  test "a second bot that TDLib refuses (its lock) never says it starts (review run 4)":
+    var calls = new seq[string]
+    paramsRefused = true
+    defer: paramsRefused = false
+    outbox.addLast authUpdate("authorizationStateWaitTdlibParameters")
+    let fut = connectWith(lib, cfg, interactive = false,
+                          onLocked = proc () {.closure, gcsafe.} = {.cast(gcsafe).}: calls[].add "locked")
+    for _ in 0 ..< 40:
+      if fut.finished: break
+      poll(50)
+    check fut.failed and "already in use" in fut.readError.msg
+    check calls[].len == 0
+    # (the refused client keeps reading, as a refused process would until it exits: keep it last)
 
   test "our own shutdown is not a lost session; a logout is":
     check not sessionEnded("authorizationStateClosing", stopping = true)
