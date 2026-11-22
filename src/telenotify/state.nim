@@ -46,7 +46,8 @@ const schemaVersion* = 2
 const undoWindowSeconds* = 30
   ## How long an approved review waits before the bot sends it, so you can
   ## undo it in the terminal screen's Review tab (#62; the owner's choice,
-  ## 2026-11-21). The screen (tui/telenotify_tui/store.py) uses the same.
+  ## 2026-11-21). The default of config.json's `undo_seconds`, which the
+  ## screen (tui/telenotify_tui/store.py) reads too.
 
 proc backupPath*(path: string, version: int): string =
   ## Where the copy of a version-`version` state file is kept before it's upgraded.
@@ -348,10 +349,13 @@ proc dueReviews*(s: State, at = now()): seq[Review] =
   ## bot may send now (`sendApproved`), once it has claimed each (`claimReview`).
   s.reviewsWithStatus("to_send", dueBy = at)
 
-proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"): bool =
+proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending",
+                   undoSeconds = undoWindowSeconds): bool =
   ## Move a review from `fromStatus` to `status`: "to_send" (you approved
   ## it; the bot sends it once its undo window, `undoWindowSeconds`, is
-  ## over), "sent" (published), "discarded" or "kept" (a match you don't
+  ## over; `undoSeconds`, config.json's `undo_seconds`), "sent" (published:
+  ## `decided_at` stays the time you decided, so History's order doesn't
+  ## move under its cursor), "discarded" or "kept" (a match you don't
   ## want sent, e.g. the old bot already forwarded it; set by the terminal
   ## screen, never sent or counted as forwarded). Does nothing and returns
   ## false if it's no longer in `fromStatus` (e.g. another `review` window
@@ -359,7 +363,9 @@ proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"):
   let t = now()
   if status == "to_send":
     s.db.exec(sql"""UPDATE reviews SET status = ?, decided_at = ?, send_after = ?
-                     WHERE id = ? AND status = ?""", status, t, t + undoWindowSeconds, id, fromStatus)
+                     WHERE id = ? AND status = ?""", status, t, t + max(0, undoSeconds), id, fromStatus)
+  elif status in ["sent", "sending"]:
+    s.db.exec(sql"UPDATE reviews SET status = ? WHERE id = ? AND status = ?", status, id, fromStatus)
   else:
     s.db.exec(sql"UPDATE reviews SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
               status, t, id, fromStatus)

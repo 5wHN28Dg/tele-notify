@@ -435,6 +435,28 @@ suite "listener":
     check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[0]) == "sent"
     check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[1]) == "pending"
 
+  test "a sent post that can't be marked sent is logged (review run 1, C2)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let path = statePathOf(n)
+    let lines = new seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines[].add line
+    st.addReview(-1, 7, "chat1", unclear, "no level", "role", "")
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    # a second `telenotify run` on the same file resets the post while this one sends it
+    f.afterForward = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        let other = open(path, "", "", "")
+        defer: other.close()
+        other.exec(sql"UPDATE reviews SET status = 'pending' WHERE status = 'sending'")
+    waitFor l.sendApproved(afterWindow())
+    check f.forwarded == @[(-1'i64, 7'i64)]
+    var logged = false
+    for line in lines[]:
+      if "could not be marked sent" in line: logged = true
+    check logged
+
   test "an approved post that can't be sent goes back to the queue with the reason":
     let f = FakeTg()
     f.noForward.incl -2

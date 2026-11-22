@@ -149,11 +149,6 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     st.setMeta("mode", if dry: "dry-run" else: "real")
     st.setMeta("started_at", $getTime().toUnix)
     st.setMeta("connection", "starting")
-    # a post this bot was sending when it last stopped: back to the queue,
-    # for you to check, never sent twice
-    let reopened = st.reopenInterruptedSends()
-    if reopened > 0:
-      echo &"   {reopened} approved post(s) were being sent when the bot stopped: back in the review queue"
   except CatchableError as e:
     echo "   could not update the state database: ", e.msg
   var l: Listener
@@ -233,6 +228,16 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     if outbox != nil: await outbox.flush(stopFlushMs)
     raise connecting.readError
   let s = connecting.read
+  # Telegram's session is open, so this run holds TDLib's lock on the data
+  # folder: no other bot on this state file is sending. A post the last run
+  # was sending when it stopped goes back to the queue, for you to check,
+  # never out twice.
+  try:
+    let reopened = st.reopenInterruptedSends()
+    if reopened > 0:
+      echo &"   {reopened} approved post(s) were being sent when the bot stopped: back in the review queue"
+  except CatchableError as e:
+    echo "   could not check for interrupted sends: ", e.msg
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
   l.outbox = outbox     # your private chat with your bot has your user id
@@ -280,31 +285,57 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
 
 proc stdinIsTerminal(): bool = isatty(getFileHandle(stdin)) == 1
 
-proc askYesNo*(question: string, input: File = stdin, interactive = stdinIsTerminal()): bool =
-  ## Ask `question` and wait for an answer: true only for y / yes. When the
-  ## input isn't a terminal (a pipe, a script), the answer is no without
-  ## reading anything: sending and discarding need a person (#62).
+type Answers* = enum
+  ## How `telenotify review` answers its y/N questions.
+  askEach,   ## ask on the terminal (the default)
+  allYes,    ## --yes
+  allNo      ## --no
+
+const notATerminal* = "telenotify review asks before it sends or discards a post, and its input isn't " &
+  "a terminal, so nothing was done. Run it in a terminal, or add --yes to answer yes to every " &
+  "question (or --no to answer no)."
+
+proc askYesNo*(question: string, input: File = stdin, answers = askEach): bool =
+  ## Ask `question`: true only for y / yes. With --yes or --no the answer
+  ## is given, and printed after the question.
   stdout.write question & " [y/N] "
   stdout.flushFile
-  if not interactive:
-    echo "no (not asked: the input isn't a terminal)"
+  case answers
+  of allYes:
+    echo "yes (--yes)"
+    return true
+  of allNo:
+    echo "no (--no)"
     return false
+  of askEach: discard
   var answer = ""
   if not input.readLine(answer): return false
   answer.strip.toLowerAscii in ["y", "yes"]
 
-proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, interactive = stdinIsTerminal()) =
+proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEach,
+                interactive = stdinIsTerminal()): int =
   ## Go through the review queue: approve each post or discard it, each
-  ## after a y/N question. This only records your decision, so it works
-  ## while the bot runs; the running bot sends what you approved once its
-  ## undo window (`undoWindowSeconds`) is over. Until then, and for anything
-  ## discarded, the terminal screen's Review tab (History, u) can take it back.
+  ## after a y/N question (#62). This only records your decision, so it
+  ## works while the bot runs; the running bot sends what you approved once
+  ## its undo window (config.json's `undo_seconds`) is over. Until then, and
+  ## for anything discarded, the terminal screen's Review tab (History, u)
+  ## can take it back. Returns the exit code: 2, with nothing done, when the
+  ## input isn't a terminal and neither --yes nor --no was given.
+  if not interactive and answers == askEach:
+    stderr.writeLine notATerminal
+    return 2
   let st = openState(statePath(cfg, dryRun))
   defer: st.close()
+  if dryRun:
+    echo "DRY RUN: this is the dry run's review queue. Nothing you approve here is ever sent " &
+         "to the channel; your choices are only recorded."
   let pending = st.pendingReviews()
   if pending.len == 0:
     echo "Nothing to review."
-    return
+    return 0
+  let sendQuestion = if dryRun: "Record as approved (dry run, nothing is sent)?"
+                     else: "Send this post to the channel?"
+  let discardQuestion = if dryRun: "Record as discarded (dry run)?" else: "Discard?"
   var approved = 0
   var quitting = false
   for i, r in pending:
@@ -320,23 +351,26 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, interactive = st
     echo "─".repeat(70)
     var done = false
     while not done:
-      stdout.write "[s]end to channel  [d]iscard  [n]ext  [q]uit > "
+      stdout.write(if dryRun: "[s] record as approved  [d]iscard  [n]ext  [q]uit > "
+                   else: "[s]end to channel  [d]iscard  [n]ext  [q]uit > ")
       stdout.flushFile
       var answer = ""
       if not input.readLine(answer): answer = "q"    # end of input
       case answer.strip.toLowerAscii
       of "s":
-        if not askYesNo("Send this post to the channel?", input, interactive):
-          echo "not sent; still waiting for review"
-        elif st.decideReview(r.id, "to_send"):
+        if not askYesNo(sendQuestion, input, answers):
+          echo "not decided; still waiting for review"
+        elif st.decideReview(r.id, "to_send", undoSeconds = cfg.undoSeconds):
           inc approved
           if dryRun: echo "approved ✅ (dry run: recorded, never sent)"
-          else: echo &"approved ✅ (sent in {undoWindowSeconds} s; until then the terminal screen's Review tab can undo it)"
+          elif cfg.undoSeconds > 0:
+            echo &"approved ✅ (sent in {cfg.undoSeconds} s; until then the terminal screen's Review tab can undo it)"
+          else: echo "approved ✅ (undo_seconds is 0: the running bot sends it within seconds)"
         else: echo "already decided elsewhere"
         done = true
       of "d":
-        if not askYesNo("Discard?", input, interactive):
-          echo "not discarded; still waiting for review"
+        if not askYesNo(discardQuestion, input, answers):
+          echo "not decided; still waiting for review"
         else:
           echo (if st.decideReview(r.id, "discarded"): "discarded" else: "already decided elsewhere")
         done = true
@@ -348,7 +382,8 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, interactive = st
     if quitting: break
   if approved > 0:
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
-    else: echo &"\n{approved} approved: the running bot sends them after {undoWindowSeconds} s (or when it next starts)."
+    else: echo &"\n{approved} approved: the running bot sends them after {cfg.undoSeconds} s (or when it next starts)."
+  0
 
 proc fitColumn*(s: string, width: int): string =
   ## `s` cut or padded to `width` characters (not bytes: channel names are

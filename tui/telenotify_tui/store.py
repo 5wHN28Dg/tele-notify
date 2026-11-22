@@ -46,8 +46,12 @@ VERDICTS = ("publish", "review", "reject")
 # "to_send", only shows "pending" and only counts "sent" as forwarded.
 DECISIONS = ("to_send", "discarded", "kept")
 # How long an approved post waits before the bot sends it, so it can be undone
-# (#62). The same as undoWindowSeconds in src/telenotify/state.nim.
+# (#62): the default of config.json's `undo_seconds` (the screen reads it there,
+# settings_data.undo_seconds), as undoWindowSeconds in src/telenotify/state.nim.
 UNDO_SECONDS = 30
+# The bot writes `last_alive` every minute: older than this, it isn't running
+# (the Dashboard's ALIVE_SECONDS).
+ALIVE_SECONDS = 120
 
 
 @dataclass
@@ -189,6 +193,13 @@ class Store:
         v = self.meta("last_alive")
         return int(v) if _DIGITS.fullmatch(v) else None   # ASCII only: int("²") raises
 
+    def bot_running(self) -> bool:
+        """Is a bot on this state file running? Its heartbeat is recent and it didn't
+        record a clean stop. (A crash is noticed once the heartbeat is ALIVE_SECONDS old.)"""
+        alive = self.last_alive()
+        return (alive is not None and time.time() - alive < ALIVE_SECONDS
+                and self.meta("connection") != "stopped")
+
     # ---------------------------------------------------------- processed
 
     def _judged(self, r: sqlite3.Row, has_text: bool) -> Judged:
@@ -298,10 +309,12 @@ class Store:
             return {}
         return {r[0]: r[1] for r in self._rows("SELECT status, COUNT(*) FROM reviews GROUP BY status")}
 
-    def decide(self, review_id: int, status: str, from_status: str = "pending") -> bool:
+    def decide(self, review_id: int, status: str, from_status: str = "pending",
+               undo_seconds: int = UNDO_SECONDS) -> bool:
         """Approve ("to_send"), discard ("discarded") or keep ("kept": a match,
-        but never sent) a review. An approved post waits UNDO_SECONDS before the
-        bot sends it (send_after), as when `telenotify review` approves it. False
+        but never sent) a review. An approved post waits `undo_seconds` (config.json's
+        `undo_seconds`; 0: none) before the bot sends it (send_after), as when
+        `telenotify review` approves it. False
         when it was already decided elsewhere (another window, `telenotify review`)."""
         if status not in DECISIONS:
             raise ValueError(f"not a decision: {status}")
@@ -311,7 +324,7 @@ class Store:
         if status == "to_send" and "send_after" in self._columns("reviews"):
             cur = self.db.execute("UPDATE reviews SET status = ?, decided_at = ?, send_after = ? "
                                   "WHERE id = ? AND status = ?",
-                                  (status, now, now + UNDO_SECONDS, review_id, from_status))
+                                  (status, now, now + max(0, undo_seconds), review_id, from_status))
         else:
             cur = self.db.execute("UPDATE reviews SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
                                   (status, now, review_id, from_status))

@@ -716,6 +716,202 @@ async def test_the_real_command_line_asks_and_the_screen_undoes_it(paths, state,
         assert status_of(state, 11) == "pending"
 
 
+def set_meta(state: Path, key: str, value: str) -> None:
+    db = sqlite3.connect(state)
+    db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
+    db.commit()
+    db.close()
+
+
+async def test_history_keeps_the_cursor_on_the_same_review_across_reloads(paths, state, labels, now):
+    """Review run 1, fail 1: cursor on #22, the bot sends #24 and another decision lands; u acts on #22."""
+    for k in range(20, 26):
+        add_pending(state, k, f"post {k}", now - 100 + k)
+    with Store(state) as st:
+        ids = {r.msg_id: r.id for r in st.reviews("pending")}
+    db = sqlite3.connect(state)
+    for k in range(20, 24):   # discarded, oldest first
+        db.execute("UPDATE reviews SET status = 'discarded', decided_at = ? WHERE id = ?", (now - 60 + k, ids[k]))
+    db.execute("UPDATE reviews SET status = 'to_send', decided_at = ?, send_after = ? WHERE id = ?",
+               (now - 30, now + 30, ids[24]))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        await history_row(pilot, app, 22)
+        # meanwhile: the bot sends #24, and `telenotify review` discards #25 (a new row at the top)
+        set_row(state, 24, status="sent")
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET status = 'discarded', decided_at = ? WHERE id = ?", (now + 5, ids[25]))
+        db.commit()
+        db.close()
+        pane.reload()
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        assert pane._past[table.cursor_row].msg_id == 22
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 22) == "pending" and status_of(state, 21) == "discarded"
+        assert status_of(state, 23) == "discarded"
+
+
+async def test_with_the_bot_stopped_nothing_is_promised(paths, state):
+    """Review run 1, fail 6 (F3/F4): no "sends in", and an interrupted send says so; no 1 s reloads."""
+    set_meta(state, "connection", "stopped")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "The bot isn't running: it will be sent when the bot starts (u undoes)" in note(app)
+        assert "sent to the channel in" not in note(app)
+        assert not pane._counting()                          # nothing counts down with the bot stopped
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        labels_shown = {r.msg_id: str(table.get_row_at(i)[1]) for i, r in enumerate(pane._past)}
+        assert labels_shown[11] == "waits for bot"
+        set_row(state, 11, status="sending")                 # the bot crashed while sending
+        pane.reload()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "interrupted" and not pane._counting()
+        assert pane.check_action("undo", ()) is None
+        set_meta(state, "connection", "ready")               # it runs again: the screen follows
+        pane.reload()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "sending now" and pane._counting()
+
+
+async def test_an_approval_note_counting_down_never_moves_the_post(paths, state, now):
+    """Review run 1, fail 7 (P4): at 80 x 24 the note keeps its height while it changes by itself."""
+    add_pending(state, 1234567890123, "a long id", now - 100)   # TDLib message ids are long
+    add_pending(state, 7, "the next post", now - 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")                               # the oldest: the long id
+        await pilot.pause()
+        assert "#1234567890123 approved" in note(app)
+        split = app.query_one("#review-split")
+        y, h = split.region.y, app.query_one("#review-note").region.height
+        for change in ({"send_after": int(time.time()) - 1}, {"status": "sending"}, {"status": "sent"}):
+            set_row(state, 1234567890123, **change)
+            pane._countdown() if pane._last is not None else pane.reload()
+            await pilot.pause()
+            assert split.region.y == y and app.query_one("#review-note").region.height == h, note(app)
+        assert note(app) == "#1234567890123 sent to the channel"
+
+
+async def test_the_timer_runs_only_while_review_is_shown_and_counting(paths, state):
+    """Review run 1, fail 8 (P1): paused on other tabs and when nothing counts; short lock waits."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=3600)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        ticker = pane._ticker
+        assert ticker is not None and not ticker._active.is_set()      # nothing counts yet
+        await pilot.press("s")
+        await pilot.pause()
+        assert ticker._active.is_set()
+        await pilot.press("3")                                          # Search
+        await pilot.pause()
+        assert not ticker._active.is_set()
+        await pilot.press("2")
+        await pilot.pause()
+        assert ticker._active.is_set()
+        waits: list[float] = []
+        real = app.store
+
+        def store(timeout: float = 10):
+            waits.append(timeout)
+            return real(timeout)
+        app.store = store
+        set_row(state, 11, status="sent")
+        pane._countdown()
+        await pilot.pause()
+        assert waits and max(waits) <= review_mod.TICK_TIMEOUT == 0.25
+        assert not ticker._active.is_set()                              # sent: nothing counts
+
+
+async def test_a_busy_state_file_skips_the_tick(paths, state, monkeypatch):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        before = note(app)
+
+        def busy(timeout: float = 10):
+            raise sqlite3.OperationalError("database is locked")
+        monkeypatch.setattr(app, "store", busy)
+        pane._countdown()                                     # no exception, nothing changes
+        assert note(app) == before
+
+
+async def test_undo_seconds_from_the_config_sets_the_window(paths, state, config):
+    """Review run 1, fail 9 (A21): 0 turns the window off."""
+    cfg = json.loads(config.read_text(encoding="utf-8"))
+    cfg["undo_seconds"] = 0
+    config.write_text(json.dumps(cfg), encoding="utf-8")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        before = int(time.time())
+        await pilot.press("s")
+        await pilot.pause()
+        assert before <= send_after_of(state, 11) <= int(time.time())
+        assert "the bot sends it within seconds" in note(app)
+
+
+async def test_a_post_changed_elsewhere_is_said_in_plain_words(paths, state):
+    """Review run 1, fail 11 (W1)."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, status="kept")
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == "#11 was changed elsewhere: it is now kept as a match, not sent"
+
+
+def test_history_status_words_stay_short():
+    """Review run 1, fail 12 (TUI1): the status column never pushes the post off an 80-column screen."""
+    now = time.time()
+    shown = set()
+    for status in ("to_send", "sending", "sent", "discarded", "kept"):
+        for send_after in (None, int(now) + 600, int(now) - 5):
+            for dry in (False, True):
+                for up in (False, True):
+                    r = Review(1, -1, 1, "", "", "", "", "", status, 0, send_after=send_after)
+                    shown.add(review_mod.status_label(r, dry, up, now))
+    assert max(len(x) for x in shown) <= len("match, not sent")
+
+
+async def test_the_history_post_column_starts_on_an_80_column_screen(paths, state, now):
+    with Store(state) as st:
+        assert st.decide(st.reviews("pending")[0].id, "to_send", undo_seconds=0)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        assert str(table.get_row_at(0)[1]) == "sending soon"
+        cols = table.ordered_columns
+        start = sum(c.get_render_width(table) for c in cols[:4])
+        assert start < table.region.width - 5, start
+
+
 async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
     monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
     add_pending(state, 7, "second post", now - 10)
@@ -725,12 +921,18 @@ async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monke
         await pilot.pause(0.5)
         assert not app.query_one("#btn-send", Button).disabled
         await pilot.press("n")                                      # a new post appears
+        pane = app.query_one(ReviewPane)
         assert app.query_one("#btn-send", Button).disabled          # greyed while s / d wait
+        for action in ("send", "keep", "discard"):                  # the footer's keys too
+            assert pane.check_action(action, ()) is None
+        await pilot.press("s")
+        assert "only just appeared" in note(app) and status_of(state, 7) == "pending"
         assert app.query_one("#btn-discard", Button).disabled
         assert not app.query_one("#btn-next", Button).disabled
         await pilot.pause(0.6)
         assert not app.query_one("#btn-send", Button).disabled
         assert not app.query_one("#btn-discard", Button).disabled
+        assert pane.check_action("send", ()) is True
 
 
 # ------------------------------------------------- odd data in the state file

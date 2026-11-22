@@ -180,12 +180,16 @@ def small_state(path: Path, now: int | None = None, *, dry_run: bool = True,
                        (r[0], r[1], r[2], r[9], r[5], r[4],
                         link if link is not None else f"https://example.com/t/{-r[0]}/{r[1]}",
                         now - 300 * (8 - j), str(r[1])))
-        for j, (status, r) in enumerate(zip(("sent", "discarded", "kept", "to_send", "sent", "discarded"),
-                                            [r for r in rows if r[3] == "review"][8:14], strict=False)):
+        # decided ones in every state History shows (#62, #76): an approval counting down, one
+        # being sent, and one from before the undo window existed (no send_after)
+        decided = (("to_send", now + 20), ("sending", now - 5), ("sent", None), ("discarded", None),
+                   ("kept", None), ("to_send", None), ("sent", None), ("discarded", None))
+        for j, ((status, send_after), r) in enumerate(zip(decided, [r for r in rows if r[3] == "review"][8:16],
+                                                          strict=False)):
             db.execute("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status,
-                          at, decided_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                          at, decided_at, send_after) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                        (r[0], r[1], r[2], r[9], r[5], r[4], f"https://example.com/t/{-r[0]}/{r[1]}", status,
-                        now - 86400 - j * 3600, now - 80000 - j * 3600))
+                        now - 86400 - j * 3600, now - 10 - j * 3600, send_after))
     if "meta" not in skip_tables:
         db.executemany("INSERT INTO meta VALUES (?, ?)",
                        [("last_alive", str(now - last_alive_ago)), ("started_at", str(now - 3 * 3600)),
@@ -204,7 +208,7 @@ def small_state(path: Path, now: int | None = None, *, dry_run: bool = True,
 
 # ------------------------------------------------------------ large file
 
-BIG_VERSION = 2
+BIG_VERSION = 3
 BIG_POSTS, BIG_REVIEWS, BIG_CHATS = 1_000_000, 2_000, 300
 TEXT_KEPT = 20_000      # the latest posts keep their text (the bot clears it after keep_text_days)
 SPAN_DAYS = 730
@@ -259,10 +263,13 @@ def build_big(path: Path, posts: int = BIG_POSTS, reviews: int = BIG_REVIEWS, ch
     rows = []
     for k, (cid, mid, title, role, reasons, at) in enumerate(picked):
         status = "pending" if k < 40 else ("sent", "discarded", "kept", "sent", "discarded")[k % 5]
+        send_after = None
+        if k in (40, 41):   # one approval counting down, one being sent (#62)
+            status, send_after = ("to_send", now + 25) if k == 40 else ("sending", now - 5)
         rows.append((cid, mid, title, POSTS[k % len(POSTS)], reasons, role, f"https://example.com/t/{-cid}/{mid}",
-                     status, at, None if status == "pending" else at + 600, str(mid)))
+                     status, at, None if status == "pending" else at + 600, str(mid), send_after))
     db.executemany("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at,
-                      decided_at, album_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", rows)
+                      decided_at, album_ids, send_after) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", rows)
     titles = _big_titles(chats)
     db.executemany("INSERT INTO chats VALUES (?, ?, ?, ?, ?, ?)",
                    [(-1001 - c, titles[c], "channel", int(c < 40), "banned" if c % 97 == 5 else "ok", now)

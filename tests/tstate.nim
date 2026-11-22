@@ -468,6 +468,19 @@ suite "state":
     check id notin dueIds(sendAfter + 100)
     check st.decideReview(id, "sent", fromStatus = "sending")
 
+  test "sending and sent keep the time you decided, so History doesn't reorder (review run 1)":
+    st.addReview(-702, 1, "Order", "post", "x", "r", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -702: id = r.id
+    check st.decideReview(id, "to_send")
+    let raw = open(dir / "state.sqlite3", "", "", "")
+    defer: raw.close()
+    raw.exec(sql"UPDATE reviews SET decided_at = 1000 WHERE id = ?", id)
+    check st.claimReview(id, getTime().toUnix + undoWindowSeconds + 1)
+    check st.decideReview(id, "sent", fromStatus = "sending")
+    check raw.getValue(sql"SELECT decided_at FROM reviews WHERE id = ?", id) == "1000"
+
   test "a post the bot was sending when it stopped goes back to the queue, not out again":
     st.addReview(-701, 1, "Crash", "post", "x", "r", "")
     var id = 0'i64

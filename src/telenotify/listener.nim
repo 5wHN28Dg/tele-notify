@@ -581,7 +581,11 @@ proc sendApproved*(l: Listener, at = 0'i64) {.async.} =
         if link == "": raise newException(ValueError, "no link to the post")
         await l.tg.sendText(l.cfg.targetChat, "match: " & r.role & "\npost link: " & link)
       l.state.addPublished(r.chatId, r.msgId, r.text)
-      discard l.state.decideReview(r.id, "sent", fromStatus = "sending")
+      if not l.state.decideReview(r.id, "sent", fromStatus = "sending"):
+        # only another telenotify run on the same state file could have moved it
+        l.say &"   {r.chatTitle} #{r.msgId} was sent, but could not be marked sent: it is no longer " &
+              "'sending' (is a second telenotify run using this state file?)"
+
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
       if l.cfg.notifyPublished:
         l.tell "✅ Published after your review: " & isolated(r.role) & "\n" &

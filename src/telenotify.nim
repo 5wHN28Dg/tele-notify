@@ -18,9 +18,11 @@
 ##       The bot: process unread messages, then watch for new ones.
 ##       --dry-run judges and records but forwards nothing.
 ##
-##   telenotify review [--config:FILE] [--dry-run]
-##       Go through posts waiting for review: approve or discard each one.
-##       Works while the bot runs; the bot sends what you approved.
+##   telenotify review [--config:FILE] [--dry-run] [--yes|--no]
+##       Go through posts waiting for review: approve or discard each one,
+##       after a y/N question. Works while the bot runs; the bot sends what
+##       you approved once its undo window (`undo_seconds`) is over. Its
+##       input must be a terminal, unless --yes or --no answers the questions.
 ##
 ##   telenotify stats [--config:FILE] [--days:N] [--dry-run]
 ##       What happened per chat in the last N days (default 7).
@@ -45,7 +47,7 @@ usage:
   telenotify eval  [--config:FILE] [--show:fp|fn|wrong|all] [--out:FILE] CORPUS.jsonl
   telenotify login [--config:FILE]
   telenotify run   [--config:FILE] [--dry-run]
-  telenotify review [--config:FILE] [--dry-run]
+  telenotify review [--config:FILE] [--dry-run] [--yes|--no]
   telenotify stats [--config:FILE] [--days:N] [--dry-run]
   telenotify compare [--config:FILE] [--days:N]
   telenotify alert [--config:FILE] TEXT
@@ -127,6 +129,7 @@ proc main() =
   var images, buttons: seq[string]
   var scrape = true
   var showText, dryRun = false
+  var answers = askEach
   var days = 7
   var nargs = 0
   configPath = ""
@@ -147,6 +150,12 @@ proc main() =
       of "no-scrape": scrape = false
       of "show-text": showText = true
       of "dry-run": dryRun = true
+      of "yes":
+        if answers == allNo: quit "--yes and --no can't be used together"
+        answers = allYes
+      of "no":
+        if answers == allYes: quit "--yes and --no can't be used together"
+        answers = allNo
       of "days":
         try: days = parseDays(val)
         except ValueError as e: quit e.msg
@@ -170,7 +179,9 @@ proc main() =
       case cmd
       of "login": waitFor cmdLogin(cfg)
       of "run": waitFor cmdRun(cfg, dryRun)
-      of "review": cmdReview(cfg, dryRun)
+      of "review":
+        let code = cmdReview(cfg, dryRun, answers = answers)
+        if code != 0: quit code
       of "compare": cmdCompare(cfg, days)
       else: cmdStats(cfg, days, dryRun)
     except CatchableError as e:
