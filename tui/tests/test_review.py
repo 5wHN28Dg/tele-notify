@@ -914,6 +914,210 @@ async def test_the_history_post_column_starts_on_an_80_column_screen(paths, stat
         assert start < table.region.width - 5, start
 
 
+# ------------------------------------------------- review run 2 (adversarial)
+
+def add_decided(state: Path, msg_id: int, status: str, decided_at: int, send_after: int | None = None) -> None:
+    db = sqlite3.connect(state)
+    db.execute("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at,
+                  decided_at, send_after) VALUES (-2, ?, 'Iraq Jobs', ?, 'unclear', 'it support', '', ?, ?, ?, ?)""",
+               (msg_id, f"post {msg_id}", status, decided_at - 100, decided_at, send_after))
+    db.commit()
+    db.close()
+
+
+async def test_history_shows_every_state_of_the_window(paths, decided_states):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        shown = {r.msg_id: str(table.get_row_at(i)[1]) for i, r in enumerate(pane._past)}
+        assert shown[41].startswith("sends in ") and shown[42] == "sending now" and shown[43] == "sending soon"
+
+
+async def test_history_undo_acts_once_per_deliberate_press(paths, state, now, labels, monkeypatch):
+    """N1: u u u (a double tap, a held key) undoes one decision; the next row waits DECIDE_DELAY."""
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    for i, status in enumerate(["discarded", "kept", "discarded", "discarded"]):
+        add_decided(state, 50 + i, status, now - 10 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        pane._hist_shown_at -= 10                      # the first row has been read
+        await pilot.press("u", "u", "u")
+        await pilot.pause()
+        assert [m for m in (50, 51, 52, 53) if status_of(state, m) == "pending"] == [50]
+        assert "only just come under the cursor" in note(app)
+        assert pane.check_action("undo", ()) is None   # greyed while the new row's wait runs
+        pane._hist_shown_at -= 10                      # read now: a deliberate press works again
+        await pilot.press("u")
+        await pilot.pause()
+        assert [m for m in (50, 51, 52, 53) if status_of(state, m) == "pending"] == [50, 51]
+
+
+async def test_a_double_click_on_undo_in_history_undoes_one(paths, state, now, monkeypatch):
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    for i, status in enumerate(["discarded", "kept", "discarded"]):
+        add_decided(state, 60 + i, status, now - 10 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        pane._hist_shown_at -= 10
+        pane._sync_controls()
+        await pilot.click("#btn-undo")
+        await pilot.click("#btn-undo")
+        await pilot.pause()
+        assert [m for m in (60, 61, 62) if status_of(state, m) == "pending"] == [60]
+
+
+async def test_a_decision_not_recorded_stays_beside_the_countdown(paths, state, now):
+    """N2: the next countdown second must not hide "NOT recorded"."""
+    add_pending(state, 71, "another post", now - 20)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        lock = sqlite3.connect(state, isolation_level=None)
+        lock.execute("BEGIN EXCLUSIVE")
+        await pilot.press("d")
+        await pilot.pause()
+        lock.execute("ROLLBACK")
+        lock.close()
+        for _ in range(2):
+            pane._countdown()
+            pane.reload()
+            await pilot.pause()
+            assert "#71 NOT recorded" in note(app) and "#11 approved" in note(app)
+        assert status_of(state, 71) == "pending"
+
+
+async def test_already_decided_elsewhere_is_said_beside_the_countdown(paths, state, now):
+    """N3: d on a post another window approved says so, and what it is now."""
+    add_pending(state, 70, "another post", now - 20)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 70, status="to_send", decided_at=now)
+        await pilot.press("d")
+        await pilot.pause()
+        assert "#70 was already decided elsewhere: it is now approved" in note(app)
+        pane._countdown()
+        await pilot.pause()
+        assert "#70 was already decided elsewhere" in note(app) and "#11 approved" in note(app)
+        await pilot.press("space")                      # the next key press: it may go now
+        await pilot.pause()
+        assert "#70" not in note(app)
+
+
+async def test_history_keeps_its_scroll_position_on_a_tick(paths, state, now):
+    """N4: a countdown second doesn't scroll History back to the cursor."""
+    add_decided(state, 80, "to_send", now - 1, now + 25)
+    for i in range(45):
+        add_decided(state, 100 + i, "discarded", now - 100 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        table.scroll_to(y=20, animate=False)
+        await pilot.pause()
+        y0, row = table.scroll_y, table.cursor_row
+        pane = app.query_one(ReviewPane)
+        pane._countdown()
+        await pilot.pause()
+        assert table.scroll_y == y0 and table.cursor_row == row
+        add_decided(state, 81, "discarded", now)        # a new row: refilled, still where it was
+        pane.reload()
+        await pilot.pause()
+        assert table.scroll_y == y0
+
+
+@pytest.mark.parametrize("why,expected", [
+    ("; could not send: CHAT_WRITE_FORBIDDEN",
+     "#11: sending failed: this account may not post in the channel; it's back in the queue"),
+    ("; the bot stopped while sending it: check the channel before sending it again",
+     "#11: the bot stopped while sending; check the channel before sending it again"),
+])
+async def test_a_failed_or_interrupted_send_is_said_as_such(paths, state, why, expected):
+    """N5: not "changed elsewhere"."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, status="sending")
+        pane._countdown()
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET status = 'pending', send_after = NULL, reasons = reasons || ? "
+                   "WHERE msg_id = 11", (why,))
+        db.commit()
+        db.close()
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == expected
+
+
+async def test_a_bot_still_reading_its_backlog_isnt_sending_yet(paths, state):
+    """N6: a fresh heartbeat but no sending_ready: nothing is promised "within seconds"."""
+    set_meta(state, "sending_ready", "0")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "The bot is starting: it will be sent once it has caught up (u undoes)" in note(app)
+        assert not pane._counting()
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]) == "waits for bot"
+        set_meta(state, "sending_ready", "1")
+        pane.reload()
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]).startswith("sends in ")
+
+
+async def test_a_label_error_stays_and_the_post_doesnt_move(paths, state, now, monkeypatch, tmp_path):
+    """N8: at 80 x 24 the note keeps its height with "corpus label not saved" in it, until a key press."""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x")
+    monkeypatch.setenv("TELENOTIFY_LABELS", str(blocker / "deep" / "review-labels.jsonl"))
+    add_pending(state, 90, "the next post", now - 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        split = app.query_one("#review-split")
+        y = split.region.y
+        assert "corpus label not saved" in note(app)
+        for change in ({"send_after": int(time.time()) - 1}, {"status": "sending"}, {"status": "sent"}):
+            set_row(state, 11, **change)
+            pane._countdown()
+            await pilot.pause()
+            assert split.region.y == y, (change, note(app))
+            assert "corpus label not saved" in note(app)
+        await pilot.press("space")
+        await pilot.pause()
+        assert "corpus label not saved" not in note(app)
+
+
 async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
     monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
     add_pending(state, 7, "second post", now - 10)

@@ -495,5 +495,37 @@ suite "state":
     check back
     check st.reopenInterruptedSends() == 0
 
+  test "an interrupted send already in published is marked sent, not reopened (review run 2)":
+    st.addReview(-703, 1, "Lost mark", "post", "x", "r", "")
+    st.addReview(-703, 2, "Lost send", "post 2", "x", "r", "")
+    var ids: seq[int64]
+    for r in st.pendingReviews():
+      if r.chatId == -703:
+        check st.decideReview(r.id, "to_send")
+        check st.claimReview(r.id, getTime().toUnix + undoWindowSeconds + 1)
+        ids.add r.id
+    st.addPublished(-703, 1, "post")              # #1 reached the channel; its "sent" mark was lost
+    check st.reopenInterruptedSends() == 1        # only #2 goes back
+    var pending: seq[int64]
+    for r in st.pendingReviews():
+      if r.chatId == -703: pending.add r.msgId
+    check pending == @[2'i64]
+    let raw = open(dir / "state.sqlite3", "", "", "")
+    defer: raw.close()
+    check raw.getValue(sql"SELECT status FROM reviews WHERE chat_id = -703 AND msg_id = 1") == "sent"
+
+  test "botSending: a fresh heartbeat, no clean stop, and the worker started (review run 2)":
+    let t = getTime().toUnix
+    st.setMeta("last_alive", $(t - 30))
+    st.setMeta("connection", "ready")
+    st.setMeta("sending_ready", "1")
+    check st.botSending(t)
+    check not st.botSending(t + 100)              # heartbeat 130 s old
+    st.setMeta("sending_ready", "0")              # still reading its backlog
+    check not st.botSending(t)
+    st.setMeta("sending_ready", "1")
+    st.setMeta("connection", "stopped")
+    check not st.botSending(t)
+
 st.close()
 removeDir(dir)

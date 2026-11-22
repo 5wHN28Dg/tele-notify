@@ -435,6 +435,19 @@ suite "listener":
     check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[0]) == "sent"
     check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[1]) == "pending"
 
+  test "the worker says it sends only while it runs (sending_ready, review run 2)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    st.setMeta("sending_ready", "0")
+    let stop = new bool
+    l.stop = stop
+    let running = l.worker()
+    waitFor sleepAsync(50)
+    check st.getMeta("sending_ready") == "1"
+    stop[] = true
+    waitFor running
+    check st.getMeta("sending_ready") == "0"
+
   test "a sent post that can't be marked sent is logged (review run 1, C2)":
     let f = FakeTg()
     let (l, st) = setup(f)

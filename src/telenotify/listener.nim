@@ -597,7 +597,13 @@ proc sendApproved*(l: Listener, at = 0'i64) {.async.} =
 
 proc worker*(l: Listener) {.async.} =
   ## Process live messages as they arrive, and approved reviews every few
-  ## seconds, until `stop` is set.
+  ## seconds, until `stop` is set. While it runs, the state's `sending_ready`
+  ## is "1": the terminal screen promises a send only then (#62).
+  proc ready(on: bool) =
+    try: l.state.setMeta("sending_ready", if on and not l.dryRun: "1" else: "0")
+    except CatchableError as e: l.say "   could not update the state database: " & e.msg
+  ready(true)
+  defer: ready(false)
   var ticks = 0
   while not l.stop[]:
     if l.queue.len > 0: await l.processQueue()

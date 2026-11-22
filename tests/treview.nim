@@ -2,7 +2,7 @@
 ## isn't a terminal does nothing unless --yes or --no answers for it; a dry
 ## run says so before anything; `undo_seconds` sets the undo window.
 
-import std/[unittest, os, json, strutils]
+import std/[unittest, os, json, strutils, times]
 from std/posix import nil
 import telenotify/[state, commands, config]
 
@@ -105,6 +105,41 @@ suite "telenotify review asks first (#62)":
     check "Record as approved (dry run, nothing is sent)? [y/N]" in printed
     check "Send this post to the channel?" notin printed and "[s]end to channel" notin printed
     check statusOf(4, dry = true) == "to_send"
+
+suite "what review promises (review run 2)":
+  test "--yes and --no take no value, and not both (N7)":
+    check answersFlag("yes", "", askEach) == allYes
+    check answersFlag("no", "", askEach) == allNo
+    for (flag, value) in [("yes", "no"), ("yes", "false"), ("no", "yes")]:
+      expect ValueError:
+        discard answersFlag(flag, value, askEach)
+    expect ValueError:
+      discard answersFlag("no", "", allYes)
+
+  test "no send time is promised when the bot isn't running (N9), and 0 s says right away (N10)":
+    addOne(6)
+    var f = answers("down.txt", "s\ny\n")
+    var shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)
+    f.close()
+    check "the bot isn't running: it is sent when the bot starts" in shown
+    check "sent in 30 s" notin shown
+    block:
+      let st = openState(statePath(cfg, false))
+      defer: st.close()
+      st.setMeta("last_alive", $getTime().toUnix)
+      st.setMeta("connection", "ready")
+      st.setMeta("sending_ready", "1")
+    addOne(7)
+    f = answers("up.txt", "s\ny\n")
+    shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)
+    f.close()
+    check "sent in 30 s" in shown and "the bot sends them after 30 s." in shown
+    addOne(8)
+    f = answers("zero.txt", "s\ny\n")
+    shown = captured(proc () = check cmdReview(configWith(%*{"undo_seconds": 0}), false, f,
+                                                interactive = true) == 0)
+    f.close()
+    check "the bot sends them right away." in shown and "after 0 s" notin shown
 
 suite "undo_seconds (A21)":
   test "default 30; 0 sends at once; out of range or not a number is refused":

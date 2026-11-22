@@ -150,12 +150,9 @@ proc main() =
       of "no-scrape": scrape = false
       of "show-text": showText = true
       of "dry-run": dryRun = true
-      of "yes":
-        if answers == allNo: quit "--yes and --no can't be used together"
-        answers = allYes
-      of "no":
-        if answers == allYes: quit "--yes and --no can't be used together"
-        answers = allNo
+      of "yes", "no":
+        try: answers = answersFlag(key, val, answers)
+        except ValueError as e: quit e.msg
       of "days":
         try: days = parseDays(val)
         except ValueError as e: quit e.msg

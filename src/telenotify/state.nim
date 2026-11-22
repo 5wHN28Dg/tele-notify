@@ -390,8 +390,12 @@ proc reopenReview*(s: State, id: int64, problem: string) =
 
 proc reopenInterruptedSends*(s: State): int =
   ## At start: posts the bot was sending when it stopped (a crash, a power
-  ## cut). Whether they reached the channel isn't known, so they go back to
-  ## the queue with a note, for you to check, rather than out a second time.
+  ## cut). One already in `published` did reach the channel (only the "sent"
+  ## mark was lost): it is marked sent. For the others it isn't known, so they
+  ## go back to the queue with a note, for you to check, rather than out a
+  ## second time. Returns how many went back to the queue.
+  s.db.exec(sql"""UPDATE reviews SET status = 'sent' WHERE status = 'sending' AND EXISTS
+                   (SELECT 1 FROM published p WHERE p.chat_id = reviews.chat_id AND p.msg_id = reviews.msg_id)""")
   s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL,
                    reasons = reasons || '; the bot stopped while sending it: check the channel before sending it again'
                    WHERE status = 'sending'""")
@@ -402,6 +406,16 @@ proc getMeta*(s: State, key: string): string =
 
 proc setMeta*(s: State, key, value: string) =
   s.db.exec(sql"INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value)
+
+proc botSending*(s: State, at = now()): bool =
+  ## Is a bot on this file running and sending approved posts? Its heartbeat
+  ## (`last_alive`, every minute) is under 120 s old, it didn't record a clean
+  ## stop, and its worker has started (`sending_ready`). The terminal screen
+  ## asks the same (store.py `bot_sending`).
+  let alive = s.getMeta("last_alive")
+  if alive == "" or s.getMeta("connection") == "stopped" or s.getMeta("sending_ready") != "1": return false
+  try: at - parseBiggestInt(alive) < 120
+  except ValueError: false
 
 type StatRow* = object
   chat*: string

@@ -24,6 +24,7 @@ Decisions are written exactly as `telenotify review` writes them
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 import subprocess
 import time
@@ -51,6 +52,12 @@ from .review_data import UNDOABLE, history, remove_label, write_label
 DECISION_KEYS = ("send", "keep", "discard", "next", "open_link", "check")
 UI_TIMEOUT = 1.0   # seconds to wait for the bot's lock: these reads and writes run on the UI thread
 TICK_TIMEOUT = 0.25   # the countdown's once-a-second read waits less, and skips that second when busy
+
+# why a send failed, in plain words (TDLib's error text otherwise)
+SEND_ERRORS = {"CHAT_WRITE_FORBIDDEN": "this account may not post in the channel",
+               "CHAT_ADMIN_REQUIRED": "this account isn't an admin of the channel",
+               "no link to the post": "the post has no link to share",
+               "FLOOD_WAIT": "Telegram asked to slow down"}
 
 # a decision's status in plain words, for notes
 PLAIN = {"pending": "back in the queue", "to_send": "approved", "sending": "being sent", "sent": "sent",
@@ -193,11 +200,17 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._shown_at = 0.0                       # time.monotonic() when the open post was drawn
         self._last: tuple[Review, str] | None = None   # the last decision made here, while undoable
         self._decided_note = ""                    # what that decision's note said
-        self._label_note = ""                      # that decision's corpus-label problem, if any
+        self._decided_style = "good"
+        self._action_note: tuple[str, str] | None = None   # what the last key press or click did,
+                                                   # beside the countdown until the next one
         self._unrecorded = ""                      # a decision the state file refused, said until the next one
         self._press_at: float | None = None        # when the key or click deciding now was *made*
         self._past: list[Review] = []              # the History rows, in table order
-        self._bot_up = True                        # the bot was running when the state was last read
+        self._bot_up = True                        # the bot was sending when the state was last read
+        self._bot_starting = False                 # it runs, but hasn't started sending yet (backlog)
+        self._hist_cols: list = []                 # History's column keys
+        self._hist_row_id: int | None = None       # the History row under the cursor ...
+        self._hist_shown_at = 0.0                  # ... since when (u waits DECIDE_DELAY, as s / d do)
         self._last_now: Review | None = None       # the last approval made here, as last read
         self._ticker = None                        # the countdown's 1 s timer (paused when nothing counts)
 
@@ -206,6 +219,24 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     DECIDE_DELAY: ClassVar[float] = 0.8
     # how often an approved post's countdown (top note, History) is redrawn
     COUNTDOWN_EVERY: ClassVar[float] = 1.0
+
+    @property
+    def _undo_settling(self) -> bool:
+        """A History row came under the cursor less than DECIDE_DELAY ago (an undo just
+        took the last one away, or a reload moved it): u waits, so a double tap or a held
+        key can't undo a second decision nobody chose."""
+        return (self._history_mode and self.DECIDE_DELAY > 0
+                and time.monotonic() - self._hist_shown_at < self.DECIDE_DELAY)
+
+    def _note_history_row(self) -> None:
+        """The row under History's cursor may be a new one: if so, start its wait."""
+        r = self._history_pick()
+        rid = r.id if r is not None else None
+        if rid != self._hist_row_id:
+            self._hist_row_id = rid
+            self._hist_shown_at = time.monotonic()
+            if self.DECIDE_DELAY > 0:
+                self.set_timer(self.DECIDE_DELAY, self._sync_controls)
 
     @property
     def _settling(self) -> bool:
@@ -241,7 +272,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def on_mount(self) -> None:
         table = self.query_one("#review-history", DataTable)
-        table.add_columns("decided", "status", "chat", "role", "post")
+        self._hist_cols = table.add_columns("decided", "status", "chat", "role", "post")
         table.display = False
         self.query_one("#review-split").display = False
         dry = self.app.paths.dry_run
@@ -333,7 +364,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             if action == "check" and self.app.paths.binary is None:
                 return None
         if action == "undo" and self.is_mounted:
-            return True if self._undo_target() is not None else None
+            if self._undo_target() is None or self._undo_settling:
+                return None   # greyed: nothing to undo, or the row under the cursor has only just come
+            return True
         return True
 
     def _history_pick(self) -> Review | None:
@@ -364,7 +397,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             button.disabled = (off or (bid == "#btn-check" and self.app.paths.binary is None)
                                or (self._settling and bid in ("#btn-send", "#btn-keep", "#btn-discard")))
         self.query_one("#btn-history", Button).label = "Queue" if self._history_mode else "History"
-        self.query_one("#btn-undo", Button).display = self._undo_target() is not None
+        undo = self.query_one("#btn-undo", Button)
+        undo.display = self._undo_target() is not None
+        undo.disabled = self._undo_settling
         self.refresh_bindings()
 
     # ------------------------------------------------------------ reload
@@ -376,7 +411,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 exists, has_table = st.exists, st.has_table("reviews")
                 items = st.reviews("pending")
                 past = history(st) if self._history_mode else []
-                bot_up = st.bot_running()
+                bot_up, starting = st.bot_sending(), st.bot_running()
                 last_now = st.review(self._last[0].id) if self._watching_last() else None
         except (sqlite3.Error, OSError, ValueError) as e:   # a lock, a broken file, a value that isn't a number
             self._read_error = True
@@ -394,7 +429,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         if self._read_error:
             self._read_error = False
             self.note(self._unrecorded, "bad") if self._unrecorded else self.note("")
-        self._bot_up = bot_up
+        self._bot_up, self._bot_starting = bot_up, starting and not bot_up
         if self._watching_last() and self._last is not None:
             self._show_last(self._last[0], last_now)
         mode = " · dry run" if paths.dry_run else ""
@@ -475,21 +510,41 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self.query_one("#review-empty", Static).update(
                 Content("Nothing decided yet." if exists and has_table else "No review queue yet."))
             self._show_only("#review-empty")
+            self._note_history_row()
             return
         self._show_only("#review-history")
-        table.clear()
         dry, now = self.app.paths.dry_run, time.time()
-        for r in past:
-            table.add_row(when(r.decided_at or r.at), Text(status_label(r, dry, self._bot_up, now)),
-                          Text(visual(cut(r.chat_title, 20))), Text(visual(cut(r.role, 22))),
-                          Text(visual(cut(r.text, 40))), key=str(r.id))
+
+        def cells(r: Review) -> tuple:
+            return (when(r.decided_at or r.at), Text(status_label(r, dry, self._bot_up, now)),
+                    Text(visual(cut(r.chat_title, 20))), Text(visual(cut(r.role, 22))),
+                    Text(visual(cut(r.text, 40))))
         ids = [r.id for r in past]
-        table.move_cursor(row=ids.index(keep) if keep in ids else min(row, len(past) - 1))
+        if ids == [r.id for r in old] and table.row_count == len(past):
+            # the same rows (a countdown second): change the cells that changed, so the
+            # scroll position and the cursor stay where you left them (P4)
+            for r in past:
+                shown = [str(c) for c in table.get_row(str(r.id))]
+                for col, value, was in zip(self._hist_cols, cells(r), shown, strict=True):
+                    if str(value) != was:
+                        table.update_cell(str(r.id), col, value)
+            self._note_history_row()
+            return
+        scroll_y = table.scroll_y
+        table.clear()
+        for r in past:
+            table.add_row(*cells(r), key=str(r.id))
+        table.move_cursor(row=ids.index(keep) if keep in ids else min(row, len(past) - 1), scroll=False)
+        # after the table has laid the new rows out and scrolled its moved cursor into view
+        # (it does that by itself, after a refresh): back to where you had scrolled
+        self.call_after_refresh(self.call_after_refresh, table.scroll_to, y=scroll_y, animate=False)
+        self._note_history_row()
 
     # ------------------------------------------------------------ detail
 
     @on(DataTable.RowHighlighted, "#review-history")
     def _history_row(self, _event: DataTable.RowHighlighted) -> None:
+        self._note_history_row()
         self._sync_controls()   # u / Undo follow the row under the cursor
 
     @on(OptionList.OptionHighlighted, "#review-list")
@@ -543,21 +598,21 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             try:
                 with self.app.store(TICK_TIMEOUT) as st:
                     past = history(st)
-                    bot_up = st.bot_running()
+                    bot_up, starting = st.bot_sending(), st.bot_running()
                     exists, has_table = st.exists, st.has_table("reviews")
             except (sqlite3.Error, OSError, ValueError):
                 return   # busy or broken: the next second tries again
-            self._bot_up = bot_up
+            self._bot_up, self._bot_starting = bot_up, starting and not bot_up
             self._fill_history(past, exists, has_table)
             self._sync_controls()
         elif self._last is not None:
             try:
                 with self.app.store(TICK_TIMEOUT) as st:
                     now = st.review(self._last[0].id)
-                    bot_up = st.bot_running()
+                    bot_up, starting = st.bot_sending(), st.bot_running()
             except (sqlite3.Error, OSError, ValueError):
                 return
-            self._bot_up = bot_up
+            self._bot_up, self._bot_starting = bot_up, starting and not bot_up
             self._show_last(self._last[0], now)
         self._arm()
 
@@ -568,57 +623,125 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         except (sd.ConfigError, OSError, ValueError):
             return sd.INT_KEYS["undo_seconds"]
 
-    def _approved_note(self, r: Review, send_after: int | None) -> str:
-        """An approval's note, at most two lines at 80 columns (the note keeps two for it)."""
+    def _approved_note(self, r: Review, send_after: int | None, up: bool | None = None,
+                       starting: bool | None = None, now: float | None = None) -> str:
+        """An approval's note as things are (`up`, `starting`: the bot, as last read)."""
+        up = self._bot_up if up is None else up
+        starting = self._bot_starting if starting is None else starting
         if self.app.paths.dry_run:
             return f"#{r.msg_id} approved: recorded only (dry run, nothing is sent) (u undoes)"
-        if not self._bot_up:
+        if starting and not up:
+            return (f"#{r.msg_id} approved. The bot is starting: it will be sent once it has caught up "
+                    "(u undoes)")
+        if not up:
             return f"#{r.msg_id} approved. The bot isn't running: it will be sent when the bot starts (u undoes)"
-        left = (send_after or 0) - int(time.time())
+        left = (send_after or 0) - int(time.time() if now is None else now)
         if left > 0:
             return f"#{r.msg_id} approved: sent to the channel in {left} s (u undoes)"
         return f"#{r.msg_id} approved: the bot sends it within seconds (u undoes until it starts)"
 
+    @staticmethod
+    def _back_in_queue(decided: Review, now: Review) -> str:
+        """Why an approval made here is pending again, in plain words."""
+        failed, stopped = "; could not send: ", "the bot stopped while sending it"
+        if now.reasons.count(failed) > decided.reasons.count(failed):
+            why = now.reasons.rsplit(failed, 1)[1].split(";")[0].strip()
+            plain = next((v for k, v in SEND_ERRORS.items() if k in why), why)
+            return f"#{decided.msg_id}: sending failed: {cut(plain, 60)}; it's back in the queue"
+        if now.reasons.count(stopped) > decided.reasons.count(stopped):
+            return f"#{decided.msg_id}: the bot stopped while sending; check the channel before sending it again"
+        return f"#{decided.msg_id} was changed elsewhere: it is now back in the queue"
+
+    def _status_texts(self, decided: Review, now: Review | None) -> tuple[str, str]:
+        """The note for an approval made here as it is now, and its style."""
+        if now is not None and now.status == "to_send":
+            return self._approved_note(decided, now.send_after), "good"
+        if now is not None and now.status == "sending" and self._bot_up:
+            return f"#{decided.msg_id} is being sent to the channel now: too late to undo", "warn"
+        if now is not None and now.status == "sent":
+            return f"#{decided.msg_id} sent to the channel", "good"
+        if now is not None and now.status == "sending":
+            return (f"#{decided.msg_id}: sending was interrupted when the bot stopped; "
+                    "it goes back to the queue when the bot starts"), "warn"
+        if now is not None and now.status == "pending":
+            return self._back_in_queue(decided, now), "warn"
+        return (f"#{decided.msg_id} was changed elsewhere: it is now "
+                f"{PLAIN.get(now.status, now.status) if now is not None else 'gone from the queue'}"), "warn"
+
+    def _with_beside(self, text: str, style: str) -> tuple[str, str]:
+        """`text` with what must stay beside it: a decision that wasn't recorded, and what the
+        last key press or click did (S3, F1). The worst style wins."""
+        parts, rank = [], {"muted": 0, "good": 1, "warn": 2, "bad": 3}
+        for extra, extra_style in ((self._unrecorded, "bad"), *([self._action_note] if self._action_note else [])):
+            if extra:
+                parts.append(extra)
+                style = max(style, extra_style, key=lambda x: rank.get(x, 0))
+        if text:
+            parts.append(text)
+        return "  ·  ".join(parts), style
+
+    def _say(self, text: str, style: str) -> None:
+        self.note(*self._with_beside(text, style))
+
     def _show_last(self, decided: Review, now: Review | None) -> None:
         """The top note for an approval made here, as it is now."""
         self._last_now = now
-        if now is not None and now.status == "to_send":
-            self._decided_note = self._approved_note(decided, now.send_after) + self._label_note
-            self.note(self._decided_note, "warn" if self._label_note else "good")
-            return
-        if now is not None and now.status == "sending" and self._bot_up:
-            # still watched, so "sent" follows; no undo offered (_undo_target)
-            self._decided_note = f"#{decided.msg_id} is being sent to the channel now: too late to undo"
-            self.note(self._decided_note, "warn")
-            self._sync_controls()
+        text, style = self._status_texts(decided, now)
+        self._decided_note, self._decided_style = text, style
+        self._say(text, style)
+        if now is not None and (now.status == "to_send" or (now.status == "sending" and self._bot_up)):
+            self._sync_controls()   # still watched: "sent" follows; no undo while sending (_undo_target)
             return
         self._last = None
-        if now is not None and now.status == "sent":
-            self._decided_note = f"#{decided.msg_id} sent to the channel"
-            self.note(self._decided_note, "good")
-        elif now is not None and now.status == "sending":
-            self._decided_note = (f"#{decided.msg_id}: sending was interrupted when the bot stopped; "
-                                  "it goes back to the queue when the bot starts")
-            self.note(self._decided_note, "warn")
-        else:
-            self._decided_note = ""
-            self.note(f"#{decided.msg_id} was changed elsewhere: it is now "
-                      f"{PLAIN.get(now.status, now.status) if now is not None else 'gone from the queue'}", "warn")
         self._sync_controls()
 
     def _reserve_note(self, on: bool) -> None:
-        self.query_one("#review-note", Static).set_class(on, "-reserve")
+        """While an approval made here is watched, keep the note as tall as the tallest thing it
+        may say by itself (with what stays beside it), so the post below never moves without a
+        key press or click (P4). Called only on a key press or click."""
+        n = self.query_one("#review-note", Static)
+        if not on or self._last is None:
+            n.styles.min_height = None
+            return
+        decided = self._last[0]
+        texts = [self._approved_note(decided, int(time.time()) + 60, up, starting)
+                 for up, starting in ((True, False), (False, False), (False, True))]
+        texts.append(self._approved_note(decided, 0, True, False))
+        for status, reasons in (("sending", ""), ("sent", ""),
+                                ("pending", decided.reasons + "; could not send: " + "x" * 60)):
+            for up in (True, False):
+                self._bot_up, was = up, self._bot_up
+                texts.append(self._status_texts(decided, dataclasses.replace(decided, status=status,
+                                                                             reasons=reasons))[0])
+                self._bot_up = was
+        width = max(20, n.content_region.width or 50)
+        rows = max(len(Text(visual(self._with_beside(t, "good")[0])).wrap(self.app.console, width)) for t in texts)
+        n.styles.min_height = max(2, rows)
 
     # ----------------------------------------------------------- actions
 
     def on_key(self, event: events.Key) -> None:
+        self._user_acted()
         # a key carries the time it was pressed; a slow machine may handle it much later
         if event.key in ("s", "k", "d") and self.current is not None:
             self._press_at = event.time   # a footer click's key carries the click's time (app.simulate_key)
             if self._settling:   # the binding is greyed: say why here
                 self._too_early(self.current)
+        elif event.key == "u" and self._history_mode:
+            self._press_at = event.time
+            r = self._history_pick()
+            if self._undo_settling and r is not None:
+                self.note(f"#{r.msg_id} has only just come under the cursor: check it, then press u", "warn")
         else:
             self._press_at = None
+
+    def _user_acted(self) -> None:
+        """A key press or click: what the last one did may now leave the note, and the
+        note's height may change."""
+        if self._action_note is not None:
+            self._action_note = None
+            self._refresh_note()
+        self._reserve_note(self._watching_last())
 
     def _too_early(self, r: Review) -> None:
         before = f"{self._decided_note}  ·  " if self._decided_note else ""
@@ -640,34 +763,45 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         try:
             with self.app.store(UI_TIMEOUT) as st:
                 ok = st.decide(r.id, status, undo_seconds=self._undo_seconds())
-                now = st.review(r.id) if ok else None
-                self._bot_up = st.bot_running()
+                now = st.review(r.id)
+                now_status = now.status if now is not None and not ok else None
+                self._bot_up = st.bot_sending()
+                self._bot_starting = st.bot_running() and not self._bot_up
         except (sqlite3.Error, OSError) as e:   # the bot holds a lock, or the file is broken
             self._unrecorded = f"#{r.msg_id} NOT recorded (the state file can't be written: {e}); try again"
-            self.note(self._unrecorded, "bad")
+            self._refresh_note()
+            self._reserve_note(self._watching_last())
             return
         self._unrecorded = ""
         self._just_decided = r.id
         if not ok:
             self._decided_note = ""
-            self.note(f"#{r.msg_id} was already decided elsewhere", "warn")
+            self._action_note = (f"#{r.msg_id} was already decided elsewhere"
+                                 + (f": it is now {PLAIN.get(now_status, now_status)}" if now_status else ""), "warn")
+            self._refresh_note()
         else:
             self._last = (r, status)
-            label_note = ""
             try:
                 write_label(r, status)
             except (OSError, ValueError) as e:
-                label_note = f" (corpus label not saved: {e})"
-            self._label_note = label_note
+                self._action_note = (f"#{r.msg_id}: corpus label not saved ({e})", "warn")
             self._last_now = now
-            self._reserve_note(status == "to_send" and not self.app.paths.dry_run)
             if status == "to_send":
-                self._decided_note = self._approved_note(r, now.send_after if now else None) + label_note
+                self._decided_note = self._approved_note(r, now.send_after if now else None)
             else:
                 msg = "kept as a match, not sent" if status == "kept" else "discarded"
-                self._decided_note = f"#{r.msg_id} {msg}{label_note} (u undoes)"
-            self.note(self._decided_note, "warn" if label_note else "good")
+                self._decided_note = f"#{r.msg_id} {msg} (u undoes)"
+            self._decided_style = "good"
+            self._say(self._decided_note, "good")
+        self._reserve_note(self._watching_last())
         self.reload()
+
+    def _refresh_note(self) -> None:
+        """Show what must be said now: beside the watched approval's state, if there is one."""
+        if self._watching_last() and self._last is not None:
+            self._show_last(self._last[0], self._last_now)
+        else:
+            self._say(self._decided_note, self._decided_style)
 
     def action_undo(self) -> None:
         """Put a decided post back in the queue, if the bot hasn't started sending it: in
@@ -676,6 +810,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         if target is None:
             return
         r, status = target
+        if self._history_mode and self._made() - self._hist_shown_at < self.DECIDE_DELAY:
+            # a double tap, a held key or a double click: the row only just came under the cursor
+            self.note(f"#{r.msg_id} has only just come under the cursor: check it, then press u", "warn")
+            return
         try:
             with self.app.store(UI_TIMEOUT) as st:
                 ok, now = st.undo(r.id, status)
@@ -688,12 +826,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._decided_note = ""
         if not ok:
             if now == "sent":
-                self.note(f"too late to undo: the bot has already sent #{r.msg_id} to the channel", "bad")
+                self._action_note = (f"too late to undo: the bot has already sent #{r.msg_id} to the channel", "bad")
             elif now == "sending":
-                self.note(f"too late to undo: the bot is sending #{r.msg_id} to the channel now", "bad")
+                self._action_note = (f"too late to undo: the bot is sending #{r.msg_id} to the channel now", "bad")
             else:
-                self.note(f"#{r.msg_id} can't be undone: it is now "
-                          f"{PLAIN.get(now, now) if now else 'gone from the queue'}", "warn")
+                gone = PLAIN.get(now, now) if now else "gone from the queue"
+                self._action_note = (f"#{r.msg_id} can't be undone: it is now {gone}", "warn")
+            self._refresh_note()
             if self._history_mode:
                 self.reload()
             self._sync_controls()
@@ -703,7 +842,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             remove_label(r)
         except (OSError, ValueError) as e:
             label_note = f" (its corpus label couldn't be removed: {e})"
-        self.note(f"#{r.msg_id} is back in the queue{label_note}", "warn" if label_note else "good")
+        self._action_note = (f"#{r.msg_id} is back in the queue{label_note}", "warn" if label_note else "good")
+        self._refresh_note()
         self.reload()
         ids = [x.id for x in self._items]
         if not self._history_mode and r.id in ids:   # open it again
@@ -790,6 +930,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                    "btn-undo": self.action_undo}
         if event.button.id in actions:
             event.stop()
+            self._user_acted()
             # a click: when it was made, from the app's record (Textual rebuilds mouse events,
             # with a later time, before a widget sees them); none recorded means now
             clicks = getattr(self.app, "press_made_at", {}).pop(event.button, None)

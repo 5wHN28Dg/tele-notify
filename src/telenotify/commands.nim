@@ -149,6 +149,7 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     st.setMeta("mode", if dry: "dry-run" else: "real")
     st.setMeta("started_at", $getTime().toUnix)
     st.setMeta("connection", "starting")
+    st.setMeta("sending_ready", "0")       # until the worker starts, after the backlog
   except CatchableError as e:
     echo "   could not update the state database: ", e.msg
   var l: Listener
@@ -295,6 +296,14 @@ const notATerminal* = "telenotify review asks before it sends or discards a post
   "a terminal, so nothing was done. Run it in a terminal, or add --yes to answer yes to every " &
   "question (or --no to answer no)."
 
+proc answersFlag*(flag, value: string, current: Answers): Answers =
+  ## --yes / --no: no value allowed (`--yes:no` must not mean yes), and not both.
+  if value != "":
+    raise newException(ValueError, &"--{flag} takes no value (found --{flag}:{value})")
+  result = if flag == "yes": allYes else: allNo
+  if current != askEach and current != result:
+    raise newException(ValueError, "--yes and --no can't be used together")
+
 proc askYesNo*(question: string, input: File = stdin, answers = askEach): bool =
   ## Ask `question`: true only for y / yes. With --yes or --no the answer
   ## is given, and printed after the question.
@@ -333,6 +342,7 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
   if pending.len == 0:
     echo "Nothing to review."
     return 0
+  let botUp = st.botSending()
   let sendQuestion = if dryRun: "Record as approved (dry run, nothing is sent)?"
                      else: "Send this post to the channel?"
   let discardQuestion = if dryRun: "Record as discarded (dry run)?" else: "Discard?"
@@ -363,9 +373,12 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
         elif st.decideReview(r.id, "to_send", undoSeconds = cfg.undoSeconds):
           inc approved
           if dryRun: echo "approved ✅ (dry run: recorded, never sent)"
+          elif not botUp:
+            echo "approved ✅ (the bot isn't running: it is sent when the bot starts; until then the " &
+                 "terminal screen's Review tab can undo it)"
           elif cfg.undoSeconds > 0:
             echo &"approved ✅ (sent in {cfg.undoSeconds} s; until then the terminal screen's Review tab can undo it)"
-          else: echo "approved ✅ (undo_seconds is 0: the running bot sends it within seconds)"
+          else: echo "approved ✅ (undo_seconds is 0: the bot sends it right away)"
         else: echo "already decided elsewhere"
         done = true
       of "d":
@@ -382,7 +395,9 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
     if quitting: break
   if approved > 0:
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
-    else: echo &"\n{approved} approved: the running bot sends them after {cfg.undoSeconds} s (or when it next starts)."
+    elif not botUp: echo &"\n{approved} approved: the bot isn't running, so they are sent when it starts."
+    elif cfg.undoSeconds > 0: echo &"\n{approved} approved: the bot sends them after {cfg.undoSeconds} s."
+    else: echo &"\n{approved} approved: the bot sends them right away."
   0
 
 proc fitColumn*(s: string, width: int): string =

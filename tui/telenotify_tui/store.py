@@ -200,6 +200,11 @@ class Store:
         return (alive is not None and time.time() - alive < ALIVE_SECONDS
                 and self.meta("connection") != "stopped")
 
+    def bot_sending(self) -> bool:
+        """Is the bot running and sending approved posts? Its worker has started (`sending_ready`,
+        written after the start-up backlog and cleared at a stop), as state.nim botSending asks."""
+        return self.bot_running() and self.meta("sending_ready") == "1"
+
     # ---------------------------------------------------------- processed
 
     def _judged(self, r: sqlite3.Row, has_text: bool) -> Judged:
