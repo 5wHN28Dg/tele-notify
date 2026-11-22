@@ -63,6 +63,14 @@ SEND_ERRORS = {"Have no write access to the chat": "this account may not post in
                    "the source doesn't allow forwarding, and the post has no link to share",
                "no link to the post": "the post has no link to share",
                "FLOOD_WAIT": "Telegram asked to slow down"}
+# held back on purpose (#80): the bot's own long reasons (listener.nim privateHeldBack, emptyHeldBack), short
+HELD_BACK = {"it isn't from a public channel": "it isn't from a public channel, so it can't be republished; "
+                                              "post it yourself or discard it",
+             "the summary would say nothing": "a summary would say nothing (no role or way to apply found)"}
+# a failure as the bot records it (state.nim withProblem): "could not send: x", counted as
+# "could not send (2 tries): x", or folded into the live post's own "error (2 tries): x"
+FAILED_PART = re.compile(r"^(?:could not send|error)(?: \(\d+ tr(?:y|ies)\))?: (.*)$")
+HELD_PART = re.compile(r"^not posted(?: \(\d+ tr(?:y|ies)\))?: (.*)$")
 # TDLib's flood limit, as its own text says it: "Too Many Requests: retry after 30"
 RETRY_AFTER = re.compile(r"Too Many Requests: retry after (\d+)")
 
@@ -675,13 +683,23 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     @staticmethod
     def _back_in_queue(decided: Review, now: Review) -> str:
-        """Why an approval made here is pending again, in plain words."""
-        failed, stopped = "; could not send: ", "the bot stopped while sending it"
-        if now.reasons.count(failed) > decided.reasons.count(failed):
-            why = now.reasons.rsplit(failed, 1)[1].strip()   # the last failure, whole (it may hold a ";")
-            return f"#{decided.msg_id}: sending failed: {send_error_words(why)}; it's back in the queue"
+        """Why an approval made here is pending again, in plain words: the reason part the bot
+        added or counted again since (state.nim withProblem keeps one part per reason, with a
+        count, and its parts never hold "; ")."""
+        stopped = "the bot stopped while sending it"   # added as it is each time (reopenInterruptedSends)
         if now.reasons.count(stopped) > decided.reasons.count(stopped):
             return f"#{decided.msg_id}: the bot stopped while sending; check the channel before sending it again"
+        before = set(decided.reasons.split("; "))
+        for part in reversed([p.strip() for p in now.reasons.split("; ") if p.strip() not in before]):
+            held = HELD_PART.match(part)
+            if held:
+                why = held.group(1)
+                words = next((v for k, v in HELD_BACK.items() if why.startswith(k)), cut(why, 60))
+                return f"#{decided.msg_id}: not sent: {words}; it's back in the queue"
+            failed = FAILED_PART.match(part)
+            if failed:
+                return (f"#{decided.msg_id}: sending failed: {send_error_words(failed.group(1))}; "
+                        "it's back in the queue")
         return f"#{decided.msg_id} was changed elsewhere: it is now back in the queue"
 
     def _status_texts(self, decided: Review, now: Review | None) -> tuple[str, str]:
@@ -745,7 +763,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         # wait at its longest, and an unknown reason cut to 60 characters (in words and unbroken)
         reasons = [*SEND_ERRORS, "Too Many Requests: retry after 86400", "x" * 60, "wait " * 12]
         cases = [("sending", ""), ("sent", "")]
-        cases += [("pending", decided.reasons + "; could not send: " + why) for why in reasons]
+        cases += [("pending", decided.reasons + "; could not send (999 tries): " + why) for why in reasons]
+        cases += [("pending", decided.reasons + "; not posted: " + why) for why in [*HELD_BACK, "x" * 60, "wait " * 12]]
         for status, reasons in cases:
             for up in (True, False):
                 self._bot_up, was = up, self._bot_up

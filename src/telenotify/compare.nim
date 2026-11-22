@@ -2,7 +2,9 @@
 ##
 ## While `telenotify run --dry-run` runs, it also notes every post the
 ## Python bot sends to your channel (they show up as your own outgoing
-## messages there: forwards, or "match: ... post link: ..." texts). Then
+## messages there: forwards, or "match: ... post link: ..." texts; the real
+## Nim bot's summaries, #80, are read the same way through their "رابط المنشور:"
+## line, and a summary of a private chat has none). Then
 ## `telenotify compare` puts the two side by side:
 ##
 ## * **both**: published by both bots (or Nim skipped it as a copy of an
@@ -30,7 +32,7 @@ type
   Comparison* = object
     both*, pythonOnly*, nimOnly*: seq[Compared]
 
-const publishedActions = ["would publish", "forwarded", "linked"]
+const publishedActions = ["would publish", "forwarded", "linked", "summarized"]
 
 proc byText(text: string, rows: seq[ProcessedRow]): (bool, ProcessedRow) =
   ## The message Nim saw with (nearly) the same text. Compares the raw

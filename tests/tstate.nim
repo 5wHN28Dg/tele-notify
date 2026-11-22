@@ -1,4 +1,4 @@
-import std/[unittest, os, tables, strutils, times]
+import std/[unittest, os, tables, strutils, times, random]
 import telenotify/state
 import db_connector/db_sqlite
 from std/posix import nil
@@ -70,6 +70,125 @@ suite "state":
     check not st.decideReview(id, "to_send")                 # an old window can't approve it
     for r in st.stats(7):
       if r.chat == "Fourth": check r.verdicts == [0, 1, 0] and r.forwarded == 0
+
+  test "a failed send adds its reason once, compared as whole parts, and counts repeats (#142 run 4)":
+    check withProblem("no level", "level") == "no level; could not send: level"
+    check withProblem("no link to the post", "no link") == "no link to the post; could not send: no link"
+    let held = "error: no link to the post from Telegram (no link), so no summary was sent. Approve it again to retry"
+    check withProblem("role x; " & held, "no link") == "role x; " & held & "; could not send: no link"
+    var r = "role x"
+    for _ in 1 .. 3: r = withProblem(r, "FLOOD_WAIT")
+    check r == "role x; could not send (3 tries): FLOOD_WAIT"
+    # a reason the live post was held back for (or the filter wrote) is its first try
+    r = "role x; not posted: it isn't from a public channel"
+    r = withProblem(r, "not posted: it isn't from a public channel")
+    check r == "role x; not posted (2 tries): it isn't from a public channel"
+    r = withProblem(r, "not posted: it isn't from a public channel")
+    check r == "role x; not posted (3 tries): it isn't from a public channel"
+    check withProblem("", "no link") == "could not send: no link"
+
+  test "a live error isn't repeated on approval; old copies fold; counts stay sane (#142 run 5)":
+    # the live post's "error: <problem>" is the same reason
+    let e = "no link to the post from Telegram (no link), so no summary was sent. Approve it again to retry"
+    check withProblem("role x; error: " & e, e) == "role x; error (2 tries): " & e   # the count after "error"
+    # copies an older bot wrote are folded into one, with their tries summed
+    check withProblem("no level; could not send: FLOOD_WAIT; could not send: FLOOD_WAIT", "FLOOD_WAIT") ==
+      "no level; could not send (3 tries): FLOOD_WAIT"
+    check withProblem("x; could not send: A (2 tries); error: A; could not send: A", "A") ==
+      "x; could not send (5 tries): A"
+    # a problem never holds "; ": it can't match a piece of another reason
+    check withProblem("could not send: a, b", "a; b") == "could not send (2 tries): a, b"
+    check problemText("a; b\nAsync traceback: …") == "a, b"
+    # a count that can't be right isn't trusted: a new part instead, never an overflow
+    check withProblem("could not send: A (9223372036854775807 tries)", "A") ==
+      "could not send: A (9223372036854775807 tries); could not send: A"
+    check withProblem("could not send: A (1000001 tries)", "A") ==
+      "could not send: A (1000001 tries); could not send: A"
+    check withProblem("could not send: A (-3 tries)", "A") == "could not send: A (-3 tries); could not send: A"
+    check withProblem("could not send: A (1000000 tries)", "A") == "could not send (1000000 tries): A"
+    # through the database
+    st.addReview(-300, 1, "Jobs", "text", "no level", "role", "")
+    var id = 0'i64
+    for x in st.pendingReviews():
+      if x.chatId == -300: id = x.id
+    for _ in 1 .. 2:
+      check st.decideReview(id, "to_send")
+      st.reopenReview(id, "level")
+    for x in st.pendingReviews():
+      if x.chatId == -300: check x.reasons == "no level; could not send (2 tries): level"
+
+  test "reasons read cleanly: no stacked lead-ins, no \".;\", a fixed text for no message (#142 run 6)":
+    # held back on approval: added as it is, not after "could not send: " (wp6 P13)
+    let empty = problemText("not posted: the summary would say nothing. Otherwise discard it.")
+    let priv = "not posted: it isn't from a public channel. Otherwise discard it."
+    check withProblem("role x; " & empty, priv, heldBack = true) == "role x; " & empty & "; " & problemText(priv)
+    check problemText(priv) == "not posted: it isn't from a public channel. Otherwise discard it"
+    check ".; " notin withProblem("role x; " & empty, "no link", heldBack = false)
+    # no message at all: a fixed text, counted like any other (wp6 P3, P4)
+    check problemText("") == unknownProblem and problemText("  \n ") == unknownProblem
+    check problemText("\nAsync traceback:\n  a.nim(1)") == unknownProblem   # a debug build's empty message
+    var r = withProblem("role", "")
+    check r == "role; could not send: unknown error"
+    r = withProblem(r, "  \n ")
+    check r == "role; could not send (2 tries): unknown error"
+    # a problem that itself ends like a count still folds (wp6 P1b)
+    r = "role"
+    for _ in 1 .. 3: r = withProblem(r, "boom (2 tries)")
+    check r == "role; could not send (3 tries): boom (2 tries)"
+    r = "role; boom (2 tries)"                           # written by the filter: its first try
+    r = withProblem(r, "boom (2 tries)")
+    check r == "role; boom (2 tries) (2 tries)"
+    check withProblem(r, "boom (2 tries)") == "role; boom (2 tries) (3 tries)"
+
+  test "older rows fold too: a closing \".\", empty lead-ins (#142 run 7)":
+    # a stored part ending in "." is the same reason (wp7 N10, N5, N8)
+    check withProblem("x; error: Bad thing happened.", "Bad thing happened.") ==
+      "x; error (2 tries): Bad thing happened"
+    let pv = "not posted: it isn't from a public channel. Otherwise discard it."
+    check withProblem("x; " & pv & " (2 tries)", pv, heldBack = true) ==
+      "x; not posted (3 tries): it isn't from a public channel. Otherwise discard it"
+    check withProblem("x; could not send: " & pv & " (3 tries)", "could not send: " & pv) ==
+      "x; could not send (4 tries): not posted: it isn't from a public channel. Otherwise discard it"
+    # an older bot's "error: " / "could not send: " with nothing after is "unknown error" (U3, U4)
+    check withProblem("role; error: ", "") == "role; error (2 tries): unknown error"
+    check withProblem("role; could not send: ", "  ") == "role; could not send (2 tries): unknown error"
+    check withProblem("a; ; x", "") == "a; ; x; could not send: unknown error"   # an empty part isn't one
+    # nor is a part of only dots and spaces (#142 run 8: wp8 C1, C21)
+    check withProblem("a; .; x", "") == "a; .; x; could not send: unknown error"
+    check withProblem("a;  . ; b", "") == "a;  . ; b; could not send: unknown error"
+
+  test "closing dots go until none is left, so a message always folds with itself (#142 run 9)":
+    # wp9 G21, G22, G24
+    var r = "role"
+    for _ in 1 .. 3: r = withProblem(r, ". .")
+    check r == "role; could not send (3 tries): unknown error"
+    r = "role"
+    for _ in 1 .. 3: r = withProblem(r, "x. .")
+    check r == "role; could not send (3 tries): x"
+    check withProblem(withProblem("role", ". ."), "") == "role; could not send (2 tries): unknown error"
+    check problemText("Failed . .") == "Failed"
+    # ellipses stay as written
+    check problemText("..") == ".." and problemText("wait...") == "wait..." and problemText("x…") == "x…"
+    check problemText("x. ..") == "x. .."
+    check problemText("error:") == "error: unknown error"     # a bare lead-in
+    # the property: for seeded messages of awkward pieces, problemText's output is as comparable
+    # leaves it, and the same message twice folds into one counted part
+    const pieces = [".", " ", "\t", "\n", ";", "; ", "(", ")", "tries", "try", ":", "error", "could not send",
+                    "not posted", "1", "2", " (", "وظيفة", "..", "…", "x"]
+    var rng = initRand(80142)
+    for _ in 1 .. 3000:
+      var m = ""
+      for _ in 1 .. rng.rand(1 .. 8): m.add pieces[rng.rand(pieces.high)]
+      let p = problemText(m)
+      check comparable(p) == p and comparable("could not send: " & p) == "could not send: " & p
+      for held in [false, true]:
+        let once = withProblem("role", m, held)
+        let twice = withProblem(once, m, held)
+        let folded = twice.split("; ").len == once.split("; ").len and
+                     twice.count("(2 tries)") == once.count("(2 tries)") + 1
+        if not folded:
+          checkpoint "message: " & m.escape & " held: " & $held & "\n once: " & once & "\n twice: " & twice
+        check folded
 
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")

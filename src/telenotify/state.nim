@@ -382,11 +382,126 @@ proc claimReview*(s: State, id: int64, at = now()): bool =
                          AND (send_after IS NULL OR send_after <= CAST(? AS INTEGER))""", id, at)
   s.db.getValue(sql"SELECT changes()") == "1"
 
-proc reopenReview*(s: State, id: int64, problem: string) =
-  ## Sending failed: put it back in the queue, with the reason.
-  s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL,
-                   reasons = reasons || '; could not send: ' || ?
-                   WHERE id = ? AND status IN ('to_send', 'sending')""", problem, id)
+const couldNotSend = "could not send: "
+
+const maxTries = 1_000_000   ## a stored count above this isn't trusted (a new part is added)
+const unknownProblem* = "unknown error"   ## a failure with no message
+const leads = ["could not send", "error", "not posted"]
+  ## a reason part's lead-in ("error: …"): a count goes right after it
+
+proc problemText*(msg: string): string =
+  ## A failure's message as one reason part: its first line (a debug build
+  ## adds an async traceback), with "; " (which separates the parts)
+  ## written ", ", and no closing single "." or ";" (another part or a
+  ## count may follow it): those and the spaces around them are stripped
+  ## until none is left ("x. ." and "x;" are "x"; "..", "..." and "…" stay). No message at all
+  ## is "unknown error", and so is the rest of a bare lead-in ("error:" is
+  ## "error: unknown error"). So it's always as `comparable` leaves it.
+  # a debug build's traceback starts on its own line, even after an empty message
+  let i = msg.find("Async traceback:")
+  let lines = (if i >= 0: msg[0 ..< i] else: msg).strip.splitLines
+  result = (if lines.len > 0: lines[0].strip else: "").replace("; ", ", ")
+  # a closing ";" too: a count after it, "x; (2 tries)", would read as a new part
+  while result.endsWith(";") or (result.endsWith(".") and not result.endsWith("..")):
+    result = result[0 ..< ^1].strip
+  if result == "": result = unknownProblem
+  for lead in leads:
+    if result == lead & ":": result = lead & ": " & unknownProblem
+
+proc parseTries(words: string): int =
+  ## "3 tries" / "1 try" -> 3 / 1; -1 if it isn't a count in 0 .. maxTries.
+  let w = words.split(' ')
+  if w.len != 2 or w[1] notin ["try", "tries"]: return -1
+  try:
+    let n = parseInt(w[0])
+    if n in 0 .. maxTries: return n
+  except ValueError: discard
+  -1
+
+proc splitCount(part: string): tuple[base: string, tries: int] =
+  ## A part with its count taken out: "error (3 tries): x" -> ("error: x",
+  ## 3); "x (3 tries)" -> ("x", 3); no count -> (part, -1).
+  result = (part, -1)
+  for lead in leads:
+    if part.startsWith(lead & " ("):
+      let close = part.find("): ", lead.len)
+      if close > 0:
+        let n = parseTries(part[lead.len + 2 ..< close])
+        if n >= 0: return (lead & ": " & part[close + 3 .. ^1], n)
+  if not part.endsWith(")"): return
+  let open = part.rfind(" (")
+  if open < 0: return
+  let n = parseTries(part[open + 2 ..< part.len - 1])
+  if n >= 0: result = (part[0 ..< open], n)
+
+proc comparable*(base: string): string =
+  ## A stored part, trimmed, as it's compared: without one closing single
+  ## "." (older rows have one; ".." stays), and with "unknown error" after
+  ## a lead-in with nothing after it (an older bot wrote "error: " for no
+  ## message). A part that's empty, or one "." (with any spaces around
+  ## it), is "", which never matches. `problemText`'s output is always left
+  ## as it is.
+  result = base.strip
+  if result.endsWith(".") and not result.endsWith(".."): result = result[0 ..< ^1].strip
+  for lead in leads:
+    if result == lead & ":": return lead & ": " & unknownProblem
+  # an empty part, or one ".", stays "": it's no reason, and never folds
+
+proc withCount(base: string, n: int): string =
+  ## `base` with "(n tries)" where it reads naturally: after its lead-in
+  ## ("error (3 tries): …"), else at the end.
+  let count = "(" & $n & (if n == 1: " try)" else: " tries)")
+  for lead in leads:
+    if base.startsWith(lead & ": "): return lead & " " & count & ": " & base[lead.len + 2 .. ^1]
+  base & " " & count
+
+proc withProblem*(reasons, problem: string, heldBack = false): string =
+  ## `reasons` ("a; b; …") after a failed send for `problem` (`heldBack`:
+  ## it was held back on purpose, #80, and is added as it is, not after
+  ## "could not send: "). If it already has that reason as a whole part
+  ## (`problem` itself, held back live or written by the filter; "error:
+  ## <problem>" from the live post; or "could not send: <problem>"), with
+  ## or without a count, it isn't added again: the first such part gets
+  ## the number of tries instead, "error (2 tries): …", counting each of
+  ## those parts (one without a count is one try; copies an older bot
+  ## wrote are folded into it). The problem is `problemText`: one line,
+  ## with no "; " in it, so it's always compared as a whole.
+  let p = problemText(problem)
+  var parts = if reasons == "": newSeq[string]() else: reasons.split("; ")
+  let forms = [p, "error: " & p, couldNotSend & p]
+  var first = -1
+  var total = 0
+  var kept: seq[string]
+  for part in parts:
+    # the whole part first: the problem itself may end in something count-like
+    var (base, tries) = (part.comparable, -1)
+    if base notin forms:
+      (base, tries) = splitCount(part)
+      base = base.comparable
+    if base != "" and base in forms:
+      total += (if tries >= 0: tries else: 1)
+      if first < 0:
+        first = kept.len
+        kept.add base
+      continue                      # a copy: folded into the first
+    kept.add part
+  if first >= 0:
+    kept[first] = withCount(kept[first], min(total + 1, maxTries))
+    return kept.join("; ")
+  parts.add (if heldBack: p else: couldNotSend & p)
+  parts.join("; ")
+
+proc reopenReview*(s: State, id: int64, problem: string, heldBack = false) =
+  ## Sending failed (or was held back, `heldBack`): put it back in the
+  ## queue, with the reason (`withProblem`: a reason it already has is
+  ## counted, not repeated). The bot has claimed it ("sending", #62); an
+  ## older caller may still pass one that is "to_send". Its undo window
+  ## goes with it: approved again, it gets a new one.
+  let row = s.db.getRow(sql"""SELECT COALESCE(reasons, '') FROM reviews
+                              WHERE id = ? AND status IN ('to_send', 'sending')""", id)
+  if row.len == 0: return
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL, reasons = ?
+                   WHERE id = ? AND status IN ('to_send', 'sending')""", withProblem(row[0], problem, heldBack), id)
 
 proc reopenInterruptedSends*(s: State): int =
   ## At start: posts the bot was sending when it stopped (a crash, a power
@@ -434,7 +549,7 @@ type StatRow* = object
 
 const statsSql* = """SELECT chat_title,
       SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
-      SUM(action = 'forwarded' OR action = 'linked' OR EXISTS (SELECT 1 FROM reviews r
+      SUM(action IN ('forwarded', 'linked', 'summarized') OR EXISTS (SELECT 1 FROM reviews r
         WHERE r.chat_id = p.chat_id AND r.msg_id = p.msg_id AND r.status = 'sent')),
       MAX(at)
       FROM processed p WHERE at > ? AND (COALESCE(album_id, 0) = 0 OR msg_id =
@@ -467,7 +582,7 @@ proc percentile*(sorted: seq[int64], p: int): int64 =
   sorted[rank - 1]
 
 const latencySql* = """SELECT MAX(0, u.at - p.posted_at),
-      CASE WHEN p.action NOT IN ('forwarded', 'linked', 'would publish') THEN 2
+      CASE WHEN p.action NOT IN ('forwarded', 'linked', 'summarized', 'would publish') THEN 2
            WHEN p.caught_up = 1 THEN 1 ELSE 0 END
       FROM published u JOIN processed p ON p.chat_id = u.chat_id AND p.msg_id = u.msg_id
       WHERE u.at > ? AND p.posted_at IS NOT NULL"""
