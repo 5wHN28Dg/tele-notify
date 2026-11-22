@@ -153,6 +153,9 @@ suite "state":
     check withProblem("role; error: ", "") == "role; error (2 tries): unknown error"
     check withProblem("role; could not send: ", "  ") == "role; could not send (2 tries): unknown error"
     check withProblem("a; ; x", "") == "a; ; x; could not send: unknown error"   # an empty part isn't one
+    # nor is a part of only dots and spaces (#142 run 8: wp8 C1, C21)
+    check withProblem("a; .; x", "") == "a; .; x; could not send: unknown error"
+    check withProblem("a;  . ; b", "") == "a;  . ; b; could not send: unknown error"
 
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")

@@ -388,12 +388,13 @@ proc splitCount(part: string): tuple[base: string, tries: int] =
 proc comparable(base: string): string =
   ## A stored part as `problemText` would have written it: no closing "."
   ## (older rows have one), and "unknown error" after a lead-in with
-  ## nothing after it (an older bot wrote "error: " for no message).
+  ## nothing after it (an older bot wrote "error: " for no message). A
+  ## part that's empty, or only dots and spaces, is "".
   result = base.strip
   if result.endsWith(".") and not result.endsWith(".."): result = result[0 ..< ^1].strip
   for lead in leads:
     if result == lead & ":": return lead & ": " & unknownProblem
-  if result == "": result = unknownProblem
+  # a part of only dots and spaces stays "": it's no reason, and never folds
 
 proc withCount(base: string, n: int): string =
   ## `base` with "(n tries)" where it reads naturally: after its lead-in
@@ -426,7 +427,7 @@ proc withProblem*(reasons, problem: string, heldBack = false): string =
     if base notin forms:
       (base, tries) = splitCount(part)
       base = base.comparable
-    if base in forms and part.strip != "":
+    if base != "" and base in forms:
       total += (if tries >= 0: tries else: 1)
       if first < 0:
         first = kept.len

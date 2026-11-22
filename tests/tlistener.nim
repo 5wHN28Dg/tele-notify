@@ -1,7 +1,7 @@
 ## The whole bot against a fake Telegram: no account, no network.
 
 import std/[unittest, asyncdispatch, os, tables, sets, strutils, times, json, sequtils]
-import telenotify/[listener, telegram, state, config, gather, fetch, ocr, dedup, notify, instagram, summary]
+import telenotify/[listener, telegram, state, config, gather, fetch, dedup, notify, instagram, summary]
 import db_connector/db_sqlite
 
 notifyPaceMs = 0   # no pacing between messages to your bot here (tnotify tests it)
