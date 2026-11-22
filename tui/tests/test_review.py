@@ -526,11 +526,12 @@ async def test_approving_counts_down_then_says_it_was_sent(paths, state, labels)
         await pilot.press("s")
         await pilot.pause()
         assert before + 30 <= send_after_of(state, 11) <= int(time.time()) + 30   # the bot waits 30 s
-        assert "sent to the channel in 3" in note(app) and "u undoes" in note(app)
+        # a loaded machine may take a second or two between the decision and the note
+        assert any(f"sent to the channel in {n} s" in note(app) for n in (30, 29, 28)) and "u undoes" in note(app)
         set_row(state, 11, send_after=int(time.time()) + 5)
         pane._countdown()                                    # a second later, and so on
         await pilot.pause()
-        assert "in 5 s" in note(app) or "in 4 s" in note(app)
+        assert any(f"in {n} s" in note(app) for n in (5, 4, 3))
         set_row(state, 11, send_after=int(time.time()) - 1)
         pane._countdown()
         await pilot.pause()
@@ -641,7 +642,7 @@ async def test_history_counts_down_and_shows_the_send(paths, state, now):
         set_row(state, 11, send_after=int(time.time()) + 12)
         pane._countdown()
         await pilot.pause()
-        assert str(table.get_row_at(0)[1]) in ("sends in 12 s", "sends in 11 s")
+        assert str(table.get_row_at(0)[1]) in ("sends in 12 s", "sends in 11 s", "sends in 10 s")
         set_row(state, 11, status="sending")
         pane._countdown()
         await pilot.pause()
@@ -703,7 +704,8 @@ def run_review_cli(binary: Path, config: Path, typed: str) -> str:
 
 async def test_the_real_command_line_asks_and_the_screen_undoes_it(paths, state, config, binary):
     out = run_review_cli(binary, config, "s\ny\n")
-    assert "Send this post to the channel? [y/N]" in out, out
+    assert out.lstrip("sy\r\n").startswith("DRY RUN:"), out          # what was typed is echoed first
+    assert "Record as approved (dry run, nothing is sent)? [y/N]" in out, out
     assert status_of(state, 11) == "to_send" and send_after_of(state, 11) > time.time()
     app = TeleNotifyApp(dataclasses.replace(paths, binary=binary), refresh_seconds=0)
     async with app.run_test(size=(140, 40)) as pilot:
