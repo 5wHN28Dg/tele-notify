@@ -92,8 +92,12 @@ suite "chat access (#16)":
 suite "public channels (#16 review)":
   test "a supergroup with an active username is public":
     let (chat, a) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
-      "status": {"@type": "chatMemberStatusLeft"}, "usernames": {"active_usernames": ["basrajobs"]}}})
+      "status": {"@type": "chatMemberStatusLeft"}, "usernames": {"active_usernames": ["examplejobs"]}}})
     check chat == -1000000000005 and a.status == "left" and a.public
+    check not a.channel                # no is_channel: a group
+    let (_, ch) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5, "is_channel": true,
+      "status": {"@type": "chatMemberStatusLeft"}, "usernames": {"active_usernames": ["examplejobs"]}}})
+    check ch.public and ch.channel
     let (_, b) = parseAccessUpdate(%*{"@type": "updateSupergroup", "supergroup": {"id": 5,
       "status": {"@type": "chatMemberStatusLeft"}, "usernames": {"active_usernames": []}}})
     check not b.public

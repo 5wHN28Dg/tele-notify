@@ -87,6 +87,7 @@ suite "tdTelegram":
   test "chatAccess: a channel's title and whether you're still a member (#16)":
     var a = waitFor tg.chatAccess(-1)
     check a.title == "Jobs" and a.status == "ok"
+    check a.channel                    # chatTypeSupergroup's is_channel (#80: only channels are summarized)
     memberStatus = "chatMemberStatusBanned"
     a = waitFor tg.chatAccess(-1)
     check a.status == "banned"
