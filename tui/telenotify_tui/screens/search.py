@@ -213,7 +213,7 @@ class SearchPane(Vertical):
         self.watch(self.query_one("#chat", Select), "expanded", self._chat_dropdown_toggled, init=False)
         note = self._binary_note()
         if note:
-            self.query_one("#paste-result", Static).update(Text(note, style="yellow"))
+            self.query_one("#paste-result", Static).update(Content.styled(note, "$tn-warning"))
             self.query_one("#paste-judge", Button).disabled = True
             self.query_one("#paste-judge-links", Button).disabled = True
 
@@ -469,8 +469,8 @@ class SearchPane(Vertical):
         if j.text.strip():
             text.update(Block(j.text, head=Text("text:", style="bold")))
         else:
-            text.update(Text("The text of this post wasn't stored (older bot versions didn't keep it), "
-                             "so it can't be shown or re-judged.", style="yellow"))
+            text.update(Content.styled("The text of this post wasn't stored (older bot versions didn't keep it), "
+                             "so it can't be shown or re-judged.", "$tn-warning"))
         binary_note = self._binary_note()
         can = not binary_note and bool(j.text.strip())
         for b in buttons:
@@ -504,10 +504,10 @@ class SearchPane(Vertical):
         if j is None:
             return
         if not self._binary_ok():
-            out.update(Text(self._binary_note(), style="yellow"))
+            out.update(Content.styled(self._binary_note(), "$tn-warning"))
             return
         if not j.text.strip():
-            out.update(Text("No stored text to re-judge.", style="yellow"))
+            out.update(Content.styled("No stored text to re-judge.", "$tn-warning"))
             return
         out.update(Text("judging with the current settings" + (", following links" if follow_links else "") + "…",
                         style="dim"))
@@ -570,10 +570,10 @@ class SearchPane(Vertical):
         out = self.query_one("#paste-result", Static)
         text = self.query_one("#paste-text", TextArea).text
         if not self._binary_ok():
-            out.update(Text(self._binary_note(), style="yellow"))
+            out.update(Content.styled(self._binary_note(), "$tn-warning"))
             return
         if not text.strip():
-            out.update(Text("Paste some text first.", style="yellow"))
+            out.update(Content.styled("Paste some text first.", "$tn-warning"))
             return
         out.update(Text("judging…", style="dim"))
         self.run_worker(self._paste_worker(text, follow_links), exclusive=True, group="search-paste")

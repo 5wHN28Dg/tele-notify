@@ -144,29 +144,34 @@ class EvalModal(ModalScreen[None]):
             yield Button("Close (esc)", id="close")
 
     def on_mount(self) -> None:
+        self.query_one(DataTable).add_columns("label", *sd.VERDICTS)
+        self._draw()
+        # worse / better and a failed test are in the theme's colours: draw them again when it changes
+        self.app.theme_changed_signal.subscribe(self, lambda _theme: self._draw())
+
+    def _draw(self) -> None:
         t = self.query_one(DataTable)
-        t.add_columns("label", *sd.VERDICTS)
+        t.clear()
         if not self.before.error and not self.after.error:
             for row in sd.compare_eval(self.before, self.after):
                 t.add_row(row[0].label, *[self._cell(c) for c in row], key=row[0].label)
         self.query_one("#eval-summary", Static).update(self.summary())
 
-    @staticmethod
-    def _cell(c: sd.EvalCell) -> Text:
+    def _cell(self, c: sd.EvalCell) -> Text:
         s = f"{c.before} -> {c.after}" if c.before != c.after else str(c.after)
-        style = {"worse": "bold red", "better": "bold green"}.get(c.mood, "")
+        style = {"worse": f"bold {tone(self.app, 'error')}", "better": f"bold {tone(self.app, 'success')}"}.get(c.mood, "")
         return Text(s + (" !" if c.mood == "worse" else ""), style=style)
 
     def summary(self) -> Text:
         out = Text()
         for name, r in (("saved config", self.before), ("your edits", self.after)):
             if r.error:
-                out.append(f"{name}: the test failed: {clean(r.error)}\n", style="bold red")
+                out.append(f"{name}: the test failed: {clean(r.error)}\n", style=f"bold {tone(self.app, 'error')}")
         if self.before.error or self.after.error:
             return out
 
         def line(what: str, b: int, a: int) -> None:
-            style = "bold red" if a > b else ("bold green" if a < b else "")
+            style = f"bold {tone(self.app, 'error')}" if a > b else (f"bold {tone(self.app, 'success')}" if a < b else "")
             word = " (worse)" if a > b else (" (better)" if a < b else " (same)")
             out.append(f"{what}: {b} -> {a}{word}\n", style=style)
 
@@ -503,6 +508,13 @@ class SettingsPane(Vertical):
     /* the problems under each section: whole when they fit, else a scrollbar shows (never cut silently) */
     SettingsPane .problems { height: auto; max-height: 8; }
     SettingsPane .problems > Static { height: auto; }
+    /* a scrolled area with the focus (the problems list, the Bot form) shows a bar at its left edge
+       in the text colour: 12:1 or more on the background in both themes and NO_COLOR (A23) */
+    /* the highlighted row of a focused list in the theme's text pair, reversed: Textual's block cursor
+       is 3.78:1 in textual-dark, and the pickers' " !" is drawn in the row's own colour (PR #137 run 5) */
+    SettingsPane OptionList:focus > .option-list--option-highlighted { background: $foreground; color: $background; }
+    SettingsPane VerticalScroll { border-left: blank; }
+    SettingsPane VerticalScroll:focus { border-left: outer $foreground; }
     SettingsPane .form-row { height: auto; min-height: 1; margin-top: 1; }
     SettingsPane .form-row Label { width: 22; }
     SettingsPane .form-row Input { width: 1fr; }
@@ -606,8 +618,12 @@ class SettingsPane(Vertical):
         t.add_column("id", key="id")
         # config.json only: the chat list is read when the tab is shown (it may be locked)
         self.call_after_refresh(self.load, chats=False)
-        # the pickers' "!" marks are drawn in the theme's colours: draw them again when it changes
-        self.app.theme_changed_signal.subscribe(self, lambda _theme: self.original is not None and self.update_pickers())
+        # the chat table's status is drawn in the theme's error colour: draw it again when it changes
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
+
+    def _theme_changed(self, _theme) -> None:
+        if self.original is not None:
+            self.refresh_chats()
 
     # ------------------------------------------------------- data in/out
 
@@ -820,7 +836,10 @@ class SettingsPane(Vertical):
                 label = Text(f"{'*' if key in changed else ' '}{key} ")
                 label.append(f"({n})", style="dim")
                 if key in bad:
-                    label.append(" !", style=f"bold {tone(self.app, 'error')}" if bad[key] else tone(self.app, "warning"))
+                    # in the row's own text colour, bold: readable on the highlighted row too (its
+                    # background is the cursor's, not the one the tones are made for); the problems
+                    # list below says error or warning in words
+                    label.append(" !", style="bold")
                 picker.replace_option_prompt_at_index(i, label)
 
     def update_tab_label(self) -> None:
@@ -860,7 +879,7 @@ class SettingsPane(Vertical):
         keep = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
         table.clear()
         for r in rows:
-            status = Text(visual(r.status), style="red" if r.status not in ("ok", "") else "")
+            status = Text(visual(r.status), style=tone(self.app, "error") if r.status not in ("ok", "") else "")
             title = Text(visual(r.title), style="italic dim" if not r.known else "")
             table.add_row(Text("[x]" if r.watched else "[ ]", style="bold green" if r.watched else "dim"), Text("->", style="bold green") if r.target else "",
                           title, Text(visual(r.kind)), status, Text(str(r.id), style="dim"), key=str(r.id))

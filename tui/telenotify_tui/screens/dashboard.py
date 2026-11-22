@@ -555,6 +555,7 @@ class DashboardPane(Vertical):
     def _theme_changed(self, _theme) -> None:
         if self.snapshot is not None:
             self._show_activity(self.snapshot)
+            self._show_alerts(self.snapshot)   # the health table's status colour too
         self._show_status()   # its error and warning colours come from the theme too (#139)
 
     def on_resize(self, event: events.Resize) -> None:
@@ -794,7 +795,7 @@ class DashboardPane(Vertical):
             if not snap.login_needed:   # the first line already says it: keep the box short enough for the buttons
                 row("Telegram", (conn, conn_style), *up)
             if snap.pending:
-                row("Review", (f"{snap.pending} pending", "bold yellow"), ("  press 2 to review", "dim"))
+                row("Review", (f"{snap.pending} pending", f"bold {tone(self.app, 'warning')}"), ("  press 2 to review", "dim"))
             else:
                 row("Review", ("nothing pending", "dim"))
             if snap.alerts:
@@ -997,7 +998,7 @@ class DashboardPane(Vertical):
         health = self.query_one("#health", DataTable)
         health.clear()
         for p in snap.problems:
-            style = "dim" if p.status == "silent" else "red"
+            style = "dim" if p.status == "silent" else tone(self.app, "error")
             health.add_row(Text(visual(p.title)), Text(visual(p.status), style=style), Text(visual(p.detail)))
         self._problems_shown = len(snap.problems)
         bits = []
@@ -1072,8 +1073,8 @@ class DashboardPane(Vertical):
                 b.disabled = False
             self.refresh_bindings()
         if ok:
-            result.update(Text(f"{action} {name}: done", style="green"))
-        else:
-            result.update(Text(f"{action} {name} failed: {msg or 'no reason given'}", style=tone(self.app, "error")))
+            result.update(Content.styled(f"{action} {name}: done", "$tn-success"))
+        else:   # Content with the theme's variable: right again after a theme change (#139)
+            result.update(Content.styled(f"{action} {name} failed: {msg or 'no reason given'}", "$tn-error"))
         self._load_services()
         self._request_state()
