@@ -210,6 +210,7 @@ class SearchPane(Vertical):
         table.add_column("role", key="role")
         table.add_column("first reason", key="reason")
         self._show_detail(None)
+        self.show_key_hints()
         self.watch(self.query_one("#chat", Select), "expanded", self._chat_dropdown_toggled, init=False)
         note = self._binary_note()
         if note:
@@ -446,7 +447,8 @@ class SearchPane(Vertical):
             self.query_one("#judge-result", Static).update("")
         buttons = [self.query_one("#rejudge", Button), self.query_one("#rejudge-links", Button)]
         if j is None:
-            head.update(Text("Nothing selected. Search above, or press p to paste a post.", style="dim"))
+            paste = "press p" if self.app.letter_keys else "use ctrl+p, Paste a post,"   # the letter keys off (#140)
+            head.update(Text(f"Nothing selected. Search above, or {paste} to paste a post.", style="dim"))
             reasons.update("")
             text.update("")
             note.update("")
@@ -482,6 +484,13 @@ class SearchPane(Vertical):
             ok = not self.has_class("pasting") and self._selected is not None and bool(self._selected.text.strip())
             return True if ok else None   # shown, but off with no post open
         return True
+
+    def show_key_hints(self) -> None:
+        """The keys named on this tab's buttons and lines: the letter ones only while they work (#140)."""
+        self.query_one("#rejudge", Button).label = "Re-judge now" + self.app.key_hint(" (j)")
+        self.query_one("#rejudge-links", Button).label = "+ links" + self.app.key_hint(" (J)")
+        if self._selected is None:
+            self._show_detail(None)
 
     def action_copy_post(self) -> None:
         """Copy the selected post's text, as stored (reading order, not the order it is drawn in)."""

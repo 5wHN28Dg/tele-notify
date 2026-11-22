@@ -9,17 +9,23 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Iterable
+from functools import partial
 from typing import ClassVar
 from weakref import WeakKeyDictionary
 
 from textual import events
-from textual.app import App, ComposeResult, ScreenStackError
-from textual.binding import Binding, BindingType
+from textual.actions import parse as parse_action
+from textual.app import App, ComposeResult, ScreenStackError, SystemCommand
+from textual.binding import Binding, BindingsMap, BindingType
+from textual.dom import DOMNode
 from textual.errors import NoWidget
+from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Footer, Header, TabbedContent, TabPane, Tabs
 from textual.widgets._footer import FooterKey
 
+from . import prefs
 from .paths import Paths
 from .rtl import visual
 from .screens.dashboard import DashboardPane
@@ -32,6 +38,60 @@ from .tones import tones
 REFRESH_SECONDS = 5
 THEMES = ("textual-dark", "textual-light")   # the themes offered: the ones whose colours are checked
 RELOAD_LOST_SECONDS = 1.0   # a queued tab reload that hasn't run by then never will
+
+
+def is_letter_key(key: str) -> bool:
+    """A single-letter shortcut (s, p, D, J...): what the letter-keys switch turns off (#140)."""
+    return len(key) == 1 and key.isalpha()
+
+
+class MainScreen(Screen):
+    """The screen under the dialogs. Its keys follow two rules:
+
+    - With the focus on the tab bar, the shown tab's own keys still work (and show in the footer
+      and the keys panel), as if the focus were in the tab: the Bot box names `s` whatever has the
+      focus (PR #137 review run 7). Each tab's keys stay its own: on Review, `s` is still Send.
+    - With the letter keys off (Settings, #140), no single-letter key here does anything or is
+      shown; the ctrl keys, the number keys, esc, enter, space and the arrows stay. The dialogs are
+      screens of their own, so their y / n still work.
+
+    Textual has no public hook for the keys in effect, so this extends Screen._binding_chain, the
+    list both the key handling and the footer read (Textual 8.2, pinned below 9 in pyproject)."""
+
+    @property
+    def _binding_chain(self) -> list[tuple[DOMNode, BindingsMap]]:
+        return self.key_chain(letters=getattr(self.app, "letter_keys", True))
+
+    def key_chain(self, letters: bool) -> list[tuple[DOMNode, BindingsMap]]:
+        """The keys in effect, nearest the focus first; `letters`: keep the single-letter ones."""
+        chain = super()._binding_chain
+        shown = self.tab_from_bar()
+        if shown is not None:
+            chain.insert(1, (shown, shown._bindings.copy()))
+        if not letters:
+            for _node, bindings in chain:
+                for key in [k for k in bindings.key_to_bindings if is_letter_key(k)]:
+                    del bindings.key_to_bindings[key]
+        return chain
+
+    def tab_from_bar(self) -> Widget | None:
+        """The shown tab's own widget (its pane) while the app's tab bar has the focus, else None."""
+        focused = self.focused
+        tabs = focused.parent if isinstance(focused, Tabs) else None
+        if isinstance(tabs, TabbedContent) and tabs.parent is self and tabs.active:   # the app's tab bar
+            shown = tabs.get_pane(tabs.active).children
+            return shown[0] if shown else None
+        return None
+
+    def key_nodes(self) -> list[DOMNode]:
+        """The nodes whose keys apply where the focus is, nearest first, as key_chain has them but
+        before a box that types (an Input) takes the letters: for the command palette."""
+        focused = self.focused
+        nodes: list[DOMNode] = list(focused.ancestors_with_self) if focused is not None else [self, self.app]
+        shown = self.tab_from_bar()
+        if shown is not None:
+            nodes.insert(1, shown)
+        return nodes
 
 
 class TeleNotifyApp(App):
@@ -119,9 +179,53 @@ class TeleNotifyApp(App):
         self.press_made_at: WeakKeyDictionary[Widget, deque[float]] = WeakKeyDictionary()
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
+        self.letter_keys = prefs.load(paths.config).letter_keys   # the screen's own setting (#140)
         self.refresh_seconds = refresh_seconds
         self._reload_queued: float | None = None   # when a reload was queued (monotonic), until it runs
         self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
+
+    def get_default_screen(self) -> Screen:
+        return MainScreen(id="_default")
+
+    def set_letter_keys(self, on: bool) -> str:
+        """Turn the single-letter shortcuts on or off (#140), at once and for next time.
+        Returns "" when saved, else why it wasn't (the switch still holds for this run)."""
+        self.letter_keys = on
+        problem = ""
+        try:
+            prefs.save(self.paths.config, prefs.Prefs(letter_keys=on))
+        except OSError as e:
+            problem = f"not saved for next time: {e.strerror or e}"
+        self.refresh_bindings()
+        for pane in self.query("TabPane > *"):
+            show = getattr(pane, "show_key_hints", None)
+            if callable(show):
+                show()
+        return problem
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """Textual's commands, then every single-letter key in effect where the focus is (on the
+        shown tab), so each one's action is also one ctrl+p away; with the letter keys off (#140),
+        that is how the actions with no button or other key (Paste a post, Flip...) are reached."""
+        yield from super().get_system_commands(screen)
+        if not isinstance(screen, MainScreen):
+            return
+        tab = (self.query_one(TabbedContent).active or "").capitalize()   # the tab's name, without its marks
+        seen: set[str] = set()
+        for node in screen.key_nodes():
+            for key, binding in node._bindings:
+                if not is_letter_key(key) or key in seen or binding.action in seen:
+                    continue
+                seen.update((key, binding.action))
+                _ns, name, params = parse_action(binding.action)
+                if node.check_action(name, params):   # off (or hidden) now: not offered
+                    yield SystemCommand(f"{tab}: {binding.description}",
+                                        f"the {key} key{'' if self.letter_keys else ' (letter keys are off)'}",
+                                        partial(self.run_action, binding.action, node))
+
+    def key_hint(self, text: str) -> str:
+        """`text` (a key named on screen, such as " [f]") while the letter keys are on, else ""."""
+        return text if self.letter_keys else ""
 
     def get_css_variables(self) -> dict[str, str]:
         """The theme's variables plus $tn-error, $tn-warning and $tn-success: error, warning and

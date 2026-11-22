@@ -1,6 +1,7 @@
 """Settings screen: edit config.json without hand-editing JSON.
 
-Five sections (keyword lists, places, other filters, chats, the bot itself).
+Five sections (keyword lists, places, other filters, chats, the bot itself), and Screen: the
+screen's own settings (letter keys, #140), kept beside config.json rather than in it.
 Edits stay in memory until ctrl+s; saving backs the file up, replays only
 the changed keys on top of the file as it is on disk (unknown keys,
 secrets and key order are kept) and writes it atomically. `t` runs the
@@ -235,6 +236,11 @@ class EditorButton(Button, can_focus=False):
 
 
 KEYS_HINT = "click picks · enter / double click: edit · del / x: delete · a: add"
+KEYS_HINT_NO_LETTERS = "click picks · enter / double click: edit · del: delete"   # letter keys off (#140)
+LETTER_KEYS_HELP = ("Single-letter shortcuts, such as s, p and y. Off: only the ctrl keys, the number keys, "
+                    "esc, enter, space, the arrows and the dialogs' y / n work, and each letter key's action "
+                    "is in the command palette (ctrl+p). The screen's own setting: it applies at once and is "
+                    "kept in screen.json beside config.json, not saved with ctrl+s.")
 
 
 class KeywordEditor(Vertical):
@@ -585,6 +591,13 @@ class SettingsPane(Vertical):
                             yield Static(id="secrets", classes="form-row")
                     with ProblemsScroll(classes="problems"):
                         yield Static(id=f"problems-{sec}")
+            # this screen's own settings, not config.json's (#140)
+            with TabPane("Screen", id="sec-screen"), VerticalScroll():
+                with Horizontal(classes="form-row"):
+                    yield Label("letter keys")
+                    yield Checkbox("on", value=True, id="screen-letter-keys")
+                    yield Static(LETTER_KEYS_HELP, id="help-letter-keys", classes="help muted")
+                yield Static("", id="screen-note", classes="form-row")
 
     def _form_row(self, key: str) -> ComposeResult:
         with Horizontal(classes="form-row"):
@@ -616,6 +629,11 @@ class SettingsPane(Vertical):
         t.add_column("kind", key="kind")
         t.add_column("status", key="status")
         t.add_column("id", key="id")
+        box = self.query_one("#screen-letter-keys", Checkbox)
+        with self.prevent(Checkbox.Changed):
+            box.value = self.app.letter_keys  # type: ignore[attr-defined]
+        box.label = "on" if box.value else "off"
+        self.show_key_hints()
         # config.json only: the chat list is read when the tab is shown (it may be locked)
         self.call_after_refresh(self.load, chats=False)
         # the chat table's status is drawn in the theme's error colour: draw it again when it changes
@@ -815,6 +833,8 @@ class SettingsPane(Vertical):
                                             f"add {'them' if both else 'it'} there (this screen never changes them)",
                                             "$tn-error"))
             for (error, message), ks in sorted(grouped.items(), key=lambda x: not x[0][0]):
+                if not self.app.letter_keys:  # type: ignore[attr-defined]
+                    message = message.replace(sd.DUPLICATE_FIX, sd.DUPLICATE_FIX_NO_KEY)
                 lines.append(Content.styled(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}"),
                                             "$tn-error" if error else "$tn-warning"))
             self.query_one(f"#problems-{sec}", Static).update(Content("\n").join(lines))
@@ -940,6 +960,25 @@ class SettingsPane(Vertical):
         else:
             v = text
         self._put(key, v)
+
+    @on(Checkbox.Changed, "#screen-letter-keys")
+    def _letter_keys(self, event: Checkbox.Changed) -> None:
+        event.stop()
+        event.checkbox.label = "on" if event.value else "off"
+        problem = self.app.set_letter_keys(event.value)  # type: ignore[attr-defined]
+        note = self.query_one("#screen-note", Static)
+        note.update(Content.styled(f"warning: {problem}", "$tn-warning") if problem else "")
+
+    def show_key_hints(self) -> None:
+        """The keys named on this tab's buttons and lines: the letter ones only while they work (#140)."""
+        on = self.app.letter_keys  # type: ignore[attr-defined]
+        self.query_one("#test", Button).label = "Test t" if on else "Test"
+        self.query_one("#dedupe", Button).label = "Remove duplicates D" if on else "Remove duplicates"
+        for editor in self.query(KeywordEditor):
+            editor.query_one("#kw-keys", Static).update(KEYS_HINT if on else KEYS_HINT_NO_LETTERS)
+            editor.query_one("#kw-add", Button).label = "Add (a)" if on else "Add"
+        if self.original is not None or self.load_error:
+            self.update_problems()
 
     @on(Checkbox.Changed)
     def _switch(self, event: Checkbox.Changed) -> None:

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 DUPLICATE_FIX = " (press D or \"Remove duplicates\" to keep one of each)"
+DUPLICATE_FIX_NO_KEY = " (press \"Remove duplicates\" to keep one of each)"   # the letter keys off (#140)
 
 MISSING: Any = object()   # "key not in the file" (the bot then uses its default)
 

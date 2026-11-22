@@ -38,7 +38,7 @@ class Armed:
 
     def _wait_note(self) -> None:
         self.query_one("#confirm-wait", Static).update(  # type: ignore[attr-defined]
-            "Too quick: press again to confirm.")
+            "Ignored, too soon. Read the question, then confirm.")
 
     def on_key(self, event: events.Key) -> None:
         """Every confirming key is decided here, by its own time: `y`, or enter on

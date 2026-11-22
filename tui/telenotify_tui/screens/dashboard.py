@@ -364,7 +364,12 @@ class ServiceMenu(ModalScreen["str | None"]):
     ACTIONS = (("start", "Start"), ("stop", "Stop"), ("restart", "Restart"))
 
     DEFAULT_CSS = """
-    ServiceMenu { align: center middle; }
+    /* at the top, just under the tab bar, so no row of it can lie over the confirm's buttons, which
+       open centred where the menu was: a double or triple click on a row can't fall through onto
+       the action button (PR #137 review run 7); the confirm is at least 10 rows, centred, so its
+       buttons start on row 12 or lower at 24 rows, and this menu ends by row 9 */
+    ServiceMenu { align: center top; }
+    ServiceMenu > Vertical { margin-top: 3; }
     ServiceMenu > Vertical {
         width: 40; height: auto;
         border: round $foreground; background: $surface; color: $foreground;
@@ -615,7 +620,7 @@ class DashboardPane(Vertical):
         self.query_one("#dash-activity").border_title = "Activity"
         bot_box = self.query_one("#dash-bot")
         bot_box.border_title = "Bot"
-        self._top_titles()
+        self.show_key_hints()
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
         # the chart is drawn in the theme's colours (#102): draw it again when the theme changes
         self.app.theme_changed_signal.subscribe(self, self._theme_changed)
@@ -641,9 +646,24 @@ class DashboardPane(Vertical):
         self.call_after_refresh(self._show_status)
 
     def _top_titles(self) -> None:
-        keys = "s service"   # the service's actions (#83)
-        self.query_one("#dash-bot").border_subtitle = keys + ("  ·  v: activity" if self.has_class("-narrow") else "")
-        self.query_one("#dash-activity").border_title = "Activity" + ("  (v: bot)" if self.has_class("-narrow") else "")
+        narrow = self.has_class("-narrow")
+        if self.app.letter_keys:
+            keys = "s service"   # the service's actions (#83)
+            self.query_one("#dash-bot").border_subtitle = keys + ("  ·  v: activity" if narrow else "")
+            self.query_one("#dash-activity").border_title = "Activity" + ("  (v: bot)" if narrow else "")
+        else:   # the letter keys are off (#140): their actions are in the command palette
+            self.query_one("#dash-bot").border_subtitle = "ctrl+p: Service" + (", Flip" if narrow else "")
+            self.query_one("#dash-activity").border_title = "Activity" + ("  (ctrl+p: Flip)" if narrow else "")
+
+    NAV: ClassVar[dict[str, str]] = {"feed": "Live feed", "chats": "Chats", "alerts": "Alerts & health"}
+
+    def show_key_hints(self) -> None:
+        """The keys named in this tab: the letter ones only while they work (#140)."""
+        for view, label in self.NAV.items():
+            # Content, not markup: as markup, "[f]" was taken for a style and never drawn
+            self.query_one(f"#nav-{view}", Button).label = Content(label + self.app.key_hint(f" [{view[0]}]"))
+        self._top_titles()
+        self._show_status()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "flip_top":
@@ -867,7 +887,7 @@ class DashboardPane(Vertical):
             if snap.alerts:
                 a = snap.alerts[0]
                 row("Alerts", (f"{len(snap.alerts)}", ""),
-                    (f"  last {fmt_age(now - a.at)} ago, press a", "dim"))
+                    (f"  last {fmt_age(now - a.at)} ago{self.app.key_hint(', press a')}", "dim"))
         out.rstrip()
         return out
 
