@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 FILE_NAME = "screen.json"
+LETTER_KEYS_BROKEN = ("this Textual version doesn't let the screen turn the letter keys off, so they stay "
+                      "on (the screen expects Textual 8.2)")
 
 
 @dataclass
@@ -28,7 +30,9 @@ def load(config: Path) -> Prefs:
     or holds something else (a value that isn't true or false keeps its default)."""
     try:
         raw = json.loads(path_for(config).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    # every way reading and parsing can fail, whatever the file holds: unreadable, not UTF-8 or not
+    # JSON (ValueError), nested too deep (RecursionError), too big (MemoryError)
+    except (OSError, ValueError, RecursionError, MemoryError):
         return Prefs()
     prefs = Prefs()
     if isinstance(raw, dict) and isinstance(raw.get("letter_keys"), bool):
@@ -41,5 +45,9 @@ def save(config: Path, prefs: Prefs) -> None:
     leaves half a file). Raises OSError when it can't be written."""
     path = path_for(config)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(asdict(prefs), indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(asdict(prefs), indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)   # never leave the half-made file behind
+        raise

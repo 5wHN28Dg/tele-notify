@@ -39,7 +39,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from .. import bot
+from .. import bot, prefs
 from ..clean import clean
 from ..rtl import visual
 from ..store import BUSY, is_busy, unreadable_note
@@ -631,10 +631,6 @@ class SettingsPane(Vertical):
         t.add_column("kind", key="kind")
         t.add_column("status", key="status")
         t.add_column("id", key="id")
-        box = self.query_one("#screen-letter-keys", Checkbox)
-        with self.prevent(Checkbox.Changed):
-            box.value = self.app.letter_keys  # type: ignore[attr-defined]
-        box.label = "on" if box.value else "off"
         self.show_key_hints()
         # config.json only: the chat list is read when the tab is shown (it may be locked)
         self.call_after_refresh(self.load, chats=False)
@@ -974,6 +970,14 @@ class SettingsPane(Vertical):
     def show_key_hints(self) -> None:
         """The keys named on this tab's buttons and lines: the letter ones only while they work (#140)."""
         on = self.app.letter_keys  # type: ignore[attr-defined]
+        box = self.query_one("#screen-letter-keys", Checkbox)
+        with self.prevent(Checkbox.Changed):   # the palette's command turns them on or off too
+            box.value = on
+        box.label = "on" if on else "off"
+        if not self.app.letter_keys_work:  # type: ignore[attr-defined]
+            box.disabled = True
+            self.query_one("#screen-note", Static).update(
+                Content.styled(f"warning: {prefs.LETTER_KEYS_BROKEN}", "$tn-warning"))
         self.query_one("#test", Button).label = "Test t" if on else "Test"
         self.query_one("#dedupe", Button).label = "Remove duplicates D" if on else "Remove duplicates"
         for editor in self.query(KeywordEditor):

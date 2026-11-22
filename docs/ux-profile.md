@@ -213,6 +213,7 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 | Log in again after Telegram logs the account out (recovering access) | owner | rare | `telenotify login` works and the service restarts | the screen says what to run (#65); within 3 min |
 | Log out and uninstall (leaving) | owner, other installers | rare | the session, service, programs and data are gone, or kept where the README says | not documented yet (#72) |
 | Change the Arabic display mode or the theme (the accessibility settings) | owner | rare | the mode is in effect | 1 flag or variable for Arabic; theme through the command palette, not saved (#73) |
+| Turn the letter keys off or on (#140; the single-letter shortcuts, WCAG 2.1.4) | owner | rare | the letter keys do nothing and aren't named (or work again); the header says "letter keys off (ctrl+p)" while off; kept for next time in `screen.json` | K 2 + typing (`ctrl+p`, "letter", `enter`), from any tab; M 3 (`4` or a click on Settings, the Screen tab, the switch) |
 
 First run budget: 3 screens before the first main task (default).
 
@@ -234,6 +235,8 @@ table adds the intent order and the rest of the product. One row per layout; gro
 | Settings tab, Chats (chat table) | watch, unwatch, pick the target | as the tab table | Save | `ctrl+s` / click Save | 1 the chat table with watched marks; 2 the target chat; 3 saved or unsaved |
 | Settings tab, Chats (chat-ID editor, before the bot has saved a chat list) | type chat IDs and the target | the ID list, the target field, Save | Save | `ctrl+s` / click Save | 1 why it's IDs; 2 the fields; 3 saved or unsaved |
 | Settings tab, Bot | dry run, alerts, paths | the options and the saved marker | Save | `ctrl+s` / click Save | 1 the options; 2 saved or unsaved |
+| Settings tab, Screen (#140) | the screen's own settings: turn the single-letter shortcuts off or on | the "letter keys" switch with on / off in words, its help, and a note if it can't be kept or can't act | the switch (applies at once, not with Save) | `space` or `enter` on the switch / click it; also `ctrl+p` "Letter keys: turn off / on" anywhere | 1 the switch and its state; 2 what stays working; 3 where it is kept |
+| Dashboard Service menu (`ServiceMenu`, `s`) | pick start, stop or restart | the title with the service, the three items, the keys line; why they're off while one runs | the picked item opens the confirm | arrows + `enter` / click; `esc` closes | 1 the service; 2 the items; 3 why off |
 | Dashboard confirm dialog (`ConfirmScreen`: start, stop, restart the service) | a decision now | the question, the service and mode, both buttons | the safe choice has focus | `esc` / `n` cancels | 1 the question; 2 the consequence; 3 the buttons |
 | Settings confirm dialogs (`ConfirmModal`: revert unsaved changes; use the file's value after an outside change; save and restart; quit with unsaved changes) | a decision now | the question, the object, both buttons | the safe choice has focus | `esc` / `n` cancels | 1 the question; 2 the consequence; 3 the buttons |
 | Dates form (`RangeScreen`, custom period) | type a range | both fields, the error, the buttons | Show | enter / click | 1 the fields; 2 the error; 3 the buttons |

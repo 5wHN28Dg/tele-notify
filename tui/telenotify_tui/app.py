@@ -62,8 +62,11 @@ class MainScreen(Screen):
     def _binding_chain(self) -> list[tuple[DOMNode, BindingsMap]]:
         return self.key_chain(letters=getattr(self.app, "letter_keys", True))
 
+    chains_built = 0   # how many times key_chain ran: the start-up self-check reads it
+
     def key_chain(self, letters: bool) -> list[tuple[DOMNode, BindingsMap]]:
         """The keys in effect, nearest the focus first; `letters`: keep the single-letter ones."""
+        self.chains_built += 1
         chain = super()._binding_chain
         shown = self.tab_from_bar()
         if shown is not None:
@@ -180,9 +183,16 @@ class TeleNotifyApp(App):
         self._down: dict[int, tuple[Widget, float]] = {}   # per mouse button
         self.paths = paths
         self.letter_keys = prefs.load(paths.config).letter_keys   # the screen's own setting (#140)
+        self.letter_keys_work = True   # False: the start-up self-check found the switch can't act
+        self._letters_off_said = False   # "Letter keys are off" said once since they were turned off
         self.refresh_seconds = refresh_seconds
         self._reload_queued: float | None = None   # when a reload was queued (monotonic), until it runs
-        self.sub_title = ("DRY RUN · " if paths.dry_run else "") + visual(paths.config)
+        self._show_sub_title()
+
+    def _show_sub_title(self) -> None:
+        """The header's line: first a mark while the letter keys are off (#140), so it is never cut."""
+        off = "letter keys off (ctrl+p) · " if not self.letter_keys else ""
+        self.sub_title = off + ("DRY RUN · " if self.paths.dry_run else "") + visual(self.paths.config)
 
     def get_default_screen(self) -> Screen:
         return MainScreen(id="_default")
@@ -190,18 +200,26 @@ class TeleNotifyApp(App):
     def set_letter_keys(self, on: bool) -> str:
         """Turn the single-letter shortcuts on or off (#140), at once and for next time.
         Returns "" when saved, else why it wasn't (the switch still holds for this run)."""
+        if not self.letter_keys_work:
+            return prefs.LETTER_KEYS_BROKEN
         self.letter_keys = on
+        self._letters_off_said = False
         problem = ""
         try:
             prefs.save(self.paths.config, prefs.Prefs(letter_keys=on))
         except OSError as e:
             problem = f"not saved for next time: {e.strerror or e}"
+        self._show_sub_title()
+        self._refresh_key_hints()
+        return problem
+
+    def _refresh_key_hints(self) -> None:
+        """The footer, and the keys each tab names on screen, after the letter keys changed."""
         self.refresh_bindings()
         for pane in self.query("TabPane > *"):
             show = getattr(pane, "show_key_hints", None)
             if callable(show):
                 show()
-        return problem
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         """Textual's commands, then every single-letter key in effect where the focus is (on the
@@ -210,6 +228,11 @@ class TeleNotifyApp(App):
         yield from super().get_system_commands(screen)
         if not isinstance(screen, MainScreen):
             return
+        if self.letter_keys_work:
+            turn = "off" if self.letter_keys else "on"
+            yield SystemCommand(f"Letter keys: turn {turn}",
+                                "single-letter shortcuts such as s, p and y (also in Settings, Screen)",
+                                partial(self.set_letter_keys, not self.letter_keys))
         tab = (self.query_one(TabbedContent).active or "").capitalize()   # the tab's name, without its marks
         seen: set[str] = set()
         for node in screen.key_nodes():
@@ -261,9 +284,38 @@ class TeleNotifyApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._check_letter_keys()
         if self.refresh_seconds > 0:
             self.set_interval(self.refresh_seconds, self._tick)
         self._reload_soon()
+
+    def _check_letter_keys(self) -> None:
+        """The letter-keys switch and the tab bar's keys rest on MainScreen extending a private part
+        of Textual. Check that Textual still reads the keys through it; if not, say so (log, and on
+        the Settings Screen tab) and leave the letter keys on, rather than a switch that does nothing."""
+        screen = self.screen
+        before = getattr(screen, "chains_built", 0)
+        _ = screen.active_bindings   # what the footer and the key handling both read
+        if isinstance(screen, MainScreen) and screen.chains_built > before:
+            return
+        self.letter_keys_work = False
+        self.letter_keys = True
+        self._show_sub_title()
+        self._refresh_key_hints()   # the Settings switch greys and says why
+        self.log.warning(prefs.LETTER_KEYS_BROKEN)
+
+    def on_key(self, event: events.Key) -> None:
+        """A letter key that would be a shortcut, pressed while the letter keys are off: say once
+        why nothing happened and how to turn them on (#140); boxes that type never get here with
+        it in the chain, since a box that takes the letter removes it from the chain first."""
+        if self.letter_keys or self._letters_off_said or not is_letter_key(event.key):
+            return
+        screen = self.screen
+        if not isinstance(screen, MainScreen):
+            return
+        if any(event.key in bindings.key_to_bindings for _n, bindings in screen.key_chain(letters=True)):
+            self._letters_off_said = True
+            self.notify("Letter keys are off: ctrl+p → Letter keys: turn on", timeout=6)
 
     def _active_pane(self):
         tabs = self.query_one(TabbedContent)
@@ -325,6 +377,9 @@ class TeleNotifyApp(App):
         tabs.active = tab   # TabActivated reloads it: once, not twice (each read of a locked file takes time)
 
     def on_tabbed_content_tab_activated(self, _event: TabbedContent.TabActivated) -> None:
+        # the keys in effect depend on the shown tab while the tab bar has the focus (MainScreen),
+        # and Textual redraws the footer only when the focus moves: redraw it here (run 8)
+        self.refresh_bindings()
         self._reload_soon()
 
     def _reload_soon(self) -> None:

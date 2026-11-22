@@ -1291,6 +1291,7 @@ async def test_the_bot_problems_are_never_cut_at_80x24(paths, cfg_path):
             assert box.show_vertical_scrollbar and box.allow_focus()
             box.focus()
             await pilot.press("end")
+            await pilot.wait_for_scheduled_animations()   # "end" scrolls with an animation: a loaded run drew it half-way
             await pilot.pause()
         assert "libtdjson.so doesn't exist" in " ".join(drawn(app).split())   # whole, wherever it wraps
 
@@ -1310,6 +1311,7 @@ async def test_many_problems_scroll_with_a_scrollbar(paths, cfg_path):
         assert box.show_vertical_scrollbar and box.allow_focus()
         box.focus()
         await pilot.press("end")
+        await pilot.wait_for_scheduled_animations()   # "end" scrolls with an animation: a loaded run drew it half-way
         await pilot.pause()
         assert "libtdjson.so doesn't exist" in " ".join(drawn(app).split())   # whole, wherever it wraps
 

@@ -664,6 +664,8 @@ class DashboardPane(Vertical):
             self.query_one(f"#nav-{view}", Button).label = Content(label + self.app.key_hint(f" [{view[0]}]"))
         self._top_titles()
         self._show_status()
+        if self.snapshot is not None:
+            self._show_activity(self.snapshot)   # the Chats view's line names p and d
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "flip_top":
@@ -906,7 +908,8 @@ class DashboardPane(Vertical):
         by = {"day": "by day", "week": "by week", "month": "by month", "year": "by year"}[ps.bucket]
         box.border_subtitle = f"{ps.period.describe()} · {by}"
         whole = "   whole days, today included" if ps.period.kind in ("7d", "30d") else ""
-        note.update(Text(f"{ps.period.describe()}{whole}   (p: change the period, d: pick dates)", style="dim"))
+        keys = "p: change the period, d: pick dates" if self.app.letter_keys else "ctrl+p: Period, Dates"
+        note.update(Text(f"{ps.period.describe()}{whole}   ({keys})", style="dim"))
         tot = ps.totals
         t = Text()
         m = SERIES_MARK
