@@ -504,12 +504,13 @@ suite "state":
       if stage == "locked":
         let other = open(old, "", "", "")
         other.exec(sql"ALTER TABLE processed ADD COLUMN posted_at INTEGER")
-        other.exec(sql"PRAGMA user_version = 1")
+        other.exec(sql("PRAGMA user_version = " & $schemaVersion))
         other.close()
     defer: upgradeTestHook = nil
     let up = openState(old)
     up.close()
     check not fileExists(backupPath(old, 0))     # nothing to copy any more: it's upgraded
+    check not fileExists(backupPath(old, 1))
     check "caught_up" in columnsOf(old)
 
   test "a copy not yet confirmed on the disk says so, and the file is not upgraded (#74)":
@@ -534,6 +535,173 @@ suite "state":
       check false
     except IOError as e:
       check "left as it was" in e.msg and "Free some disk space" in e.msg
+
+  test "a version-1 state file gets the undo window, with a copy kept first (#62)":
+    let old = dir / "v1.sqlite3"
+    let raw = open(old, "", "", "")
+    raw.exec(sql"""CREATE TABLE processed (chat_id INTEGER, msg_id INTEGER, chat_title TEXT,
+      verdict TEXT, role TEXT, reasons TEXT, action TEXT, at INTEGER, text_hash TEXT, raw_text TEXT,
+      album_id INTEGER, posted_at INTEGER, caught_up INTEGER, PRIMARY KEY (chat_id, msg_id))""")
+    raw.exec(sql"""CREATE TABLE reviews (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER,
+      chat_title TEXT, text TEXT, reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending',
+      at INTEGER, decided_at INTEGER, album_ids TEXT, UNIQUE (chat_id, msg_id))""")
+    raw.exec(sql"""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at,
+      decided_at) VALUES (-1, 5, 'Jobs', 'approved before the window', 'x', 'r', '', 'to_send', 100, 110)""")
+    raw.exec(sql"PRAGMA user_version = 1")
+    raw.close()
+    let up = openState(old)
+    check fileExists(backupPath(old, 1))
+    # approved before the upgrade: no window, sent as before
+    let due = up.dueReviews()
+    check due.len == 1 and due[0].msgId == 5 and due[0].sendAfter == 0
+    up.close()
+    check versionOf(old) == $schemaVersion and schemaVersion == 2
+    let db = open(old, "", "", "")
+    defer: db.close()
+    var cols: seq[string]
+    for r in db.fastRows(sql"PRAGMA table_info(reviews)"): cols.add r[1]
+    check "send_after" in cols
+    let bak = open(backupPath(old, 1), "", "", "")
+    defer: bak.close()
+    check bak.getValue(sql"PRAGMA user_version") == "1"
+    check bak.getValue(sql"SELECT status FROM reviews WHERE msg_id = 5") == "to_send"
+
+  test "an approved post is due only after its window; the bot claims it once (#62)":
+    st.addReview(-700, 1, "Win", "post", "x", "r", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -700: id = r.id
+    let t0 = getTime().toUnix
+    check st.decideReview(id, "to_send")
+    var sendAfter = 0'i64
+    for r in st.approvedReviews():
+      if r.id == id: sendAfter = r.sendAfter
+    check sendAfter in t0 + undoWindowSeconds .. t0 + undoWindowSeconds + 2
+    proc dueIds(at: int64): seq[int64] =
+      for r in st.dueReviews(at): result.add r.id
+    check id notin dueIds(sendAfter - 1)
+    check not st.claimReview(id, sendAfter - 1)       # the window is still open
+    check id in dueIds(sendAfter)
+    check st.claimReview(id, sendAfter)
+    check not st.claimReview(id, sendAfter)           # once
+    check id notin dueIds(sendAfter + 100)
+    check st.decideReview(id, "sent", fromStatus = "sending")
+
+  test "sending and sent keep the time you decided, so History doesn't reorder (review run 1)":
+    st.addReview(-702, 1, "Order", "post", "x", "r", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -702: id = r.id
+    check st.decideReview(id, "to_send")
+    let raw = open(dir / "state.sqlite3", "", "", "")
+    defer: raw.close()
+    raw.exec(sql"UPDATE reviews SET decided_at = 1000 WHERE id = ?", id)
+    check st.claimReview(id, getTime().toUnix + undoWindowSeconds + 1)
+    check st.decideReview(id, "sent", fromStatus = "sending")
+    check raw.getValue(sql"SELECT decided_at FROM reviews WHERE id = ?", id) == "1000"
+
+  test "a post the bot was sending when it stopped goes back to the queue, not out again":
+    st.addReview(-701, 1, "Crash", "post", "x", "r", "")
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -701: id = r.id
+    check st.decideReview(id, "to_send")
+    check st.claimReview(id, getTime().toUnix + undoWindowSeconds + 1)
+    check st.reopenInterruptedSends() == 1
+    var back = false
+    for r in st.pendingReviews():
+      if r.id == id: back = "stopped while sending" in r.reasons
+    check back
+    check st.reopenInterruptedSends() == 0
+
+  test "an interrupted send already in published is marked sent, not reopened (review run 2)":
+    st.addReview(-703, 1, "Lost mark", "post", "x", "r", "")
+    st.addReview(-703, 2, "Lost send", "post 2", "x", "r", "")
+    var ids: seq[int64]
+    for r in st.pendingReviews():
+      if r.chatId == -703:
+        check st.decideReview(r.id, "to_send")
+        check st.claimReview(r.id, getTime().toUnix + undoWindowSeconds + 1)
+        ids.add r.id
+    st.addPublished(-703, 1, "post")              # #1 reached the channel; its "sent" mark was lost
+    check st.reopenInterruptedSends() == 1        # only #2 goes back
+    var pending: seq[int64]
+    for r in st.pendingReviews():
+      if r.chatId == -703: pending.add r.msgId
+    check pending == @[2'i64]
+    let raw = open(dir / "state.sqlite3", "", "", "")
+    defer: raw.close()
+    check raw.getValue(sql"SELECT status FROM reviews WHERE chat_id = -703 AND msg_id = 1") == "sent"
+
+  test "botSending: a fresh heartbeat, no clean stop, and the worker started (review run 2)":
+    let t = getTime().toUnix
+    st.setMeta("last_alive", $(t - 30))
+    st.setMeta("connection", "ready")
+    st.setMeta("sending_ready", "1")
+    check st.botSending(t)
+    check not st.botSending(t + 100)              # heartbeat 130 s old
+    st.setMeta("sending_ready", "0")              # still reading its backlog
+    check not st.botSending(t)
+    st.setMeta("sending_ready", "1")
+    st.setMeta("connection", "stopped")
+    check not st.botSending(t)
+
+  test "botRunning without sending_ready: running, not sending yet (review run 3, F5)":
+    let t = getTime().toUnix
+    st.setMeta("last_alive", $(t - 10))
+    st.setMeta("connection", "starting")
+    st.setMeta("sending_ready", "0")
+    check st.botRunning(t) and not st.botSending(t)
+    st.setMeta("sending_ready", "1")
+    check st.botRunning(t) and st.botSending(t)
+    st.setMeta("connection", "stopped")
+    check not st.botRunning(t) and not st.botSending(t)
+
+  test "a run's start is written all or nothing, and clears a crashed bot's sending_ready (review run 4)":
+    st.setMeta("connection", "ready")
+    st.setMeta("sending_ready", "1")                # a bot that crashed a moment ago
+    st.markRunStarting(false, at = 1234)
+    check st.getMeta("mode") == "real" and st.getMeta("started_at") == "1234"
+    check st.getMeta("connection") == "starting" and st.getMeta("sending_ready") == "0"
+    # the fourth write fails: none of them stays
+    st.setMeta("connection", "ready")
+    st.setMeta("sending_ready", "1")
+    let raw = open(dir / "state.sqlite3", "", "", "")
+    raw.exec(sql"""CREATE TRIGGER fail_ready BEFORE INSERT ON meta WHEN NEW.key = 'sending_ready'
+                   BEGIN SELECT RAISE(ABORT, 'disk full'); END""")
+    expect DbError:
+      st.markRunStarting(true, at = 5678)
+    raw.exec(sql"DROP TRIGGER fail_ready")
+    raw.close()
+    check st.getMeta("mode") == "real" and st.getMeta("started_at") == "1234"
+    check st.getMeta("connection") == "ready" and st.getMeta("sending_ready") == "1"
+
+  test "a log-out is not a running bot; it needs a new login (review run 4, R4-2)":
+    let t = getTime().toUnix
+    st.setMeta("last_alive", $(t - 10))
+    st.setMeta("sending_ready", "0")
+    st.setMeta("login_needed", "")
+    st.setMeta("connection", "logged out")
+    check not st.botRunning(t) and not st.botSending(t) and st.loggedOut()
+    st.setMeta("connection", "ready")
+    check st.botRunning(t) and not st.loggedOut()
+
+  test "a post interrupted twice gets one counted reason; an empty reasons field gets no '; ' (review run 6)":
+    st.addReview(-704, 1, "Twice", "post", "", "r", "")      # no reasons at all
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -704: id = r.id
+    proc interruptOnce() =
+      check st.decideReview(id, "to_send")
+      check st.claimReview(id, getTime().toUnix + undoWindowSeconds + 1)
+      check st.reopenInterruptedSends() == 1
+    proc reasonsOf(): string =
+      for r in st.pendingReviews():
+        if r.id == id: return r.reasons
+    interruptOnce()
+    check reasonsOf() == interruptedSend
+    interruptOnce()
+    check reasonsOf() == interruptedSend & " (2 tries)"
 
 st.close()
 removeDir(dir)

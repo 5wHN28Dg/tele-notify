@@ -1320,3 +1320,25 @@ def test_secrets_the_bot_cant_read_are_missing(api_id, api_hash):
     as api_id, is missing to it, so the screen doesn't call it set (review run 4)."""
     assert "missing" in sd.secret_status({"api_id": api_id, "api_hash": api_hash}).values()
     assert sd.secret_status({"api_id": 4242, "api_hash": "abc"}) == {"api_id": "set", "api_hash": "set"}
+
+
+async def test_the_undo_window_is_a_field_in_settings_bot(paths, cfg_path, services):
+    """#62, review run 1 (A21): undo_seconds can be changed, with its help text."""
+    app = TeleNotifyApp(replace(paths, config=cfg_path), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_settings(pilot)
+        pane.query_one("#sections", TabbedContent).active = "sec-bot"
+        await pilot.pause()
+        box = pane.query_one("#f-undo_seconds", Input)
+        assert box.placeholder == "30"
+        assert "0 = at once" in str(pane.query_one("#help-undo_seconds", Static).render())
+        box.focus()
+        box.value = "601"
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert "600 seconds or fewer" in str(pane.query_one("#problems-bot", Static).render())
+        box.value = "0"
+        await pilot.pause()
+        await save(pilot)
+    assert json.loads(cfg_path.read_text(encoding="utf-8"))["undo_seconds"] == 0

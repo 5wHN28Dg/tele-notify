@@ -54,6 +54,8 @@ FORM_HELP = {
     "dry_run": "Judge and record, but forward nothing",
     "alerts": "Tell you about problems (downtime, lost access, log-out) in Saved Messages and through your notification bot",
     "alert_after_minutes": "Downtime shorter than this is only logged (default 10)",
+    "undo_seconds": "Seconds an approved review post waits before it is sent, so u can undo it "
+                    "(default 30; 0 = at once; at most 600)",
     "notify_published": "Each published post, through your notification bot (default on)",
     "notify_review": "Each post sent to review, through your notification bot (default on)",
     "data_dir": "TDLib login and state (default ~/.local/share/tele-notify); empty = default",

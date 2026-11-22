@@ -96,12 +96,76 @@ proc statePath*(cfg: Config, dryRun: bool): string =
   ## doesn't skip messages the dry run had already judged.
   cfg.dataDir / (if dryRun: "state-dryrun.sqlite3" else: "state.sqlite3")
 
-proc cmdLogin*(cfg: Config) {.async.} =
-  let s = await connect(cfg, interactive = true)
+proc recordLoggedIn*(cfg: Config) =
+  ## After `telenotify login`: the state files (real and dry run, which share
+  ## the login) no longer say a login is needed, and a "logged out" connection
+  ## becomes "stopped" (the bot isn't running yet), so the terminal screen
+  ## and `review` stop saying "not logged in" before the bot starts. Never raises.
+  for dry in [false, true]:
+    let path = cfg.dataDir / (if dry: "state-dryrun.sqlite3" else: "state.sqlite3")
+    if not fileExists(path): continue
+    try:
+      let st = openState(path)
+      defer: st.close()
+      st.setMeta("login_needed", "")
+      if st.getMeta("connection") == "logged out": st.setMeta("connection", "stopped")
+    except CatchableError as e:
+      echo "   could not update ", path, ": ", e.msg.splitLines.join(" ")
+
+proc cmdLoginWith*(cfg: Config, connecting: Future[Session]) {.async.} =
+  ## `login` once connected (tests pass a fake TDLib's session).
+  let s = await connecting
+  recordLoggedIn(cfg)
   echo "Logged in. Your chats (use these IDs for \"chats\" and \"target_chat\"):"
   for (id, title) in await s.listChats():
     echo &"{id:>16}  {title}"
   await s.client.close()
+
+proc cmdLogin*(cfg: Config) {.async.} =
+  await cmdLoginWith(cfg, connect(cfg, interactive = true))
+
+type RunStart* = ref object
+  ## How a run says it starts (review runs 4 and 5): once TDLib holds its lock
+  ## (`locked`), again after the login if that first write failed (a busy
+  ## state file), and what it was when the login ended without a session.
+  st: State
+  dry*: bool
+  locked*, recorded*: bool
+
+proc newRunStart*(st: State, dry: bool): RunStart = RunStart(st: st, dry: dry)
+
+proc record(r: RunStart) =
+  try:
+    r.st.markRunStarting(r.dry)
+    r.recorded = true
+  except CatchableError as e: echo "   could not update the state database: ", e.msg.splitLines.join(" ")
+
+proc onLocked*(r: RunStart): proc () {.closure, gcsafe.} =
+  ## For `connect`: TDLib holds its lock, so this run is the file's bot.
+  result = proc () {.closure, gcsafe.} =
+    {.cast(gcsafe).}:
+      r.locked = true
+      r.record()
+
+proc afterLogin*(r: RunStart) =
+  ## Logged in: if saying "starting" failed at the lock, try once more.
+  if r.locked and not r.recorded: r.record()
+
+proc loginFailed*(r: RunStart, e: ref Exception, tell: proc (text: string) {.closure, gcsafe.} = nil) =
+  ## The login ended without a session, after this run took TDLib's lock (it
+  ## said "starting"): say what it is now. An end that `isLogOut` counts as a
+  ## log-out (LoggingOut, and Closed: TDLib closing by itself, which a running
+  ## bot already treats as a lost login) needs a new login; Closing, or a
+  ## login step it can't do, means it stopped. One meaning for both, so the
+  ## alert and the screen agree. (A missing login is recorded by
+  ## `loggedInOrRecord`.) Never raises.
+  if not r.locked or e of NotLoggedIn: return
+  try:
+    if e of LoginEnded and (ref LoginEnded)(e).state.isLogOut:
+      recordLoginNeeded(r.st, (ref LoginEnded)(e).state, r.dry, tell)
+    else:
+      r.st.setMeta("connection", "stopped")
+  except CatchableError: discard
 
 proc saveChatList(s: Session, st: State, cfg: Config, titles: Table[int64, string],
                   l: Listener) {.async.} =
@@ -142,15 +206,6 @@ proc cmdAlert*(cfg: Config, text: string, fetcher: Fetcher = nil) {.async.} =
 proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   let dry = dryRunFlag or cfg.dryRun
   let st = openState(statePath(cfg, dry))
-  # for the terminal screen, at once: the last run's "stopped" / "ready" mustn't
-  # show while this one logs in (connection updates before the listener exists
-  # are dropped)
-  try:
-    st.setMeta("mode", if dry: "dry-run" else: "real")
-    st.setMeta("started_at", $getTime().toUnix)
-    st.setMeta("connection", "starting")
-  except CatchableError as e:
-    echo "   could not update the state database: ", e.msg
   var l: Listener
   var sessionLost = ""
   # Your own bot (#122), before connecting: the log-out alert goes through it,
@@ -171,7 +226,13 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   var titles = initTable[int64, string]()
   let watched = cfg.chats
   var accessReady = false   # the start-up check reads the current state first
-  let connecting = loggedInOrRecord(st, dry, connect(cfg, interactive = false, onUpdate =
+  # Once TDLib holds its lock (before the login is checked, which can take a
+  # while): this run is the bot now, so it says "starting" and "not sending
+  # yet" at once, all four keys together. A second run that TDLib refuses
+  # never gets here, so it can't overwrite the running bot's state (review
+  # runs 3 and 4).
+  let start = newRunStart(st, dry)
+  let connecting = loggedInOrRecord(st, dry, connect(cfg, interactive = false, onLocked = start.onLocked, onUpdate =
     proc (u: JsonNode) {.closure, gcsafe.} =
       if l == nil: return
       case u{"@type"}.getStr
@@ -224,10 +285,22 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
       else: discard), tellAlert)
   yield connecting
   if connecting.failed:
+    start.loginFailed(connecting.readError, tellAlert)
     # not logged in: give the alert a moment to reach your bot
     if outbox != nil: await outbox.flush(stopFlushMs)
     raise connecting.readError
   let s = connecting.read
+  start.afterLogin()
+  # Telegram's session is open, so this run holds TDLib's lock on the data
+  # folder: no other bot on this state file is running. A post the last run
+  # was sending when it stopped goes back to the queue, for you to check,
+  # never out twice.
+  try:
+    let reopened = st.reopenInterruptedSends()
+    if reopened > 0:
+      echo &"   {reopened} approved post(s) were being sent when the bot stopped: back in the review queue"
+  except CatchableError as e:
+    echo "   could not check for interrupted sends: ", e.msg
   l = newListener(cfg, tdTelegram(s.client), st, defaultFetcher(), defaultOcr(), dry)
   l.stop = stopRequested
   l.outbox = outbox     # your private chat with your bot has your user id
@@ -273,16 +346,70 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     raise newException(ValueError, "the Telegram session ended (" & sessionLost &
       "). If you logged out, run `telenotify login` again")
 
-proc cmdReview*(cfg: Config, dryRun: bool) =
-  ## Go through the review queue: approve each post or discard it. This
-  ## only records your decision, so it works while the bot runs; the
-  ## running bot sends what you approved within a few seconds.
+proc stdinIsTerminal(): bool = isatty(getFileHandle(stdin)) == 1
+
+type Answers* = enum
+  ## How `telenotify review` answers its y/N questions.
+  askEach,   ## ask on the terminal (the default)
+  allYes,    ## --yes
+  allNo      ## --no
+
+const notATerminal* = "telenotify review asks before it sends or discards a post, and its input isn't " &
+  "a terminal, so nothing was done. Run it in a terminal, or add --yes to answer yes to every " &
+  "question (or --no to answer no)."
+
+proc answersFlag*(flag, value: string, current: Answers): Answers =
+  ## --yes / --no: no value allowed (`--yes:no` must not mean yes), and not both.
+  if value != "":
+    raise newException(ValueError, &"--{flag} takes no value (found --{flag}:{value})")
+  result = if flag == "yes": allYes else: allNo
+  if current != askEach and current != result:
+    raise newException(ValueError, "--yes and --no can't be used together")
+
+proc askYesNo*(question: string, input: File = stdin, answers = askEach): bool =
+  ## Ask `question`: true only for y / yes. With --yes or --no the answer
+  ## is given, and printed after the question.
+  stdout.write question & " [y/N] "
+  stdout.flushFile
+  case answers
+  of allYes:
+    echo "yes (--yes)"
+    return true
+  of allNo:
+    echo "no (--no)"
+    return false
+  of askEach: discard
+  var answer = ""
+  if not input.readLine(answer): return false
+  answer.strip.toLowerAscii in ["y", "yes"]
+
+proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEach,
+                interactive = stdinIsTerminal()): int =
+  ## Go through the review queue: approve each post or discard it, each
+  ## after a y/N question (#62). This only records your decision, so it
+  ## works while the bot runs; the running bot sends what you approved once
+  ## its undo window (config.json's `undo_seconds`) is over. Until then, and
+  ## for anything discarded, the terminal screen's Review tab (History, u)
+  ## can take it back. Returns the exit code: 2, with nothing done, when the
+  ## input isn't a terminal and neither --yes nor --no was given.
+  if not interactive and answers == askEach:
+    stderr.writeLine notATerminal
+    return 2
   let st = openState(statePath(cfg, dryRun))
   defer: st.close()
+  if dryRun:
+    echo "DRY RUN: this is the dry run's review queue. Nothing you approve here is ever sent " &
+         "to the channel; your choices are only recorded."
   let pending = st.pendingReviews()
   if pending.len == 0:
     echo "Nothing to review."
-    return
+    return 0
+  let botUp = st.botSending()
+  let botStarting = not botUp and st.botRunning()
+  let needsLogin = not botUp and not botStarting and st.loggedOut()
+  let sendQuestion = if dryRun: "Record as approved (dry run, nothing is sent)?"
+                     else: "Send this post to the channel?"
+  let discardQuestion = if dryRun: "Record as discarded (dry run)?" else: "Discard?"
   var approved = 0
   var quitting = false
   for i, r in pending:
@@ -298,19 +425,37 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
     echo "─".repeat(70)
     var done = false
     while not done:
-      stdout.write "[s]end to channel  [d]iscard  [n]ext  [q]uit > "
+      stdout.write(if dryRun: "[s] record as approved  [d]iscard  [n]ext  [q]uit > "
+                   else: "[s]end to channel  [d]iscard  [n]ext  [q]uit > ")
       stdout.flushFile
       var answer = ""
-      if not stdin.readLine(answer): answer = "q"    # end of input
+      if not input.readLine(answer): answer = "q"    # end of input
       case answer.strip.toLowerAscii
       of "s":
-        if st.decideReview(r.id, "to_send"):
+        if not askYesNo(sendQuestion, input, answers):
+          echo "not decided; still waiting for review"
+        elif st.decideReview(r.id, "to_send", undoSeconds = cfg.undoSeconds):
           inc approved
-          echo "approved ✅"
+          if dryRun: echo "approved ✅ (dry run: recorded, never sent)"
+          elif needsLogin:
+            echo "approved ✅ (not logged in to Telegram: it is sent once you run telenotify login and " &
+                 "start the bot; until then the terminal screen's Review tab can undo it)"
+          elif botStarting:
+            echo "approved ✅ (the bot is starting: it is sent once it has caught up; until then the " &
+                 "terminal screen's Review tab can undo it)"
+          elif not botUp:
+            echo "approved ✅ (the bot isn't running: it is sent when the bot starts; until then the " &
+                 "terminal screen's Review tab can undo it)"
+          elif cfg.undoSeconds > 0:
+            echo &"approved ✅ (sent in {cfg.undoSeconds} s; until then the terminal screen's Review tab can undo it)"
+          else: echo "approved ✅ (undo_seconds is 0: the bot sends it right away)"
         else: echo "already decided elsewhere"
         done = true
       of "d":
-        echo (if st.decideReview(r.id, "discarded"): "discarded" else: "already decided elsewhere")
+        if not askYesNo(discardQuestion, input, answers):
+          echo "not decided; still waiting for review"
+        else:
+          echo (if st.decideReview(r.id, "discarded"): "discarded" else: "already decided elsewhere")
         done = true
       of "n", "": done = true
       of "q":
@@ -320,7 +465,13 @@ proc cmdReview*(cfg: Config, dryRun: bool) =
     if quitting: break
   if approved > 0:
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
-    else: echo &"\n{approved} approved: the running bot sends them within seconds (or when it next starts)."
+    elif needsLogin: echo &"\n{approved} approved: not logged in to Telegram, so they are sent once you " &
+                          "run telenotify login and start the bot."
+    elif botStarting: echo &"\n{approved} approved: the bot is starting, so they are sent once it has caught up."
+    elif not botUp: echo &"\n{approved} approved: the bot isn't running, so they are sent when it starts."
+    elif cfg.undoSeconds > 0: echo &"\n{approved} approved: the bot sends them after {cfg.undoSeconds} s."
+    else: echo &"\n{approved} approved: the bot sends them right away."
+  0
 
 proc fitColumn*(s: string, width: int): string =
   ## `s` cut or padded to `width` characters (not bytes: channel names are
