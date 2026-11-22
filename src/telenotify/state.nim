@@ -341,37 +341,61 @@ proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"):
 
 const couldNotSend = "could not send: "
 
+const maxTries = 1_000_000   ## a stored count above this isn't trusted (a new part is added)
+
+proc problemText*(msg: string): string =
+  ## A failure's message as one reason part: its first line (a debug build
+  ## adds an async traceback), with "; " (which separates the parts)
+  ## written ", ".
+  let lines = msg.strip.splitLines
+  (if lines.len > 0: lines[0].strip else: "").replace("; ", ", ")
+
+proc splitCount(part: string): tuple[base: string, tries: int] =
+  ## "<base> (N tries)" / "<base> (N try)" -> (base, N); else (part, -1).
+  ## A count outside 0 .. maxTries isn't one.
+  result = (part, -1)
+  if not part.endsWith(")"): return
+  let open = part.rfind(" (")
+  if open < 0: return
+  let words = part[open + 2 ..< part.len - 1].split(' ')
+  if words.len != 2 or words[1] notin ["try", "tries"]: return
+  try:
+    let n = parseInt(words[0])
+    if n in 0 .. maxTries: result = (part[0 ..< open], n)
+  except ValueError: discard
+
 proc withProblem*(reasons, problem: string): string =
-  ## `reasons` ("a; b; …") after a failed send for `problem`. A reason it
-  ## already has as a whole part isn't added again; that part counts the
-  ## tries instead: "could not send: <problem> (2 tries)", or, for a reason
-  ## the live post was held back for (#80), "<problem> (1 try)". A part is
-  ## whole when it starts the text or follows "; ", and ends the text or
-  ## comes before "; " (a reason may itself contain "; "), so "no link"
-  ## doesn't match "no link to the post".
-  let problem = problem.strip
-  if problem != "":
-    for (wanted, held) in [(couldNotSend & problem, false), (problem, true)]:
-      var at = reasons.find(wanted)
-      while at >= 0:
-        let stop = at + wanted.len
-        if at == 0 or reasons[0 ..< at].endsWith("; "):
-          # what follows: nothing, "; ", or a count " (N try)" / " (N tries)" then that
-          var rest = reasons[stop .. ^1]
-          var tries = -1
-          if rest.startsWith(" ("):
-            let close = rest.find(')')
-            let words = (if close > 0: rest[2 ..< close] else: "").split(' ')
-            if words.len == 2 and words[1] in ["try", "tries"]:
-              try:
-                tries = parseInt(words[0])
-                rest = rest[close + 1 .. ^1]
-              except ValueError: discard
-          if rest == "" or rest.startsWith("; "):
-            let n = (if tries >= 0: tries elif held: 0 else: 1) + 1
-            return reasons[0 ..< at] & wanted & " (" & $n & (if n == 1: " try)" else: " tries)") & rest
-        at = reasons.find(wanted, at + 1)
-  (if reasons == "": "" else: reasons & "; ") & couldNotSend & problem
+  ## `reasons` ("a; b; …") after a failed send for `problem`. If it already
+  ## has that reason as a whole part (`problem` itself, held back live
+  ## (#80) or written by the filter; "error: <problem>" from the live post;
+  ## or "could not send: <problem>" from an earlier try), it isn't added
+  ## again: the first such part gets the number of tries instead, "(2
+  ## tries)", counting each of those parts (one without a count is one
+  ## try; copies an older bot wrote are folded into it). Otherwise
+  ## "could not send: <problem>" is added. The problem is `problemText`:
+  ## one line, with no "; " in it, so it's always compared as a whole.
+  let p = problemText(problem)
+  var parts = if reasons == "": newSeq[string]() else: reasons.split("; ")
+  if p != "":
+    let forms = [p, "error: " & p, couldNotSend & p]
+    var first = -1
+    var total = 0
+    var kept: seq[string]
+    for part in parts:
+      let (base, tries) = splitCount(part)
+      if base in forms:
+        total += (if tries >= 0: tries else: 1)
+        if first < 0:
+          first = kept.len
+          kept.add base
+        continue                      # a copy: folded into the first
+      kept.add part
+    if first >= 0:
+      let n = min(total + 1, maxTries)
+      kept[first] = kept[first] & " (" & $n & (if n == 1: " try)" else: " tries)")
+      return kept.join("; ")
+  parts.add couldNotSend & p
+  parts.join("; ")
 
 proc reopenReview*(s: State, id: int64, problem: string) =
   ## Sending failed: put it back in the queue, with the reason

@@ -114,12 +114,15 @@ proc cardLike(digits: seq[Rune]): bool =
   digits.len in 13..19 and luhn(digits)
 
 proc defuseDigits(rs: seq[Rune]): seq[Rune] =
-  ## A run of digits TDLib would mark as a bank card number (`cardLike`),
-  ## also with any runs of spaces and dashes between groups ("4111 - 1111
-  ## -- 1111 1111"), is kept, each number as it was, but its separators get
-  ## a "·" ("4111 · 1111 · …"); a single group is split in fours by "·".
-  ## Any other number (a year, a phone number, separate numbers) is left
-  ## as it is.
+  ## A run of digits (groups with any runs of spaces and dashes between
+  ## them, "4111 - 1111 -- 1111 1111") in which any stretch of whole groups
+  ## is something TDLib could mark as a bank card number (`cardLike`) gets
+  ## a "·" at each separator ("4111 · 1111 · …"), and
+  ## any group of 13 or more digits in it is split in fours by "·" too, so
+  ## no part of it is a card on its own ("19 · 4222·2222·2222·2"): no
+  ## sequence of 13 or more digits is left in it. Shorter groups keep their
+  ## digits. Any other number (a year, a phone number, separate numbers)
+  ## is left as it is.
   var i = 0
   while i < rs.len:
     if not rs[i].isDigit:
@@ -142,10 +145,22 @@ proc defuseDigits(rs: seq[Rune]): seq[Rune] =
         seps.add rs[j ..< k]
         j = k
       else: break
-    var all: seq[Rune]
-    for g in groups: all.add g
-    # TDLib takes no card from a run right after "+" (a phone number: "+964 …")
-    let card = all.cardLike and not (i > 0 and rs[i - 1] == Rune('+'))
+    # TDLib may read a card from any stretch of whole groups in the run, not
+    # only from all of it ("364159542275026201 6" holds one): the run is
+    # defused when any such stretch is card-like. One that starts the run
+    # right after "+" isn't (TDLib takes no card there: "+964 …", a phone).
+    let afterPlus = i > 0 and rs[i - 1] == Rune('+')
+    var card = false
+    for a in 0 ..< groups.len:
+      if card: break
+      if a == 0 and afterPlus: continue
+      var stretch: seq[Rune]
+      for b in a ..< groups.len:
+        stretch.add groups[b]
+        if stretch.len > 19: break
+        if stretch.cardLike:
+          card = true
+          break
     for n, g in groups:
       if n > 0:
         if card:
@@ -153,7 +168,8 @@ proc defuseDigits(rs: seq[Rune]): seq[Rune] =
           if Rune(' ') in sep: result.add @[Rune(' '), middleDot, Rune(' ')]
           else: result.add middleDot
         else: result.add seps[n - 1]
-      if card and groups.len == 1:
+      if card and g.len >= 13:
+        # a group this long could be a card on its own once the run is split
         for k, d in g:
           if k > 0 and k mod 4 == 0: result.add middleDot
           result.add d

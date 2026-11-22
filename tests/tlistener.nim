@@ -311,7 +311,7 @@ suite "listener":
       waitFor l.sendApproved()                           # bounces back each time
     let r = st.pendingReviews()
     check f.texts.len == 0 and r.len == 1 and r[0].reasons.count(privateHeldBack) == 1
-    check r[0].reasons.endsWith(privateHeldBack & " (3 tries)")    # a trace of the tries
+    check r[0].reasons.endsWith(privateHeldBack & " (4 tries)")    # held live, then 3 approvals
     var said = 0
     for x in lines:
       if "not posted:" in x:

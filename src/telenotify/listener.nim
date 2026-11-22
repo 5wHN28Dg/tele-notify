@@ -265,9 +265,9 @@ type HeldBack* = object of CatchableError
 
 const privateHeldBack* = "not posted: it isn't from a public channel (it's a private or members-only " &
   "chat, or a group), and only public channels' posts are republished in your public channel (#80). " &
-  "Review's Send can't post it; if its admins agree, post it yourself in Telegram. Otherwise discard it."
+  "Review's Send can't post it. If its admins agree, post it yourself in Telegram. Otherwise discard it."
 const emptyHeldBack* = "not posted: the summary would say nothing (no role and no way to apply found " &
-  "in the post). Review's Send can't post it; if you want it in your channel, post it yourself in " &
+  "in the post). Review's Send can't post it. If you want it in your channel, post it yourself in " &
   "Telegram. Otherwise discard it."
 
 proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
@@ -412,7 +412,7 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
         except HeldBack as e:
           # not an error: you decide by hand (#135). Its own words only: a
           # debug build adds an async traceback to the message
-          reasons.add "; " & e.msg.splitLines()[0]
+          reasons.add "; " & problemText(e.msg)
           if postLink == "":
             try: postLink = await l.tg.link(m.chatId, m.id)
             except CatchableError: discard
@@ -429,7 +429,8 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
       action = "rejected"
   except CatchableError as e:
     # Don't lose the post: put it in the review queue with the error.
-    reasons.add "; error: " & e.msg
+    # one line without "; ", so an approval failing the same way counts it (#142)
+    reasons.add "; error: " & problemText(e.msg)
     action = "error, queued for review"
     l.say &"   ✗ {m.chatTitle} #{m.id}: {e.msg}"
     try:
@@ -659,7 +660,7 @@ proc sendApproved*(l: Listener) {.async.} =
       # held back again (#80): its own words only, so a reason it already
       # has (from the live post, or an earlier approval) isn't added again
       l.say &"   reviewed {r.chatTitle} #{r.msgId}: {e.msg.splitLines()[0]}"
-      try: l.state.reopenReview(r.id, e.msg.splitLines()[0])
+      try: l.state.reopenReview(r.id, e.msg)
       except CatchableError: discard
     except CatchableError as e:
       l.say &"   could not send reviewed {r.chatTitle} #{r.msgId}: {e.msg}"

@@ -79,13 +79,33 @@ suite "state":
     var r = "role x"
     for _ in 1 .. 3: r = withProblem(r, "FLOOD_WAIT")
     check r == "role x; could not send: FLOOD_WAIT (3 tries)"
-    # a reason the live post was held back for counts its tries, never repeated
+    # a reason the live post was held back for (or the filter wrote) is its first try
     r = "role x; not posted: it isn't from a public channel"
     r = withProblem(r, "not posted: it isn't from a public channel")
-    check r == "role x; not posted: it isn't from a public channel (1 try)"
-    r = withProblem(r, "not posted: it isn't from a public channel")
     check r == "role x; not posted: it isn't from a public channel (2 tries)"
+    r = withProblem(r, "not posted: it isn't from a public channel")
+    check r == "role x; not posted: it isn't from a public channel (3 tries)"
     check withProblem("", "no link") == "could not send: no link"
+
+  test "a live error isn't repeated on approval; old copies fold; counts stay sane (#142 run 5)":
+    # the live post's "error: <problem>" is the same reason
+    let e = "no link to the post from Telegram (no link), so no summary was sent. Approve it again to retry"
+    check withProblem("role x; error: " & e, e) == "role x; error: " & e & " (2 tries)"
+    # copies an older bot wrote are folded into one, with their tries summed
+    check withProblem("no level; could not send: FLOOD_WAIT; could not send: FLOOD_WAIT", "FLOOD_WAIT") ==
+      "no level; could not send: FLOOD_WAIT (3 tries)"
+    check withProblem("x; could not send: A (2 tries); error: A; could not send: A", "A") ==
+      "x; could not send: A (5 tries)"
+    # a problem never holds "; ": it can't match a piece of another reason
+    check withProblem("could not send: a, b", "a; b") == "could not send: a, b (2 tries)"
+    check problemText("a; b\nAsync traceback: …") == "a, b"
+    # a count that can't be right isn't trusted: a new part instead, never an overflow
+    check withProblem("could not send: A (9223372036854775807 tries)", "A") ==
+      "could not send: A (9223372036854775807 tries); could not send: A"
+    check withProblem("could not send: A (1000001 tries)", "A") ==
+      "could not send: A (1000001 tries); could not send: A"
+    check withProblem("could not send: A (-3 tries)", "A") == "could not send: A (-3 tries); could not send: A"
+    check withProblem("could not send: A (1000000 tries)", "A") == "could not send: A (1000000 tries)"
     # through the database
     st.addReview(-300, 1, "Jobs", "text", "no level", "role", "")
     var id = 0'i64

@@ -121,7 +121,9 @@ suite "summary text":
               "07700000000 07711111111", "1 2 3 4 5 6 7 8 9 1 2 3 4", "4111111111111112",
               "411111111111111111111", "2026"]:
       check plainField(t, 100) == t
-    check plainField("4111 1111 1111 1111 2222", 50) == "4111 1111 1111 1111 2222"   # 20 digits: no card
+    # 20 digits in all, but a stretch of whole groups is a card: defused, to be safe (TDLib may read
+    # a card from part of a run, as in "364159542275026201 6")
+    check plainField("4111 1111 1111 1111 2222", 50) == "4111 · 1111 · 1111 · 1111 · 2222"
 
   test "a time keeps its colon, with a word joiner: no timestamp, and it reads in order in Arabic":
     check plainField("Shift 10:30 2026", 50) == "Shift 10:\u206030 2026"
@@ -138,6 +140,21 @@ suite "summary text":
     check plainField("192.168.1.1", 50) == "192." & wj & "168." & wj & "1." & wj & "1"
     check plainField("1.1.1.1/x", 50) == "1." & wj & "1." & wj & "1." & wj & "1/ x"
     check plainField("a/b x.y", 50) == "a/ b x. y"                      # elsewhere: the space rule
+
+  test "in a defused run, a long group is split too, so no card is left in it (#142 run 5)":
+    check plainField("Jobs 4222222222222 6", 50) == "Jobs 4222·2222·2222·2 · 6"
+    check plainField("Jobs 19 4222222222222", 50) == "Jobs 19 · 4222·2222·2222·2"
+    check plainField("Jobs 19-4222222222222", 50) == "Jobs 19·4222·2222·2222·2"
+    check plainField("x +-57 3645259740867", 50) == "x +-57 · 3645·2597·4086·7"
+    # a card in part of a longer run (the whole run isn't one): TDLib finds it there
+    check plainField("364159542275026201 6", 50) == "3641·5954·2275·0262·01 · 6"
+    check plainField("123456 4111111111111111", 50) == "123456 · 4111·1111·1111·1111"   # a later stretch
+    for t in reviewTitles:                     # no 13 digits in a row are left after a defused run
+      var run = 0
+      for r in plainField(t, 1000).runes:
+        if int(r) < 128 and char(int(r)) in Digits: inc run
+        else: run = 0
+        check run < 13 or "+" in t or plainField(t, 1000) == t
 
   test "a number right after \"+\" is never taken as a card, checksum or not (#142 run 4)":
     check plainField("+964 770 000 0002", 50) == "+964 770 000 0002"     # passes the checksum
