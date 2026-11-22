@@ -688,11 +688,11 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         """Why an approval made here is pending again, in plain words: the reason part the bot
         added or counted again since (state.nim withProblem keeps one part per reason, with a
         count, and its parts never hold "; ")."""
-        stopped = "the bot stopped while sending it"   # added as it is each time (reopenInterruptedSends)
-        if now.reasons.count(stopped) > decided.reasons.count(stopped):
-            return f"#{decided.msg_id}: the bot stopped while sending; check the channel before sending it again"
         before = set(decided.reasons.split("; "))
         for part in reversed([p.strip() for p in now.reasons.split("; ") if p.strip() not in before]):
+            # reopenInterruptedSends, through withProblem: the second time it is counted, "(2 tries)"
+            if part.startswith("the bot stopped while sending it"):
+                return f"#{decided.msg_id}: the bot stopped while sending; check the channel before sending it again"
             held = HELD_PART.match(part)
             if held:
                 why = held.group(1)

@@ -131,8 +131,10 @@ suite "session":
     start.afterLogin()                         # done already: not written again
     check st.getMeta("started_at") == "1"
 
+  # Closed is a log-out, as `isLogOut` (the running bot's alert) says: one meaning (review run 6)
   for (ending, connection) in [("authorizationStateLoggingOut", "logged out"),
-                               ("authorizationStateClosed", "stopped"),
+                               ("authorizationStateClosed", "logged out"),
+                               ("authorizationStateClosing", "stopped"),
                                ("authorizationStateWaitEmailAddress", "stopped")]:
     test "the login ends in " & ending & " after the lock: it says " & connection & ", not starting (review run 5)":
       let st = openState(getTempDir() / "tn-session-end" / "state.sqlite3")
@@ -150,6 +152,7 @@ suite "session":
       start.loginFailed(fut.readError)
       check st.getMeta("connection") == connection
       check (st.getMeta("login_needed") == "1") == (connection == "logged out")
+      check (connection == "logged out") == ending.isLogOut
 
   test "a second bot that TDLib refuses (its lock) never says it starts (review run 4)":
     var calls = new seq[string]

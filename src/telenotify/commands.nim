@@ -153,13 +153,16 @@ proc afterLogin*(r: RunStart) =
 
 proc loginFailed*(r: RunStart, e: ref Exception, tell: proc (text: string) {.closure, gcsafe.} = nil) =
   ## The login ended without a session, after this run took TDLib's lock (it
-  ## said "starting"): say what it is now. A log-out in progress needs a new
-  ## login; TDLib closing, or a login step it can't do, means it stopped. (A
-  ## missing login is recorded by `loggedInOrRecord`.) Never raises.
+  ## said "starting"): say what it is now. An end that `isLogOut` counts as a
+  ## log-out (LoggingOut, and Closed: TDLib closing by itself, which a running
+  ## bot already treats as a lost login) needs a new login; Closing, or a
+  ## login step it can't do, means it stopped. One meaning for both, so the
+  ## alert and the screen agree. (A missing login is recorded by
+  ## `loggedInOrRecord`.) Never raises.
   if not r.locked or e of NotLoggedIn: return
   try:
-    if e of LoginEnded and (ref LoginEnded)(e).state == "authorizationStateLoggingOut":
-      recordLoginNeeded(r.st, "authorizationStateLoggingOut", r.dry, tell)
+    if e of LoginEnded and (ref LoginEnded)(e).state.isLogOut:
+      recordLoginNeeded(r.st, (ref LoginEnded)(e).state, r.dry, tell)
     else:
       r.st.setMeta("connection", "stopped")
   except CatchableError: discard

@@ -1366,15 +1366,19 @@ async def test_142s_counted_and_held_back_reasons_in_plain_words(paths, state, b
 
 
 async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
-    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    """Not timed by the wall clock (a loaded CI runner took longer than the wait itself): the
+    wait is long, and its end is made by moving when the post appeared back past it."""
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 30.0)
     add_pending(state, 7, "second post", now - 10)
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(140, 40)) as pilot:
         await open_review(pilot)
-        await pilot.pause(0.5)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 60                                        # the first post has been read
+        pane._settled()
+        await pilot.pause()
         assert not app.query_one("#btn-send", Button).disabled
         await pilot.press("n")                                      # a new post appears
-        pane = app.query_one(ReviewPane)
         assert app.query_one("#btn-send", Button).disabled          # greyed while s / d wait
         for action in ("send", "keep", "discard"):                  # the footer's keys too
             assert pane.check_action(action, ()) is None
@@ -1382,10 +1386,34 @@ async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monke
         assert "only just appeared" in note(app) and status_of(state, 7) == "pending"
         assert app.query_one("#btn-discard", Button).disabled
         assert not app.query_one("#btn-next", Button).disabled
-        await pilot.pause(0.6)
+        pane._shown_at -= 60                                        # the wait is over
+        pane._settled()                                             # what its timer does then
+        await pilot.pause()
         assert not app.query_one("#btn-send", Button).disabled
         assert not app.query_one("#btn-discard", Button).disabled
         assert pane.check_action("send", ()) is True
+
+
+async def test_a_post_interrupted_twice_is_said_both_times(paths, state):
+    """Review run 6: the second interruption is counted ("(2 tries)"), still said as one."""
+    stopped = "the bot stopped while sending it: check the channel before sending it again"
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        for reasons in (f"x; {stopped}", f"x; {stopped} (2 tries)"):
+            await pilot.press("s")
+            await pilot.pause()
+            set_row(state, 11, status="sending")
+            pane._countdown()
+            set_row(state, 11, status="pending", send_after=None, reasons=reasons)
+            pane._countdown()
+            await pilot.pause()
+            assert note(app) == "#11: the bot stopped while sending; check the channel before sending it again"
+            pane.reload()
+            await pilot.pause()
+            app.query_one("#review-list", OptionList).highlighted = 0
+            await pilot.pause()
 
 
 # ------------------------------------------------- odd data in the state file

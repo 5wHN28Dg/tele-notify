@@ -503,6 +503,9 @@ proc reopenReview*(s: State, id: int64, problem: string, heldBack = false) =
   s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL, reasons = ?
                    WHERE id = ? AND status IN ('to_send', 'sending')""", withProblem(row[0], problem, heldBack), id)
 
+const interruptedSend* = "the bot stopped while sending it: check the channel before sending it again"
+  ## The reason a post gets when the bot stopped while sending it.
+
 proc reopenInterruptedSends*(s: State): int =
   ## At start: posts the bot was sending when it stopped (a crash, a power
   ## cut). One already in `published` did reach the channel (only the "sent"
@@ -511,10 +514,15 @@ proc reopenInterruptedSends*(s: State): int =
   ## second time. Returns how many went back to the queue.
   s.db.exec(sql"""UPDATE reviews SET status = 'sent' WHERE status = 'sending' AND EXISTS
                    (SELECT 1 FROM published p WHERE p.chat_id = reviews.chat_id AND p.msg_id = reviews.msg_id)""")
-  s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL,
-                   reasons = reasons || '; the bot stopped while sending it: check the channel before sending it again'
-                   WHERE status = 'sending'""")
-  parseInt(s.db.getValue(sql"SELECT changes()"))
+  # through withProblem, as a held-back reason: a post interrupted twice gets
+  # one counted part, and an empty reasons field doesn't start with "; "
+  var rows: seq[(string, string)]
+  for r in s.db.fastRows(sql"SELECT id, COALESCE(reasons, '') FROM reviews WHERE status = 'sending'"):
+    rows.add (r[0], r[1])
+  for (id, reasons) in rows:
+    s.db.exec(sql"""UPDATE reviews SET status = 'pending', send_after = NULL, reasons = ?
+                     WHERE id = ? AND status = 'sending'""", withProblem(reasons, interruptedSend, heldBack = true), id)
+    result += parseInt(s.db.getValue(sql"SELECT changes()"))
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)

@@ -686,5 +686,22 @@ suite "state":
     st.setMeta("connection", "ready")
     check st.botRunning(t) and not st.loggedOut()
 
+  test "a post interrupted twice gets one counted reason; an empty reasons field gets no '; ' (review run 6)":
+    st.addReview(-704, 1, "Twice", "post", "", "r", "")      # no reasons at all
+    var id = 0'i64
+    for r in st.pendingReviews():
+      if r.chatId == -704: id = r.id
+    proc interruptOnce() =
+      check st.decideReview(id, "to_send")
+      check st.claimReview(id, getTime().toUnix + undoWindowSeconds + 1)
+      check st.reopenInterruptedSends() == 1
+    proc reasonsOf(): string =
+      for r in st.pendingReviews():
+        if r.id == id: return r.reasons
+    interruptOnce()
+    check reasonsOf() == interruptedSend
+    interruptOnce()
+    check reasonsOf() == interruptedSend & " (2 tries)"
+
 st.close()
 removeDir(dir)
