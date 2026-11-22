@@ -218,7 +218,8 @@ class TeleNotifyApp(App):
         try:
             prefs.save(self.paths.config, prefs.Prefs(letter_keys=on))
         except OSError as e:
-            problem = f"not saved for next time: {e.strerror or e}"
+            problem = prefs.not_saved(self.paths.config, on, e)
+            self.log.warning(f"letter keys: {prefs.path_for(self.paths.config)} not written: {e!r}")
         self.letter_keys_problem = problem   # the Settings Screen tab shows it, however it was switched
         self._show_sub_title()
         self._refresh_key_hints()
@@ -261,7 +262,7 @@ class TeleNotifyApp(App):
         """The palette's "Letter keys: turn …": as the switch, and a note if it wasn't kept (run 9)."""
         problem = self.set_letter_keys(on)
         if problem:
-            self.notify(f"Letter keys: {problem}", severity="warning", timeout=8)
+            self.notify(problem, severity="warning", timeout=10)
 
     def key_hint(self, text: str) -> str:
         """`text` (a key named on screen, such as " [f]") while the letter keys are on, else ""."""

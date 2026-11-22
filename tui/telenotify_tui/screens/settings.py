@@ -978,7 +978,7 @@ class SettingsPane(Vertical):
             note.update(Content.styled(f"warning: {prefs.LETTER_KEYS_BROKEN}", "$tn-warning"))
         else:   # however it was switched (here or the palette): say if it wasn't kept (run 9)
             problem = self.app.letter_keys_problem  # type: ignore[attr-defined]
-            note.update(Content.styled(f"warning: {problem}", "$tn-warning") if problem else "")
+            note.update(Content.styled(visual(f"warning: {problem}"), "$tn-warning") if problem else "")
         self.query_one("#test", Button).label = "Test t" if on else "Test"
         self.query_one("#dedupe", Button).label = "Remove duplicates D" if on else "Remove duplicates"
         for editor in self.query(KeywordEditor):

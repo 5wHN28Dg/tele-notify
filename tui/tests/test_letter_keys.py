@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import errno
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 from textual.screen import Screen
@@ -363,7 +365,7 @@ async def test_a_screen_file_that_cant_be_written_is_said(paths):
         await settle(app, pilot)
         await letters_off(app, pilot)
         assert not app.letter_keys
-        assert "not saved for next time" in str(app.query_one("#screen-note").render())
+        assert "couldn't save that to" in str(app.query_one("#screen-note").render())
 
 
 async def test_the_dashboards_view_buttons_name_their_keys_while_they_work(paths):
@@ -730,9 +732,9 @@ async def test_the_palettes_switch_says_when_it_isnt_kept(paths):
         command.callback()
         await pilot.pause()
         assert not app.letter_keys
-        said = [n.message for n in app._notifications if "not saved for next time" in n.message]
-        assert said and said[0].startswith("Letter keys: not saved for next time")
-        assert "not saved for next time" in str(app.query_one("#screen-note").render())
+        said = [n.message for n in app._notifications if "couldn't save that to" in n.message]
+        assert said and said[0].startswith("Letter keys: off for now, but couldn't save that to")
+        assert "couldn't save that to" in str(app.query_one("#screen-note").render())
 
 
 async def test_a_fifo_named_screen_json_doesnt_stop_the_screen(paths):
@@ -763,3 +765,72 @@ def test_an_oversized_screen_file_means_the_defaults(paths):
 def test_a_link_to_a_device_means_the_defaults(paths):
     prefs.path_for(paths.config).symlink_to("/dev/zero")
     assert prefs.load(paths.config).letter_keys is True
+
+
+# ------------------------------------------------------------------ run 10
+
+@pytest.mark.parametrize("code, why, todo", [
+    (errno.EISDIR, "it's a folder", "Remove or rename that folder"),
+    (errno.EACCES, "no permission to write there", "Give yourself write permission there"),
+    (errno.EROFS, "the disk is read-only", "Make that disk writable"),
+    (errno.ENOENT, "its folder is missing", "Create that folder"),
+    (errno.EIO, "the system refused", "Check that file"),
+])
+def test_the_not_saved_message_is_in_plain_words(paths, code, why, todo):
+    """Run 10: "not saved for next time: Is a directory" didn't say what it meant or what to do. The
+    message says both, names the file, and leaves the system's own words out (they're logged)."""
+    error = OSError(code, os.strerror(code))
+    for on in (False, True):
+        said = prefs.not_saved(paths.config, on, error)
+        assert said == (f"Letter keys: {'on' if on else 'off'} for now, but couldn't save that to "
+                        f"{prefs.shown_path(prefs.path_for(paths.config))} ({why}). {todo} to keep this setting.")
+        assert os.strerror(code) not in said
+
+
+def test_the_file_is_named_from_the_home_folder(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = tmp_path / ".config" / "tele-notify" / "config.json"
+    assert prefs.shown_path(prefs.path_for(config)) == "~/.config/tele-notify/screen.json"
+    assert prefs.shown_path(Path("/etc/screen.json")) == "/etc/screen.json"
+
+
+async def test_the_not_saved_message_is_whole_at_80x24(paths, monkeypatch):
+    """Where it's shown, the Settings Screen note and the palette's toast, the whole message is drawn
+    at 80 x 24, with a folder where screen.json goes."""
+    monkeypatch.setenv("HOME", str(paths.config.parent))   # the file shows as ~/screen.json, as at home
+    prefs.path_for(paths.config).mkdir()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24), notifications=True) as pilot:   # toasts drawn
+        await settle(app, pilot)
+        message = ("Letter keys: off for now, but couldn't save that to ~/screen.json (it's a folder). "
+                   "Remove or rename that folder to keep this setting.")
+        command = next(c for c in app.get_system_commands(app.screen) if c.title == "Letter keys: turn off")
+        command.callback()
+        await settle(app, pilot)
+        toast = app.screen.query_one("Toast")
+        lines = parse(app.export_screenshot(), 80, 24).text()
+        inside = [lines[y][toast.region.x:toast.region.right] for y in range(toast.region.y, toast.region.bottom)]
+        flat = " ".join(" ".join(line.strip(" ▌▐▊▎") for line in inside).split())
+        assert message in flat, inside
+        app.clear_notifications()
+        await pilot.press("4")
+        await settle(app, pilot)
+        app.query_one(SettingsPane).query_one("#sections", TabbedContent).active = "sec-screen"
+        await pilot.pause()
+        assert str(app.query_one("#screen-note").render()) == f"warning: {message}"
+        flat = " ".join(" ".join(parse(app.export_screenshot(), 80, 24).text()).split())
+        assert f"warning: {message}" in flat, flat
+
+
+def open_fds() -> int:
+    return len(os.listdir("/proc/self/fd"))
+
+
+def test_reading_a_folder_named_screen_json_leaks_no_descriptor(paths):
+    """Run 10: os.fdopen refused the folder before the `with` owned the descriptor, so each read
+    leaked one."""
+    prefs.path_for(paths.config).mkdir()
+    before = open_fds()
+    for _ in range(20):
+        assert prefs.load(paths.config).letter_keys is True
+    assert open_fds() == before
