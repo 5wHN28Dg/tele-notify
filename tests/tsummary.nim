@@ -32,7 +32,7 @@ proc balanced(s: string): bool =
 # found by the review of #142 (run 1) and by probing TDLib 1.8.70.
 const hostile = ["@admin", "@_admin_x", "#hot", "#_hot", "#·hot", "#\u200Chot", "$BTC", "/start",
                  "/_start", "tg://-x", "ton://x", "tonsite://x.ton", "x.ton", "evil.example",
-                 "مرحبا.com", "mail@evil.example", "hr＠evil.example", "https://evil.example/x",
+                 "مرحبا.example.com", "mail@evil.example", "hr＠evil.example", "https://evil.example/x",
                  "t.me/examplejobs", "10:30", "1 0:30", "4111111111111111", "4111 1111 1111 1111",
                  "4111-1111-1111-1111", "x 5500000000000004 y", "1.2.3.4"]
 
@@ -101,22 +101,35 @@ suite "summary text":
     let field = plainField(title, 10_000)             # the whole title, not cut
     check field.splitLines.len == 1
     for line in s.splitLines[0 ..< ^1] & @[field]:
-      for bad in @hostile & @["://", "\u202E", "\u2066", "\u200B", "\u2028"]:
+      for bad in ["://", "\u202E", "\u2066", "\u200B", "\u2028"]:
         check bad notin line
+    for t in hostile:                                 # each one changed (joined, digit runs merge
+      check plainField(t, 1000) != t                  # into a longer run that isn't card-like)
     for kept in ["<b>Jobs</ b>", "**free**", "[win]", "@ admin", "# hot", "$ BTC", "/ start"]:
       check kept in field                             # shown, not interpreted (no entities, no parse mode)
 
   test "card-like digit runs are defused; other numbers keep their digits, and are never joined":
     check plainField("4111111111111111", 50) == "4111·1111·1111·1111"
     check plainField("4111 1111 1111 1111", 50) == "4111 · 1111 · 1111 · 1111"
+    check plainField("4222222222222", 50) == "4222·2222·2222·2"                   # 13 digits, checksum ok
     check plainField("4111-1111-1111-1111", 50) == "4111·1111·1111·1111"
     check plainField("4111 -- 1111\t-\t1111-\n1111", 50) == "4111 · 1111 · 1111 · 1111"
     check plainField("x 5500000000000004 y", 50) == "x 5500·0000·0000·0004 y"
-    check plainField("call 07700000000 or 0770 000 0000", 50) == "call 07700000000 or 0770 000 0000"
-    check plainField("Jobs 2026 0770 000 0000", 50) == "Jobs 2026 · 0770 · 000 · 0000"
-    check plainField("Shift 10:30 2026", 50) == "Shift 10\u223630 2026"     # looks like 10:30
-    check plainField("Shift 10:30 2026 1111 2222", 50) == "Shift 10\u223630 · 2026 · 1111 · 2222"
-    check plainField("2026", 10) == "2026" and plainField("1:02:03", 10) == "1\u223602\u223603"
+    # not card-like (TDLib finds no card in them either): left exactly as written
+    for t in ["call 07700000000 or 0770 000 0000", "Jobs 2026 0770 000 0000", "+964 770 000 0000",
+              "07700000000 07711111111", "1 2 3 4 5 6 7 8 9 1 2 3 4", "4111111111111112",
+              "411111111111111111111", "2026"]:
+      check plainField(t, 100) == t
+    check plainField("4111 1111 1111 1111 2222", 50) == "4111 1111 1111 1111 2222"   # 20 digits: no card
+
+  test "a time keeps its colon, with a word joiner: no timestamp, and it reads in order in Arabic":
+    check plainField("Shift 10:30 2026", 50) == "Shift 10:\u206030 2026"
+    check plainField("1:02:03", 10) == "1:\u206002:\u206003"
+    check plainField("دوام 10:30-12:30", 50) == "دوام 10:\u206030-12:\u206030"
+    check plainField("Location:Basra", 50) == "Location: Basra"        # other colons get a space
+    # a long number cut short can't become card-like
+    let cutShort = plainField("x".repeat(40) & " 42222222222220000000", 55)
+    check cutShort == "x".repeat(40) & " 4222·2222·2222·2…"
 
   test "TDLib's own entity finder sees nothing in a value (when TELENOTIFY_TEST_TDLIB names libtdjson)":
     let path = getEnv("TELENOTIFY_TEST_TDLIB")
@@ -126,6 +139,11 @@ suite "summary text":
     else:
       let lib = loadTdLib(path)
       check lib.entities("@admin #hot 4111 1111 1111 1111").len == 3      # the finder works
+      # the fixture's made-up addresses are still a link and an e-mail to TDLib
+      check lib.entities("xn--80ak6aa92e.example.com") == @["textEntityTypeUrl: xn--80ak6aa92e.example.com"]
+      check lib.entities("mailto:a@example.com") == @["textEntityTypeEmailAddress: a@example.com"]
+      check lib.entities("x 4222222222222 y").len == 1 and lib.entities("x 4222222222223 y").len == 0
+      check lib.entities("10:30").len == 1 and lib.entities(plainField("10:30", 10)).len == 0
       let own = @["textEntityTypeUrl: https://t.me/examplejobs/7"]
       for t in @hostile & reviewTitles:
         check lib.entities(plainField(t, 1000)).len == 0

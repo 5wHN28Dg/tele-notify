@@ -58,8 +58,8 @@
 ##   source chat won't let a matched post be forwarded (#80). "link": the
 ##   old "match: <role>" and "post link: <link>" lines. "summary": a short
 ##   plain-text summary of the post in Arabic, marked automatic (role,
-##   place, how to apply, the public chat's name and the post's link), for
-##   public chats only; a blocked post from a private or members-only chat
+##   place, how to apply, the public channel's name and the post's link), for
+##   public channels only; a blocked post from anywhere else (a group, a private chat)
 ##   goes to the review queue instead (see summary.nim). Anything else is
 ##   refused.
 ##

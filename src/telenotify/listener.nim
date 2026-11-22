@@ -263,22 +263,25 @@ type HeldBack* = object of CatchableError
   ## Not sent on purpose, not a failure: the post goes to the review queue
   ## with this reason, for you to decide by hand.
 
-const privateHeldBack* = "not summarized: it's from a private or members-only chat, whose posts " &
-  "aren't republished in your public channel (#80). Send it by hand if its admins agree, or discard it"
-const emptyHeldBack* = "not summarized: the summary would say nothing (no role and no way to apply " &
-  "found in the post). Send it by hand, or discard it"
+const privateHeldBack* = "not posted: it isn't from a public channel (it's a private or members-only " &
+  "chat, or a group), and only public channels' posts are republished in your public channel (#80). " &
+  "Review's Send can't post it; if its admins agree, post it yourself in Telegram. Otherwise discard it."
+const emptyHeldBack* = "not posted: the summary would say nothing (no role and no way to apply found " &
+  "in the post). Review's Send can't post it; if you want it in your channel, post it yourself in " &
+  "Telegram. Otherwise discard it."
 
 proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
                   known: string): Future[tuple[text, link: string]] {.async.} =
   ## What goes to your channel when Telegram won't forward a matched post
   ## (#80). `forward_fallback` "link": the old "match: <role>" + "post link:
   ## <link>" text (`known`, the post's link if already known, else asked).
-  ## "summary": the bot's own summary (summary.nim), only for a public chat,
-  ## named, with the post's link asked again (a stored one may be from
+  ## "summary": the bot's own summary (summary.nim), only for a public
+  ## channel (not a group: the owner's T0 answer was "public channels
+  ## only"), named, with the post's link asked again (a stored one may be from
   ## before the chat went public, or from an old username). Owner's
   ## decision, #135, 2026-11-22: "Public only; private to review".
-  ## Raises HeldBack (to review, plainly) for a private or members-only
-  ## chat and for a summary that would say nothing; other errors (the
+  ## Raises HeldBack (to review, plainly) for anything but a public channel
+  ## and for a summary that would say nothing; other errors (the
   ## access check or the link failed) go to review as errors. Returns the
   ## text and the link (for your notification).
   var link = known
@@ -293,7 +296,7 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
   var name = title
   try:
     let a = await l.tg.chatAccess(chat)
-    public = a.public
+    public = a.public and a.channel
     if name == "": name = a.title
   except CatchableError as e:
     # calling a public chat private would send it to review for the wrong reason
@@ -407,8 +410,9 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
           action = if l.cfg.forwardFallback == ffSummary: "summarized" else: "linked"
           l.state.addPublished(m.chatId, m.id, g.text)
         except HeldBack as e:
-          # not an error: you decide by hand (#135)
-          reasons.add "; " & e.msg
+          # not an error: you decide by hand (#135). Its own words only: a
+          # debug build adds an async traceback to the message
+          reasons.add "; " & e.msg.splitLines()[0]
           if postLink == "":
             try: postLink = await l.tg.link(m.chatId, m.id)
             except CatchableError: discard
@@ -651,6 +655,12 @@ proc sendApproved*(l: Listener) {.async.} =
       if l.cfg.notifyPublished:
         l.tell "✅ Published after your review: " & isolated(r.role) & "\n" &
                r.chatTitle & (if link != "": "\n" & link else: "")
+    except HeldBack as e:
+      # held back again (#80): its own words only, so a reason it already
+      # has (from the live post, or an earlier approval) isn't added again
+      l.say &"   reviewed {r.chatTitle} #{r.msgId} not posted: {e.msg.splitLines()[0]}"
+      try: l.state.reopenReview(r.id, e.msg.splitLines()[0])
+      except CatchableError: discard
     except CatchableError as e:
       l.say &"   could not send reviewed {r.chatTitle} #{r.msgId}: {e.msg}"
       try: l.state.reopenReview(r.id, e.msg)

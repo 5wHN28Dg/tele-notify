@@ -212,7 +212,7 @@ suite "listener":
   test "forward_fallback summary, public chat: named, and the summary ends with the post's link (#80)":
     let f = FakeTg()
     f.noForward.incl -2
-    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true, channel: true)
     f.chats[-2] = @[msg(-2, 5, good & "\nللتقديم ارسل السيرة على hr@example.com")]
     let (l, st) = setup(f, fallback = "summary")
     waitFor l.bootstrap()
@@ -225,11 +225,23 @@ suite "listener":
     check st.recentPublished().len == 1
     check st.stats(1)[0].forwarded == 1                 # counted as sent to the channel
 
+  test "forward_fallback summary: a public group (not a channel) is held back like a private chat (#80)":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.access[-2] = ChatAccess(title: "Example Jobs group", status: "ok", public: true, channel: false)
+    f.chats[-2] = @[msg(-2, 5, good)]
+    let (l, st) = setup(f, fallback = "summary")
+    waitFor l.bootstrap()
+    check f.texts.len == 0
+    let r = st.pendingReviews()
+    check r.len == 1 and privateHeldBack in r[0].reasons
+    check "Review's Send can't post it" in r[0].reasons and "post it yourself in Telegram" in r[0].reasons
+
   test "forward_fallback summary: a public post with no link isn't summarized without it; review gets it":
     let f = FakeTg()
     f.noForward.incl -2
     f.linkFails = true
-    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true, channel: true)
     f.chats[-2] = @[msg(-2, 5, good)]
     let (l, st) = setup(f, fallback = "summary")
     waitFor l.bootstrap()
@@ -252,7 +264,7 @@ suite "listener":
   test "forward_fallback summary, dry run: nothing is sent":
     let f = FakeTg()
     f.noForward.incl -2
-    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true, channel: true)
     f.chats[-2] = @[msg(-2, 5, good)]
     let (l, st) = setup(f, dryRun = true, fallback = "summary")
     waitFor l.bootstrap()
@@ -262,7 +274,7 @@ suite "listener":
   test "forward_fallback summary: an approved review from a public chat is summarized; its link asked again":
     let f = FakeTg()
     f.noForward.incl -2
-    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true, channel: true)
     let (l, st) = setup(f, fallback = "summary")
     # queued while the chat was private: its stored link is a t.me/c/ one
     st.addReview(-2, 8, "chat2", unclear & " على الواتساب", "no level", "", "https://t.me/c/2/8")
@@ -285,10 +297,30 @@ suite "listener":
     let r = st.pendingReviews()
     check r.len == 1 and privateHeldBack in r[0].reasons
 
+  test "forward_fallback summary: a held-back post approved again and again keeps one copy of the reason":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.chats[-2] = @[msg(-2, 5, good)]
+    let (l, st) = setup(f, fallback = "summary")
+    waitFor l.bootstrap()                                # live: held back, to review
+    for _ in 1 .. 3:
+      check st.decideReview(st.pendingReviews()[0].id, "to_send")
+      waitFor l.sendApproved()                           # bounces back each time
+    let r = st.pendingReviews()
+    check f.texts.len == 0 and r.len == 1 and r[0].reasons.count(privateHeldBack) == 1
+    # an approved review that wasn't held back live gets the reason once too
+    st.addReview(-2, 9, "chat2", unclear, "no level", "", "")
+    for _ in 1 .. 2:
+      for x in st.pendingReviews():
+        if x.msgId == 9: check st.decideReview(x.id, "to_send")
+      waitFor l.sendApproved()
+    for x in st.pendingReviews():
+      if x.msgId == 9: check x.reasons.count(emptyHeldBack) == 1 and x.reasons.count("could not send: ") == 1
+
   test "forward_fallback summary: an approved review with no role and no way to apply goes back to review":
     let f = FakeTg()
     f.noForward.incl -2
-    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true, channel: true)
     let (l, st) = setup(f, fallback = "summary")
     st.addReview(-2, 8, "chat2", unclear, "no level", "", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")

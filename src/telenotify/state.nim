@@ -340,9 +340,13 @@ proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"):
   s.db.getValue(sql"SELECT changes()") == "1"
 
 proc reopenReview*(s: State, id: int64, problem: string) =
-  ## Sending failed: put it back in the queue, with the reason.
-  s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = reasons || '; could not send: ' || ?
-                   WHERE id = ? AND status = 'to_send'""", problem, id)
+  ## Sending failed: put it back in the queue, with the reason. A reason it
+  ## already has (the same post bouncing back again, or held back live for
+  ## the same reason, #80) isn't added again.
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending',
+                   reasons = CASE WHEN ? <> '' AND instr(COALESCE(reasons, ''), ?) > 0 THEN reasons
+                                  ELSE reasons || '; could not send: ' || ? END
+                   WHERE id = ? AND status = 'to_send'""", problem, problem, problem, id)
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)

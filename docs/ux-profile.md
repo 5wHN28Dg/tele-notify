@@ -67,8 +67,8 @@ may install it. Not a reader, viewer, sharing tool, training product, family fil
   (real or dry run).
 - **Not the original post:** when forwarding is blocked, the bot posts its own short "match / post link" text in the
   channel, or, with `"forward_fallback": "summary"` (#80, off until the owner checks it), its own plain-text summary
-  in Arabic, marked automatic: role, place, how to apply, and the public source by name with the post's link. A
-  blocked post from a private or members-only chat isn't summarized: it goes to the review queue.
+  in Arabic, marked automatic: role, place, how to apply, and the public channel by name with the post's link. A
+  blocked post from anywhere else (a private or members-only chat, or a group) isn't summarized: it goes to the review queue.
 - **Verbs:** watch / unwatch a chat; judge (the filter); forward; review a post (send, discard, match no send, undo);
   search; re-judge; test settings on the corpus; save settings; start / stop / restart the bot.
 
@@ -249,7 +249,7 @@ table adds the intent order and the rest of the product. One row per layout; gro
 | Messages: alerts in the owner's Saved Messages (back after downtime, no connection, a watched chat lost, a backlog cut, a send failed) | tell the owner something needs them | the first line says why | n/a | Telegram | 1 why; 2 what to do |
 | Messages: forwards to the public channel | the original post, unchanged | n/a (Telegram's UI) | n/a | n/a | n/a |
 | Messages: the fallback "match / post link" text in the public channel (when forwarding is blocked) | point readers to the post | the role and a link readers can open | n/a | Telegram | 1 what the job is; 2 the link (#80) |
-| Messages: the fallback summary in the public channel (`"forward_fallback": "summary"`, #80) | tell readers about the job without the post | marked automatic; role, place, how to apply, the public source named with its link (public sources only; private ones go to review); Arabic labels; plain, at most 6 lines / 400 characters | n/a | Telegram | 1 that it's an automatic summary; 2 what the job is; 3 where; 4 how to apply; 5 the source and its link |
+| Messages: the fallback summary in the public channel (`"forward_fallback": "summary"`, #80) | tell readers about the job without the post | marked automatic; role, place, how to apply, the public channel named with its link (public channels only; anything else goes to review); Arabic labels; plain, at most 6 lines / 400 characters | n/a | Telegram | 1 that it's an automatic summary; 2 what the job is; 3 where; 4 how to apply; 5 the source and its link |
 
 ## Budgets (with tolerance) and the benchmark walk
 

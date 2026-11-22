@@ -42,6 +42,8 @@ type
     newChat*: int64   ## "upgraded": the new chat id
     public*: bool     ## a supergroup/channel with a public username: readable
                       ## without being a member
+    channel*: bool    ## a channel (not a group): only those get a summary in
+                      ## your channel when forwarding is blocked (#80)
 
   Telegram* = ref object
     ## Every operation the listener uses. All of them may raise (network,
@@ -155,7 +157,7 @@ proc parseAccessUpdate*(u: JsonNode): tuple[chat: int64, access: ChatAccess] =
     let g = u{"supergroup"}
     if g{"id"} == nil: return
     (supergroupChatId(g{"id"}.getBiggestInt),
-     ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g)))
+     ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g), channel: g{"is_channel"}.getBool))
   of "updateBasicGroup":
     let g = u{"basic_group"}
     if g{"id"} == nil: return
@@ -274,7 +276,8 @@ proc tdTelegram*(c: TdClient): Telegram =
     of "chatTypeSupergroup":     # channels too
       let g = await c.call(%*{"@type": "getSupergroup",
                               "supergroup_id": t{"supergroup_id"}.getBiggestInt})
-      a = ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g))
+      a = ChatAccess(status: memberAccess(g{"status"}), public: isPublic(g),
+                     channel: t{"is_channel"}.getBool or g{"is_channel"}.getBool)
     of "chatTypeBasicGroup":
       let g = await c.call(%*{"@type": "getBasicGroup",
                               "basic_group_id": t{"basic_group_id"}.getBiggestInt})

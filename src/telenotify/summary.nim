@@ -6,7 +6,7 @@
 ## says what the job is, where, how to apply and where it came from, so it
 ## helps even then. Owner's decisions (#135): "Post its own summary"
 ## (2026-11-21); "Arabic" labels and "Public only; private to review
-## (Recommended)" (2026-11-22): only a public chat's posts are summarized;
+## (Recommended)" (2026-11-22): only a public channel's posts are summarized;
 ## a blocked post from a private or members-only chat goes to the review
 ## queue instead (listener.nim), and nothing is posted.
 ##
@@ -28,11 +28,13 @@
 ##   (`plainField`): control, invisible and direction characters are
 ##   dropped, and so are letters that look blank (ZWNJ and ZWJ are kept:
 ##   Persian and Kurdish spelling, emoji); line breaks become spaces; a
-##   colon between digits becomes "∶" (looks the same, "10∶30"); a space
-##   goes after "@ # $ / :" and after a dot that isn't followed by a space
-##   or another dot; and in a run of 12 or more digits (with any spaces and
-##   dashes between groups) each separator gets a "·", each number kept as
-##   it was ("4111 · 1111 · …"; one group of 12+ digits is split in fours).
+##   colon between digits gets a word joiner (U+2060) after it ("10:30"
+##   looks the same, reads in order in Arabic, and isn't a timestamp); a
+##   space goes after "@ # $ / :" and after a dot that isn't followed by a
+##   space or another dot; and in a run TDLib would take as a card number
+##   (13 to 19 digits with the card checksum, any spaces and dashes between
+##   groups) each separator gets a "·", each number kept as it was ("4111 ·
+##   1111 · …"; one group is split in fours). Other numbers are untouched.
 ##   The only link is the post's own.
 ## * **Nothing is copied from the post itself.** The role and the place
 ##   are the config's keywords the filter matched (`classify`), as written
@@ -88,13 +90,29 @@ proc separator(r: Rune): bool =
 
 const middleDot = Rune(0x00B7)   ## "·": TDLib never takes it as part of a card number
 
+proc luhn(digits: seq[Rune]): bool =
+  ## The card number checksum.
+  var sum = 0
+  for i in 0 ..< digits.len:
+    var d = int(digits[digits.len - 1 - i]) - ord('0')
+    if i mod 2 == 1:
+      d *= 2
+      if d > 9: d -= 9
+    sum += d
+  sum mod 10 == 0
+
+proc cardLike(digits: seq[Rune]): bool =
+  ## What TDLib marks as a bank card number: 13 to 19 digits (in one run,
+  ## with any spaces and dashes between groups) that pass the checksum.
+  digits.len in 13..19 and luhn(digits)
+
 proc defuseDigits(rs: seq[Rune]): seq[Rune] =
-  ## TDLib marks 12 or more digits as a bank card number, also with any
-  ## spaces and dashes between groups ("4111 - 1111 -- 1111 1111"). Such a
-  ## run is kept, each number as it was, but its separators get a "·"
-  ## ("4111 · 1111 · …"); one group of 12 or more digits is split in fours
-  ## by "·". Shorter runs ("2026", "0770 000 0000") are left alone, and
-  ## separate numbers are never joined.
+  ## A run of digits TDLib would mark as a bank card number (`cardLike`),
+  ## also with any runs of spaces and dashes between groups ("4111 - 1111
+  ## -- 1111 1111"), is kept, each number as it was, but its separators get
+  ## a "·" ("4111 · 1111 · …"); a single group is split in fours by "·".
+  ## Any other number (a year, a phone number, separate numbers) is left
+  ## as it is.
   var i = 0
   while i < rs.len:
     if not rs[i].isDigit:
@@ -117,16 +135,17 @@ proc defuseDigits(rs: seq[Rune]): seq[Rune] =
         seps.add rs[j ..< k]
         j = k
       else: break
-    var total = 0
-    for g in groups: total += g.len
+    var all: seq[Rune]
+    for g in groups: all.add g
+    let card = all.cardLike
     for n, g in groups:
       if n > 0:
-        if total >= 12:
+        if card:
           let sep = seps[n - 1]
           if Rune(' ') in sep: result.add @[Rune(' '), middleDot, Rune(' ')]
           else: result.add middleDot
         else: result.add seps[n - 1]
-      if g.len >= 12:
+      if card and groups.len == 1:
         for k, d in g:
           if k > 0 and k mod 4 == 0: result.add middleDot
           result.add d
@@ -151,21 +170,23 @@ proc plainField*(s: string, maxRunes: int): string =
     space = false
   while rs.len > 0 and rs[^1] == Rune(' '): rs.setLen rs.len - 1
   rs = defuseDigits(rs)
-  # "10:30" is a media timestamp to TDLib: a colon between digits becomes
-  # "∶" (U+2236, ratio), which looks the same
-  for i in 1 ..< max(rs.len - 1, 1):
-    if rs[i] == Rune(':') and rs[i - 1].isDigit and rs[i + 1].isDigit: rs[i] = Rune(0x2236)
   # defuse what Telegram would make an entity by itself: a space after a
-  # sigil, and after a dot that isn't followed by a space or another dot
+  # sigil, and after a dot that isn't followed by a space or another dot.
+  # A colon between digits ("10:30", a media timestamp to TDLib) keeps its
+  # place and gets a word joiner (U+2060) after it instead: the time still
+  # reads in order inside Arabic text, which a space or another colon-like
+  # character wouldn't keep.
   var cut: seq[Rune]
   for i, r in rs:
     cut.add r
     if i + 1 >= rs.len or rs[i + 1] == Rune(' '): continue
-    if $r in sigils or ($r in dots and $rs[i + 1] notin dots): cut.add Rune(' ')
+    if r == Rune(':') and i > 0 and rs[i - 1].isDigit and rs[i + 1].isDigit: cut.add Rune(0x2060)
+    elif $r in sigils or ($r in dots and $rs[i + 1] notin dots): cut.add Rune(' ')
   if cut.len > maxRunes:
     cut.setLen maxRunes - 1
     while cut.len > 0 and cut[^1] == Rune(' '): cut.setLen cut.len - 1
     cut.add Rune(0x2026)           # …
+    cut = defuseDigits(cut)        # a long number cut short may now be card-like
   $cut
 
 # ------------------------------------------------------------- how to apply
@@ -213,7 +234,7 @@ proc applyMethods*(text: string, jobSites: openArray[string] = defaultJobPosting
 # ------------------------------------------------------------------ the text
 
 proc summaryText*(role, place: string, apply: seq[string], title, link: string): string =
-  ## The summary as sent, for a public chat only: `title` is its name and
+  ## The summary as sent, for a public channel only: `title` is its name and
   ## `link` the post's link (the listener never summarizes a private or
   ## members-only chat's post: it goes to review instead, #135).
   let r = plainField(role, maxRoleRunes)
