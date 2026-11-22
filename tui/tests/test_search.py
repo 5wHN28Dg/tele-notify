@@ -339,9 +339,17 @@ async def test_a_newer_search_wins_over_a_slower_older_one(paths, monkeypatch):
         box = app.query_one("#q", Input)
         box.focus()
         await pilot.press(*"location", "enter")    # slow
+        # Enter moves the focus to the results table, and Textual's focus() only
+        # schedules the move. Let it land first: otherwise it can land after the
+        # box.focus() below, "Iraq" goes to the table, and the empty box's search
+        # wins (CI saw 4 rows, #134).
+        await pilot.pause()
         box.value = ""
         box.focus()                                # (Enter moved focus to the results table)
+        await pilot.pause()
+        assert app.focused is box and box.value == ""
         await pilot.press(*"Iraq", "enter")        # fast, typed while the slow one runs
+        assert box.value == "Iraq"                 # the letters reached the box, not the table
         await settle(app, pilot)
         await pilot.pause(SLOW_QUERY)
         await settle(app, pilot)
