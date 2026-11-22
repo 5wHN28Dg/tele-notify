@@ -102,6 +102,7 @@ type
     notifyPublished*: bool     ## through it: each published post
     notifyReview*: bool        ## through it: each post for review
     keepTextDays*: int         ## keep each post's text this long (search); 0 = forever
+    undoSeconds*: int          ## an approved review waits this long before it's sent, so it can be undone; 0 = at once (#62)
     instagramFrontend*: string ## a kittygram's address: read linked Instagram posts (#114)
     forwardFallback*: ForwardFallback  ## when forwarding is blocked: a link or a summary (#80)
     apiId*: int
@@ -110,6 +111,9 @@ type
     targetChat*: int64
 
   ConfigError* = object of CatchableError
+
+const maxUndoSeconds* = 600
+  ## The longest undo window `undo_seconds` may set (the screen's Settings checks the same).
 
 proc strings(j: JsonNode, key: string): seq[string] =
   if j.hasKey(key):
@@ -205,6 +209,10 @@ proc parseConfig*(j: JsonNode): Config =
   result.notifyPublished = j{"notify_published"}.getBool(true)
   result.notifyReview = j{"notify_review"}.getBool(true)
   result.keepTextDays = j{"keep_text_days"}.getInt(90)
+  result.undoSeconds = j{"undo_seconds"}.getInt(30)
+  if j.hasKey("undo_seconds") and (j["undo_seconds"].kind != JInt or result.undoSeconds notin 0 .. maxUndoSeconds):
+    raise newException(ConfigError, "config key 'undo_seconds' must be a whole number of seconds from 0 " &
+                       "(approved posts are sent at once) to " & $maxUndoSeconds & ", found: " & $j["undo_seconds"])
   result.instagramFrontend = j{"instagram_frontend"}.getStr("").strip
   if result.instagramFrontend != "" and
       not result.instagramFrontend.toLowerAscii.startsWith("http://") and

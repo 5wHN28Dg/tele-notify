@@ -91,7 +91,7 @@ async def test_send_outside_dry_run_says_bot_sends(paths, state):
         await open_review(pilot)
         await pilot.press("s")
         await pilot.pause()
-        assert "the bot will send it in a few seconds" in note(app)
+        assert "sent to the channel in 30 s (u undoes)" in note(app) or "in 29 s" in note(app)
 
 
 async def test_discard_second_item_writes_false(paths, state, labels, now):
@@ -494,9 +494,926 @@ async def test_undo_after_the_bot_sent_it_is_too_late(paths, state, labels):
         db.close()
         await pilot.press("u")
         await pilot.pause()
-        assert "too late" in note(app) and "already sent" in note(app)
+        assert "too late" in note(app) and "already handed #11 to Telegram" in note(app)
         assert status_of(state, 11) == "sent"
     assert [l["label"] for l in read_labels(labels)] == ["TRUE"]   # it did go out: the label stays
+
+
+# ------------------------------------------------- the undo window (#62) and History undo (#76)
+
+def set_row(state: Path, msg_id: int, **cols) -> None:
+    db = sqlite3.connect(state)
+    sets = ", ".join(f"{k} = ?" for k in cols)
+    db.execute(f"UPDATE reviews SET {sets} WHERE msg_id = ?", (*cols.values(), msg_id))
+    db.commit()
+    db.close()
+
+
+def send_after_of(state: Path, msg_id: int) -> int | None:
+    db = sqlite3.connect(state)
+    try:
+        return db.execute("SELECT send_after FROM reviews WHERE msg_id = ?", (msg_id,)).fetchone()[0]
+    finally:
+        db.close()
+
+
+async def test_approving_counts_down_then_says_it_was_sent(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        before = int(time.time())
+        await pilot.press("s")
+        await pilot.pause()
+        assert before + 30 <= send_after_of(state, 11) <= int(time.time()) + 30   # the bot waits 30 s
+        # a loaded machine may take a second or two between the decision and the note
+        assert any(f"sent to the channel in {n} s" in note(app) for n in (30, 29, 28)) and "u undoes" in note(app)
+        set_row(state, 11, send_after=int(time.time()) + 5)
+        pane._countdown()                                    # a second later, and so on
+        await pilot.pause()
+        assert any(f"in {n} s" in note(app) for n in (5, 4, 3))
+        set_row(state, 11, send_after=int(time.time()) - 1)
+        pane._countdown()
+        await pilot.pause()
+        assert "sends it within seconds" in note(app)
+        assert pane.check_action("undo", ()) is True          # not claimed yet: still undoable
+        set_row(state, 11, status="sent")                     # the bot sent it
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == "#11 handed to Telegram for the channel"
+        assert pane.check_action("undo", ()) is None          # no undo offered once sent
+        assert not app.query_one("#btn-undo", Button).display
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "sent" and note(app) == "#11 handed to Telegram for the channel"
+    assert [l["label"] for l in read_labels(labels)] == ["TRUE"]
+
+
+async def test_the_countdown_runs_by_itself(paths, state):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=3600)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, send_after=int(time.time()) + 9)
+        await pilot.pause(1.5)                                # the 1-second timer redraws it
+        assert any(f"in {n} s" in note(app) for n in (9, 8, 7))
+
+
+async def test_u_within_the_window_puts_it_back(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send" and send_after_of(state, 11) > time.time()
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending" and send_after_of(state, 11) is None
+        assert "back in the queue" in note(app)
+    assert read_labels(labels) == []
+
+
+async def test_u_once_the_bot_has_started_sending_is_too_late(paths, state, labels):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        # the window is over and the bot claimed it (state.nim claimReview) before the screen looked again
+        set_row(state, 11, send_after=int(time.time()) - 1, status="sending")
+        await pilot.press("u")
+        await pilot.pause()
+        assert "too late to undo" in note(app) and "handing #11 to Telegram" in note(app)
+        assert status_of(state, 11) == "sending"
+    assert [l["label"] for l in read_labels(labels)] == ["TRUE"]
+
+
+async def history_row(pilot, app, msg_id: int) -> None:
+    pane = app.query_one(ReviewPane)
+    table = app.query_one("#review-history", DataTable)
+    table.move_cursor(row=[r.msg_id for r in pane._past].index(msg_id))
+    await pilot.pause()
+
+
+async def test_history_undoes_any_decision_not_yet_sent(paths, state, labels, now):
+    add_pending(state, 7, "discarded elsewhere", now - 30)
+    add_pending(state, 8, "kept earlier", now - 20)
+    with Store(state) as st:
+        ids = {r.msg_id: r.id for r in st.reviews("pending")}
+        assert st.decide(ids[7], "discarded") and st.decide(ids[8], "kept") and st.decide(ids[11], "to_send")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        labels_shown = {r.msg_id: str(table.get_row_at(i)[1]) for i, r in enumerate(pane._past)}
+        assert labels_shown[11].startswith("sends in ") and labels_shown[9] == "sent"
+        await history_row(pilot, app, 9)                      # sent: no undo
+        assert pane.check_action("undo", ()) is None and not app.query_one("#btn-undo", Button).display
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 9) == "sent"
+        for msg_id in (7, 8, 11):                             # discarded, kept, approved in its window
+            await history_row(pilot, app, msg_id)
+            assert app.query_one("#btn-undo", Button).display
+            await pilot.press("u")
+            await pilot.pause()
+            assert status_of(state, msg_id) == "pending", msg_id
+            assert f"#{msg_id} is back in the queue" in note(app)
+        assert [r.msg_id for r in pane._past] == [9]
+        await pilot.press("h")
+        await pilot.pause()
+        assert app.query_one("#review-list", OptionList).option_count == 3
+
+
+async def test_history_counts_down_and_shows_the_send(paths, state, now):
+    with Store(state) as st:
+        assert st.decide(st.reviews("pending")[0].id, "to_send")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        set_row(state, 11, send_after=int(time.time()) + 12)
+        pane._countdown()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) in ("sends in 12 s", "sends in 11 s", "sends in 10 s")
+        set_row(state, 11, status="sending")
+        pane._countdown()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "sending now" and pane.check_action("undo", ()) is None
+        set_row(state, 11, status="sent")
+        pane._countdown()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "sent"
+
+
+async def test_a_decision_from_the_command_line_is_undone_in_history(paths, state, now):
+    """`telenotify review` writes it as the bot does (state.nim decideReview): the screen can take it back."""
+    with Store(state) as st:
+        rid = st.reviews("pending")[0].id
+    db = sqlite3.connect(state)                               # the command line, another process
+    db.execute("UPDATE reviews SET status = 'to_send', decided_at = ?, send_after = ? WHERE id = ? AND status = 'pending'",
+               (now, now + 30, rid))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        await history_row(pilot, app, 11)
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending"
+
+
+def run_review_cli(binary: Path, config: Path, typed: str) -> str:
+    """`telenotify review --dry-run` on a terminal (a pty: it asks y/N only there), with `typed` as the keys."""
+    import pty
+    import select
+    import subprocess
+    master, slave = pty.openpty()
+    p = subprocess.Popen([str(binary), "review", f"--config:{config}", "--dry-run"],
+                         stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+    os.close(slave)
+    os.write(master, typed.encode())
+    out = b""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        r, _, _ = select.select([master], [], [], 0.5)
+        if r:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:   # the program ended
+                break
+            if not chunk:
+                break
+            out += chunk
+        elif p.poll() is not None:
+            break
+    p.wait(timeout=10)
+    os.close(master)
+    return out.decode("utf-8", "replace")
+
+
+async def test_the_real_command_line_asks_and_the_screen_undoes_it(paths, state, config, binary):
+    out = run_review_cli(binary, config, "s\ny\n")
+    assert out.lstrip("sy\r\n").startswith("DRY RUN:"), out          # what was typed is echoed first
+    assert "Record as approved (dry run, nothing is sent)? [y/N]" in out, out
+    assert status_of(state, 11) == "to_send" and send_after_of(state, 11) > time.time()
+    app = TeleNotifyApp(dataclasses.replace(paths, binary=binary), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        await history_row(pilot, app, 11)
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 11) == "pending"
+
+
+def set_meta(state: Path, key: str, value: str) -> None:
+    db = sqlite3.connect(state)
+    db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
+    db.commit()
+    db.close()
+
+
+async def test_history_keeps_the_cursor_on_the_same_review_across_reloads(paths, state, labels, now):
+    """Review run 1, fail 1: cursor on #22, the bot sends #24 and another decision lands; u acts on #22."""
+    for k in range(20, 26):
+        add_pending(state, k, f"post {k}", now - 100 + k)
+    with Store(state) as st:
+        ids = {r.msg_id: r.id for r in st.reviews("pending")}
+    db = sqlite3.connect(state)
+    for k in range(20, 24):   # discarded, oldest first
+        db.execute("UPDATE reviews SET status = 'discarded', decided_at = ? WHERE id = ?", (now - 60 + k, ids[k]))
+    db.execute("UPDATE reviews SET status = 'to_send', decided_at = ?, send_after = ? WHERE id = ?",
+               (now - 30, now + 30, ids[24]))
+    db.commit()
+    db.close()
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        await history_row(pilot, app, 22)
+        # meanwhile: the bot sends #24, and `telenotify review` discards #25 (a new row at the top)
+        set_row(state, 24, status="sent")
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET status = 'discarded', decided_at = ? WHERE id = ?", (now + 5, ids[25]))
+        db.commit()
+        db.close()
+        pane.reload()
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        assert pane._past[table.cursor_row].msg_id == 22
+        await pilot.press("u")
+        await pilot.pause()
+        assert status_of(state, 22) == "pending" and status_of(state, 21) == "discarded"
+        assert status_of(state, 23) == "discarded"
+
+
+async def test_with_the_bot_stopped_nothing_is_promised(paths, state):
+    """Review run 1, fail 6 (F3/F4): no "sends in", and an interrupted send says so; no 1 s reloads."""
+    set_meta(state, "connection", "stopped")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "The bot isn't running: it will be sent when the bot starts (u undoes)" in note(app)
+        assert "sent to the channel in" not in note(app)
+        assert not pane._counting()                          # nothing counts down with the bot stopped
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        labels_shown = {r.msg_id: str(table.get_row_at(i)[1]) for i, r in enumerate(pane._past)}
+        assert labels_shown[11] == "waits for bot"
+        set_row(state, 11, status="sending")                 # the bot crashed while sending
+        pane.reload()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "interrupted" and not pane._counting()
+        assert pane.check_action("undo", ()) is None
+        set_meta(state, "connection", "ready")               # it runs again: the screen follows
+        pane.reload()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "sending now" and pane._counting()
+
+
+async def test_an_approval_note_counting_down_never_moves_the_post(paths, state, now):
+    """Review run 1, fail 7 (P4): at 80 x 24 the note keeps its height while it changes by itself."""
+    add_pending(state, 1234567890123, "a long id", now - 100)   # TDLib message ids are long
+    add_pending(state, 7, "the next post", now - 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")                               # the oldest: the long id
+        await pilot.pause()
+        assert "#1234567890123 approved" in note(app)
+        split = app.query_one("#review-split")
+        y, h = split.region.y, app.query_one("#review-note").region.height
+        for change in ({"send_after": int(time.time()) - 1}, {"status": "sending"}, {"status": "sent"}):
+            set_row(state, 1234567890123, **change)
+            pane._countdown() if pane._last is not None else pane.reload()
+            await pilot.pause()
+            assert split.region.y == y and app.query_one("#review-note").region.height == h, note(app)
+        assert note(app) == "#1234567890123 handed to Telegram for the channel"
+
+
+async def test_the_timer_runs_only_while_review_is_shown_and_counting(paths, state):
+    """Review run 1, fail 8 (P1): paused on other tabs and when nothing counts; short lock waits."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=3600)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        ticker = pane._ticker
+        assert ticker is not None and not ticker._active.is_set()      # nothing counts yet
+        await pilot.press("s")
+        await pilot.pause()
+        assert ticker._active.is_set()
+        await pilot.press("3")                                          # Search
+        await pilot.pause()
+        assert not ticker._active.is_set()
+        await pilot.press("2")
+        await pilot.pause()
+        assert ticker._active.is_set()
+        waits: list[float] = []
+        real = app.store
+
+        def store(timeout: float = 10):
+            waits.append(timeout)
+            return real(timeout)
+        app.store = store
+        set_row(state, 11, status="sent")
+        pane._countdown()
+        await pilot.pause()
+        assert waits and max(waits) <= review_mod.TICK_TIMEOUT == 0.25
+        assert not ticker._active.is_set()                              # sent: nothing counts
+
+
+async def test_a_busy_state_file_skips_the_tick(paths, state, monkeypatch):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        before = note(app)
+
+        def busy(timeout: float = 10):
+            raise sqlite3.OperationalError("database is locked")
+        monkeypatch.setattr(app, "store", busy)
+        pane._countdown()                                     # no exception, nothing changes
+        assert note(app) == before
+
+
+async def test_undo_seconds_from_the_config_sets_the_window(paths, state, config):
+    """Review run 1, fail 9 (A21): 0 turns the window off."""
+    cfg = json.loads(config.read_text(encoding="utf-8"))
+    cfg["undo_seconds"] = 0
+    config.write_text(json.dumps(cfg), encoding="utf-8")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        before = int(time.time())
+        await pilot.press("s")
+        await pilot.pause()
+        assert before <= send_after_of(state, 11) <= int(time.time())
+        assert "the bot sends it within seconds" in note(app)
+
+
+async def test_a_post_changed_elsewhere_is_said_in_plain_words(paths, state):
+    """Review run 1, fail 11 (W1)."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, status="kept")
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == "#11 was changed elsewhere: it is now kept as a match, not sent"
+
+
+def test_history_status_words_stay_short():
+    """Review run 1, fail 12 (TUI1): the status column never pushes the post off an 80-column screen."""
+    now = time.time()
+    shown = set()
+    for status in ("to_send", "sending", "sent", "discarded", "kept"):
+        for send_after in (None, int(now) + 600, int(now) - 5):
+            for dry in (False, True):
+                for up in (False, True):
+                    r = Review(1, -1, 1, "", "", "", "", "", status, 0, send_after=send_after)
+                    shown.add(review_mod.status_label(r, dry, up, now))
+    assert max(len(x) for x in shown) <= len("match, not sent")
+
+
+async def test_the_history_post_column_starts_on_an_80_column_screen(paths, state, now):
+    with Store(state) as st:
+        assert st.decide(st.reviews("pending")[0].id, "to_send", undo_seconds=0)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        assert str(table.get_row_at(0)[1]) == "sending soon"
+        cols = table.ordered_columns
+        start = sum(c.get_render_width(table) for c in cols[:4])
+        assert start < table.region.width - 5, start
+
+
+# ------------------------------------------------- review run 2 (adversarial)
+
+def add_decided(state: Path, msg_id: int, status: str, decided_at: int, send_after: int | None = None) -> None:
+    db = sqlite3.connect(state)
+    db.execute("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at,
+                  decided_at, send_after) VALUES (-2, ?, 'Iraq Jobs', ?, 'unclear', 'it support', '', ?, ?, ?, ?)""",
+               (msg_id, f"post {msg_id}", status, decided_at - 100, decided_at, send_after))
+    db.commit()
+    db.close()
+
+
+async def test_history_shows_every_state_of_the_window(paths, decided_states):
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        shown = {r.msg_id: str(table.get_row_at(i)[1]) for i, r in enumerate(pane._past)}
+        assert shown[41].startswith("sends in ") and shown[42] == "sending now" and shown[43] == "sending soon"
+
+
+async def test_history_undo_acts_once_per_deliberate_press(paths, state, now, labels, monkeypatch):
+    """N1: u u u (a double tap, a held key) undoes one decision; the next row waits DECIDE_DELAY."""
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    for i, status in enumerate(["discarded", "kept", "discarded", "discarded"]):
+        add_decided(state, 50 + i, status, now - 10 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        pane._hist_shown_at -= 10                      # the first row has been read
+        await pilot.press("u", "u", "u")
+        await pilot.pause()
+        assert [m for m in (50, 51, 52, 53) if status_of(state, m) == "pending"] == [50]
+        assert "only just come under the cursor" in note(app)
+        assert pane.check_action("undo", ()) is None   # greyed while the new row's wait runs
+        pane._hist_shown_at -= 10                      # read now: a deliberate press works again
+        await pilot.press("u")
+        await pilot.pause()
+        assert [m for m in (50, 51, 52, 53) if status_of(state, m) == "pending"] == [50, 51]
+
+
+async def test_a_double_click_on_undo_in_history_undoes_one(paths, state, now, monkeypatch):
+    """The two clicks are made 0.1 s apart, whenever a loaded machine handles them: each carries
+    the time it was made (as a real mouse's does), so the second is judged by that time."""
+    from textual import events
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    for i, status in enumerate(["discarded", "kept", "discarded"]):
+        add_decided(state, 60 + i, status, now - 10 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        pane._hist_shown_at -= 10                      # the first row has been read
+        pane._sync_controls()
+        await pilot.pause()
+        btn = app.query_one("#btn-undo")
+        x, y = btn.region.x + 1, btn.region.y
+        first = time.monotonic()
+        for made in (first, first + 0.1):              # a double click
+            for cls in (events.MouseDown, events.MouseUp):
+                e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+                e.time = made
+                app.post_message(e)
+            await pilot.pause()
+        await pilot.pause()
+        assert [m for m in (60, 61, 62) if status_of(state, m) == "pending"] == [60]
+
+
+async def test_a_decision_not_recorded_stays_beside_the_countdown(paths, state, now):
+    """N2: the next countdown second must not hide "NOT recorded"."""
+    add_pending(state, 71, "another post", now - 20)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        lock = sqlite3.connect(state, isolation_level=None)
+        lock.execute("BEGIN EXCLUSIVE")
+        await pilot.press("d")
+        await pilot.pause()
+        lock.execute("ROLLBACK")
+        lock.close()
+        for _ in range(2):
+            pane._countdown()
+            pane.reload()
+            await pilot.pause()
+            assert "#71 NOT recorded" in note(app) and "#11 approved" in note(app)
+        assert status_of(state, 71) == "pending"
+
+
+async def test_already_decided_elsewhere_is_said_beside_the_countdown(paths, state, now):
+    """N3: d on a post another window approved says so, and what it is now."""
+    add_pending(state, 70, "another post", now - 20)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 70, status="to_send", decided_at=now)
+        await pilot.press("d")
+        await pilot.pause()
+        assert "#70 was already decided elsewhere: it is now approved" in note(app)
+        pane._countdown()
+        await pilot.pause()
+        assert "#70 was already decided elsewhere" in note(app) and "#11 approved" in note(app)
+        await pilot.press("space")                      # the next key press: it may go now
+        await pilot.pause()
+        assert "#70" not in note(app)
+
+
+async def test_history_keeps_its_scroll_position_on_a_tick(paths, state, now):
+    """N4: a countdown second doesn't scroll History back to the cursor."""
+    add_decided(state, 80, "to_send", now - 1, now + 25)
+    for i in range(45):
+        add_decided(state, 100 + i, "discarded", now - 100 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        table.scroll_to(y=20, animate=False)
+        await pilot.pause()
+        y0, row = table.scroll_y, table.cursor_row
+        pane = app.query_one(ReviewPane)
+        pane._countdown()
+        await pilot.pause()
+        assert table.scroll_y == y0 and table.cursor_row == row
+        add_decided(state, 81, "discarded", now)        # a new row: refilled, still where it was
+        pane.reload()
+        await pilot.pause()
+        assert table.scroll_y == y0
+
+
+@pytest.mark.parametrize("why,expected", [
+    ("; could not send: CHAT_WRITE_FORBIDDEN",
+     "#11: sending failed: this account may not post in the channel; it's back in the queue"),
+    ("; the bot stopped while sending it: check the channel before sending it again",
+     "#11: the bot stopped while sending; check the channel before sending it again"),
+])
+async def test_a_failed_or_interrupted_send_is_said_as_such(paths, state, why, expected):
+    """N5: not "changed elsewhere"."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, status="sending")
+        pane._countdown()
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET status = 'pending', send_after = NULL, reasons = reasons || ? "
+                   "WHERE msg_id = 11", (why,))
+        db.commit()
+        db.close()
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == expected
+
+
+async def test_a_bot_still_reading_its_backlog_isnt_sending_yet(paths, state):
+    """N6: a fresh heartbeat but no sending_ready: nothing is promised "within seconds"."""
+    set_meta(state, "sending_ready", "0")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "The bot is starting: it will be sent once it has caught up (u undoes)" in note(app)
+        assert not pane._counting()
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]) == "waits for bot"
+        set_meta(state, "sending_ready", "1")
+        pane.reload()
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]).startswith("sends in ")
+
+
+async def test_a_label_error_stays_and_the_post_doesnt_move(paths, state, now, monkeypatch, tmp_path):
+    """N8: at 80 x 24 the note keeps its height with "corpus label not saved" in it, until a key press."""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x")
+    monkeypatch.setenv("TELENOTIFY_LABELS", str(blocker / "deep" / "review-labels.jsonl"))
+    add_pending(state, 90, "the next post", now - 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        split = app.query_one("#review-split")
+        y = split.region.y
+        assert "corpus label not saved" in note(app)
+        for change in ({"send_after": int(time.time()) - 1}, {"status": "sending"}, {"status": "sent"}):
+            set_row(state, 11, **change)
+            pane._countdown()
+            await pilot.pause()
+            assert split.region.y == y, (change, note(app))
+            assert "corpus label not saved" in note(app)
+        await pilot.press("space")
+        await pilot.pause()
+        assert "corpus label not saved" not in note(app)
+
+
+# ------------------------------------------------- review run 3
+
+async def test_a_second_bot_run_doesnt_switch_off_the_countdown(paths, state, config, binary, tmp_path):
+    """F1: a second `telenotify run` that can't start (here: no api_id) leaves the running bot's
+    state alone, so the screen still counts down."""
+    import asyncio
+    import shutil
+    real_state = state.parent / "state.sqlite3"           # the real run's state, beside the dry run's
+    shutil.copy(state, real_state)
+    app = TeleNotifyApp(dataclasses.replace(paths, state=real_state, dry_run=False, dry_run_flag=False),
+                        refresh_seconds=0)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "sent to the channel in" in note(app)
+        proc = await asyncio.create_subprocess_exec(str(binary), "run", f"--config:{config}",
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), 60)
+        assert proc.returncode != 0, out                              # it didn't start
+        pane.reload()
+        await pilot.pause()
+        assert "sent to the channel in" in note(app) and pane._counting(), note(app)
+    with Store(real_state) as st:
+        assert st.meta("sending_ready") == "1" and st.meta("connection") == "ready"
+
+
+async def test_history_widens_a_column_when_a_cell_grows(paths, state, now, monkeypatch):
+    """F3: "sends in 5 s" becomes "waits for bot", and a date gains its day after midnight."""
+    db = sqlite3.connect(state)
+    db.execute("DELETE FROM reviews")
+    db.commit()
+    db.close()
+    add_decided(state, 1, "sent", now - 100)
+    add_decided(state, 3, "to_send", now - 25, now + 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        decided_col, status_col = list(table.columns.values())[:2]
+        set_meta(state, "connection", "stopped")
+        pane.reload()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "waits for bot"
+        assert status_col.content_width >= len("waits for bot")
+        monkeypatch.setattr(review_mod, "when", lambda at: "11-21 23:59")   # the day has turned
+        pane.reload()
+        await pilot.pause()
+        assert decided_col.content_width >= len("11-21 23:59")
+
+
+@pytest.mark.parametrize("why,words", [
+    ("Have no write access to the chat (400)", "this account may not post in the channel"),
+    ("Need administrator rights in the channel chat (400)", "this account isn't an admin of the channel"),
+    ("Too Many Requests: retry after 30 (429)", "Telegram asked to wait 30 s before sending more"),
+    ("Message has protected content and can't be forwarded (400)",
+     "the source doesn't allow forwarding, and the post has no link to share"),
+    ("CHAT_WRITE_FORBIDDEN (403)", "this account may not post in the channel"),
+    ("no answer, after 60 s", "no answer, after 60 s"),     # whole (#142 writes a reason's "; " as ", ")
+])
+async def test_tdlibs_own_errors_are_put_in_plain_words(paths, state, why, words):
+    """F4."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET status = 'pending', send_after = NULL, reasons = reasons || ? "
+                   "WHERE msg_id = 11", ("; could not send: " + why,))
+        db.commit()
+        db.close()
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == f"#11: sending failed: {words}; it's back in the queue"
+
+
+async def test_a_resize_measures_the_kept_note_height_again(paths, state, now, monkeypatch, tmp_path):
+    """F6: label error at 200 x 50, then 80 x 24: the post doesn't move when the bot stops."""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x")
+    monkeypatch.setenv("TELENOTIFY_LABELS", str(blocker / "deep" / "review-labels.jsonl"))
+    add_pending(state, 90, "the next post", now - 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        await pilot.pause()
+        split = app.query_one("#review-split")
+        y = split.region.y
+        set_meta(state, "connection", "stopped")
+        pane._countdown()
+        pane.reload()
+        await pilot.pause()
+        assert split.region.y == y, note(app)
+        set_row(state, 11, status="sent")
+        set_meta(state, "connection", "ready")
+        pane._countdown()
+        await pilot.pause()
+        assert split.region.y == y, note(app)
+
+
+async def test_the_undo_wait_warning_survives_a_reload(paths, state, now, monkeypatch):
+    """F7: "only just come under the cursor" stays while an approval made here is watched."""
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    add_decided(state, 50, "discarded", now - 10)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("s")                              # #11 approved and watched
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("u")                              # too soon after #50 came under the cursor
+        await pilot.pause()
+        assert "only just come under the cursor" in note(app)
+        pane.reload()
+        pane._countdown()
+        await pilot.pause()
+        assert "only just come under the cursor" in note(app) and "#11 approved" in note(app)
+        assert status_of(state, 50) == "discarded"
+
+
+# ------------------------------------------------- review run 4
+
+async def test_a_log_out_says_a_new_login_is_needed(paths, state):
+    """R4-2: with a fresh heartbeat but connection "logged out", not "the bot is starting"."""
+    set_meta(state, "sending_ready", "0")
+    set_meta(state, "connection", "logged out")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert ("#11 approved. Not logged in to Telegram: it will be sent once you run telenotify login "
+                "and start the bot (u undoes)") in note(app)
+        assert "starting" not in note(app) and not pane._counting()
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]) == "needs login"
+
+
+async def test_a_failed_send_beside_a_label_error_never_moves_the_post(paths, state, now, monkeypatch):
+    """R4-1: the protected-content failure (the longest plain words) beside a label error fits in the
+    height kept for the note. With this label error, at a note 87 or 88 columns wide, the failure is
+    the tallest thing the note can say, a line taller than with 60 unbroken characters (what was
+    measured before): every screen width around those."""
+    def no_label(review, decision):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(review_mod, "write_label", no_label)
+    why = "; could not send: Message has protected content and can't be forwarded (400)"
+    add_pending(state, 90, "the next post", now - 5)
+    moved, note_widths = [], set()
+    for width in range(95, 131):
+        set_row(state, 11, status="pending", send_after=None, decided_at=None, reasons="x")
+        set_meta(state, "last_alive", str(int(time.time())))      # the bot runs all along
+        app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+        async with app.run_test(size=(width, 30)) as pilot:
+            await open_review(pilot)
+            pane = app.query_one(ReviewPane)
+            await pilot.press("s")
+            await pilot.pause()
+            note_widths.add(app.query_one("#review-note").content_region.width)
+            y = app.query_one("#review-split").region.y
+            db = sqlite3.connect(state)
+            db.execute("UPDATE reviews SET status = 'pending', send_after = NULL, reasons = reasons || ? "
+                       "WHERE msg_id = 11", (why,))
+            db.commit()
+            db.close()
+            pane._countdown()
+            await pilot.pause()
+            assert "source doesn't allow forwarding" in note(app) and "No space left on device" in note(app)
+            if app.query_one("#review-split").region.y != y:
+                moved.append(width)
+    assert {87, 88} <= note_widths                    # the widths where it matters were reached
+    assert moved == []
+
+
+# ------------------------------------------------- review run 5, and #142's reasons
+
+async def test_a_restart_after_a_log_out_says_starting_everywhere(paths, state):
+    """R5-1: connection "starting" with login_needed still set: the note and History agree."""
+    set_meta(state, "sending_ready", "0")
+    set_meta(state, "connection", "starting")
+    set_meta(state, "login_needed", "1")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "The bot is starting" in note(app)
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]) == "waits for bot"
+
+
+@pytest.mark.parametrize("before,after,expected", [
+    # #142's withProblem: a second failure of the same kind is counted, not added again
+    ("x; could not send: Have no write access to the chat (400)",
+     "x; could not send (2 tries): Have no write access to the chat (400)",
+     "#11: sending failed: this account may not post in the channel; it's back in the queue"),
+    # folded into the live post's own error
+    ("x; error: Too Many Requests: retry after 30 (429)", "x; error (2 tries): Too Many Requests: retry after 30 (429)",
+     "#11: sending failed: Telegram asked to wait 30 s before sending more; it's back in the queue"),
+    # held back on purpose (#80), as the bot words it
+    ("x", ("x; not posted: it isn't from a public channel (it's a private or members-only chat, or a group), "
+           "and only public channels' posts are republished in your public channel (#80)."),
+     ("#11: not sent: it isn't from a public channel, so it can't be republished; post it yourself or discard it; "
+      "it's back in the queue")),
+])
+async def test_142s_counted_and_held_back_reasons_in_plain_words(paths, state, before, after, expected):
+    set_row(state, 11, reasons=before)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, status="pending", send_after=None, reasons=after)
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == expected
+
+
+async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
+    """Not timed by the wall clock (a loaded CI runner took longer than the wait itself): the
+    wait is long, and its end is made by moving when the post appeared back past it."""
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 30.0)
+    add_pending(state, 7, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 60                                        # the first post has been read
+        pane._settled()
+        await pilot.pause()
+        assert not app.query_one("#btn-send", Button).disabled
+        await pilot.press("n")                                      # a new post appears
+        assert app.query_one("#btn-send", Button).disabled          # greyed while s / d wait
+        for action in ("send", "keep", "discard"):                  # the footer's keys too
+            assert pane.check_action(action, ()) is None
+        await pilot.press("s")
+        assert "only just appeared" in note(app) and status_of(state, 7) == "pending"
+        assert app.query_one("#btn-discard", Button).disabled
+        assert not app.query_one("#btn-next", Button).disabled
+        pane._shown_at -= 60                                        # the wait is over
+        pane._settled()                                             # what its timer does then
+        await pilot.pause()
+        assert not app.query_one("#btn-send", Button).disabled
+        assert not app.query_one("#btn-discard", Button).disabled
+        assert pane.check_action("send", ()) is True
+
+
+async def test_a_post_interrupted_twice_is_said_both_times(paths, state):
+    """Review run 6: the second interruption is counted ("(2 tries)"), still said as one."""
+    stopped = "the bot stopped while sending it: check the channel before sending it again"
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        for reasons in (f"x; {stopped}", f"x; {stopped} (2 tries)"):
+            await pilot.press("s")
+            await pilot.pause()
+            set_row(state, 11, status="sending")
+            pane._countdown()
+            set_row(state, 11, status="pending", send_after=None, reasons=reasons)
+            pane._countdown()
+            await pilot.pause()
+            assert note(app) == "#11: the bot stopped while sending; check the channel before sending it again"
+            pane.reload()
+            await pilot.pause()
+            app.query_one("#review-list", OptionList).highlighted = 0
+            await pilot.pause()
 
 
 # ------------------------------------------------- odd data in the state file

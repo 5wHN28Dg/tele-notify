@@ -52,7 +52,9 @@ LIST_KEYS: dict[str, str] = {
     "extra_not_a_job": "More words that show a post is not a job (courses, ads...)",
     "extra_job_sites": "More career sites whose job pages carry a schema.org JobPosting",
 }
-INT_KEYS: dict[str, int] = {"max_experience_years": 1, "alert_after_minutes": 10}
+INT_KEYS: dict[str, int] = {"max_experience_years": 1, "alert_after_minutes": 10, "undo_seconds": 30}
+# the longest undo window for an approved review post, as maxUndoSeconds in src/telenotify/config.nim
+MAX_UNDO_SECONDS = 600
 BOOL_KEYS: dict[str, bool] = {"publish_when_unsure": False, "dry_run": False, "alerts": True,
                               "notify_published": True, "notify_review": True}
 STR_KEYS: dict[str, str] = {"data_dir": "", "tdlib_path": ""}
@@ -62,6 +64,15 @@ SECRET_KEYS = ("api_id", "api_hash")
 TEMP_LEFT_OUT = (*SECRET_KEYS, "notify_bot_token")
 
 NOTIFY_KEYS = ("notify_published", "notify_review")
+
+
+def undo_seconds(cfg: dict) -> int:
+    """How long an approved review post waits before it's sent (`undo_seconds`), as the bot
+    reads it: the default (30) when it's missing or not a whole number from 0 to MAX_UNDO_SECONDS."""
+    v = cfg.get("undo_seconds", INT_KEYS["undo_seconds"])
+    if _is_int64(v) and 0 <= v <= MAX_UNDO_SECONDS:
+        return v
+    return INT_KEYS["undo_seconds"]
 
 
 def notify_note(cfg: dict, dry_run_flag: bool = False) -> str:
@@ -96,7 +107,7 @@ SECTIONS: list[tuple[str, str, list[str]]] = [
                                   "extra_job_signals", "extra_not_a_job", "extra_job_sites",
                                   "max_experience_years", "publish_when_unsure"]),
     ("chats", "Chats", list(CHAT_KEYS)),
-    ("bot", "Bot", ["dry_run", "alerts", "alert_after_minutes", "notify_published", "notify_review",
+    ("bot", "Bot", ["dry_run", "alerts", "alert_after_minutes", "undo_seconds", "notify_published", "notify_review",
                      "data_dir", "tdlib_path"]),
 ]
 
@@ -291,6 +302,9 @@ def validate(cfg: dict) -> list[Problem]:
         v = cfg.get(key, MISSING)
         if v is not MISSING and (not _is_int64(v) or v < 0):
             p.append(Problem(key, "must be a whole number, 0 or more", True))
+    v = cfg.get("undo_seconds", MISSING)
+    if v is not MISSING and _is_int64(v) and v > MAX_UNDO_SECONDS:
+        p.append(Problem("undo_seconds", f"must be {MAX_UNDO_SECONDS} seconds or fewer", True))
     for key in BOOL_KEYS:
         v = cfg.get(key, MISSING)
         if v is not MISSING and not isinstance(v, bool):

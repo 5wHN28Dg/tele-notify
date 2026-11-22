@@ -103,7 +103,12 @@ const
   unclear = "شركة في البصرة تعلن عن حاجتها الى مهندس كهرباء\nارسال السيرة الذاتية"
   bad = "مطلوب محاسب خبرة 5 سنوات في بغداد"
 
+proc afterWindow(): int64 =
+  ## A time when every post approved so far is past its undo window (#62).
+  getTime().toUnix + undoWindowSeconds + 1
+
 var n = 0
+proc statePathOf(i: int): string = getTempDir() / ("tn-listener-" & $i) / "state.sqlite3"
 proc setup(f: FakeTg, dryRun = false, fallback = ""): (Listener, State) =
   inc n
   let dir = getTempDir() / ("tn-listener-" & $n)
@@ -285,7 +290,7 @@ suite "listener":
     # queued while the chat was private: its stored link is a t.me/c/ one
     st.addReview(-2, 8, "chat2", unclear & " على الواتساب", "no level", "", "https://t.me/c/2/8")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.texts.len == 1
     check f.texts[0][1] == "ملخص آلي لإعلان لا يمكن إعادة توجيهه\nالوظيفة: غير محددة\n" &
                            "المكان: \u2068البصرة\u2069\nالتقديم: عبر واتساب\nالمصدر: \u2068chat2\u2069\n" &
@@ -298,7 +303,7 @@ suite "listener":
     let (l, st) = setup(f, fallback = "summary")
     st.addReview(-2, 8, "chat2", unclear & " على الواتساب", "no level", "مهندس كهرباء", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.texts.len == 0 and f.forwarded.len == 0
     let r = st.pendingReviews()
     check r.len == 1 and tail(privateHeldBack) in r[0].reasons
@@ -314,7 +319,7 @@ suite "listener":
     waitFor l.bootstrap()                                # live: held back, to review
     for _ in 1 .. 3:
       check st.decideReview(st.pendingReviews()[0].id, "to_send")
-      waitFor l.sendApproved()                           # bounces back each time
+      waitFor l.sendApproved(afterWindow())                           # bounces back each time
     let r = st.pendingReviews()
     check f.texts.len == 0 and r.len == 1 and r[0].reasons.count(tail(privateHeldBack)) == 1
     check r[0].reasons.endsWith("not posted (4 tries): " & tail(privateHeldBack))   # held live, then 3 approvals
@@ -329,7 +334,7 @@ suite "listener":
     for _ in 1 .. 2:
       for x in st.pendingReviews():
         if x.msgId == 9: check st.decideReview(x.id, "to_send")
-      waitFor l.sendApproved()
+      waitFor l.sendApproved(afterWindow())
     for x in st.pendingReviews():
       if x.msgId == 9:
         check x.reasons.count(tail(emptyHeldBack)) == 1 and "could not send" notin x.reasons
@@ -343,7 +348,7 @@ suite "listener":
     let (l, st) = setup(f, fallback = "summary")
     st.addReview(-2, 8, "chat2", good & " على الواتساب", "no level", "مهندس كهرباء", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.texts.len == 0
     check st.pendingReviews()[0].reasons == "no level; " & problemText(privateHeldBack)
     # R6c: held live (private), then a public channel whose link fails: one reason after the other
@@ -356,7 +361,7 @@ suite "listener":
     g.access[-2] = ChatAccess(title: "G", status: "ok", public: true, channel: true)
     g.linkFails = true
     check sm.decideReview(sm.pendingReviews()[0].id, "to_send")
-    waitFor m.sendApproved()
+    waitFor m.sendApproved(afterWindow())
     let r = sm.pendingReviews()[0].reasons
     check ".; " notin r and "could not send: not posted" notin r
     check r.endsWith(problemText(privateHeldBack) & "; could not send: no link to the post from Telegram " &
@@ -370,7 +375,7 @@ suite "listener":
     st.addReview(-2, 8, "chat2", good & " على الواتساب", "no level", "مهندس كهرباء", "")
     for _ in 1 .. 2:
       check st.decideReview(st.pendingReviews()[0].id, "to_send")
-      waitFor l.sendApproved()
+      waitFor l.sendApproved(afterWindow())
     let r = st.pendingReviews()[0].reasons
     check "()" notin r
     check r == "no level; could not send (2 tries): could not tell whether the chat is public, so no " &
@@ -384,7 +389,7 @@ suite "listener":
     let (m, sm) = setup(g, fallback = "summary")
     sm.addReview(-2, 8, "chat2", good & " على الواتساب", "no level", "مهندس كهرباء", "")
     check sm.decideReview(sm.pendingReviews()[0].id, "to_send")
-    waitFor m.sendApproved()
+    waitFor m.sendApproved(afterWindow())
     check sm.pendingReviews()[0].reasons == "no level; could not send: no link to the post from Telegram " &
                                             "(unknown error), so no summary was sent. Approve it again to retry"
 
@@ -395,7 +400,7 @@ suite "listener":
     let (l, st) = setup(f, fallback = "summary")
     st.addReview(-2, 8, "chat2", unclear, "no level", "", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.texts.len == 0
     let r = st.pendingReviews()
     check r.len == 1 and tail(emptyHeldBack) in r[0].reasons
@@ -602,11 +607,104 @@ suite "listener":
     st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "")
     st.addReview(-2, 8, "chat2", unclear, "no level", "مهندس كهرباء", "")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.forwarded == @[(-1'i64, 7'i64)]
     check f.texts.len == 1 and "post link: https://t.me/c/2/8" in f.texts[0][1]   # link fetched now
     check st.approvedReviews().len == 0 and st.pendingReviews().len == 0
     check duplicateOf(unclear, st.recentPublished()) != ""
+
+  test "an approved post waits out its 30 s undo window before it is sent (#62)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "")
+    let t0 = getTime().toUnix
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    let r = st.approvedReviews()
+    check r.len == 1 and r[0].sendAfter >= t0 + undoWindowSeconds
+    waitFor l.sendApproved(r[0].sendAfter - 1)        # the window is still open
+    check f.forwarded.len == 0 and st.approvedReviews().len == 1
+    waitFor l.sendApproved(r[0].sendAfter)            # it's over
+    check f.forwarded == @[(-1'i64, 7'i64)] and st.approvedReviews().len == 0
+
+  test "undo racing the send: the post being sent stays sent, one undone in time is never sent (#62, #76)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let path = statePathOf(n)
+    st.addReview(-1, 7, "chat1", unclear, "no level", "role", "")
+    st.addReview(-1, 8, "chat1", unclear & " 2", "no level", "role", "")
+    var ids: seq[int64]
+    for r in st.pendingReviews():
+      check st.decideReview(r.id, "to_send")
+      ids.add r.id
+    # the terminal screen, another process, presses u on both while the bot
+    # is forwarding the first: its undo is one UPDATE on 'to_send' (store.py)
+    var undone = new seq[string]
+    f.afterForward = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        if undone[].len > 0: return
+        let screen = open(path, "", "", "")
+        defer: screen.close()
+        for id in ids:
+          screen.exec(sql"""UPDATE reviews SET status = 'pending', decided_at = NULL, send_after = NULL
+                            WHERE id = ? AND status = 'to_send'""", id)
+          undone[].add screen.getValue(sql"SELECT changes()")
+    waitFor l.sendApproved(afterWindow())
+    check undone[] == @["0", "1"]                      # the first was claimed; the second wasn't yet
+    check f.forwarded == @[(-1'i64, 7'i64)]            # the undone one never went out
+    let db = open(path, "", "", "")
+    defer: db.close()
+    check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[0]) == "sent"
+    check db.getValue(sql"SELECT status FROM reviews WHERE id = ?", ids[1]) == "pending"
+
+  test "the worker says it sends only while it runs (sending_ready, review run 2)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    st.setMeta("sending_ready", "0")
+    let stop = new bool
+    l.stop = stop
+    let running = l.worker()
+    waitFor sleepAsync(50)
+    check st.getMeta("sending_ready") == "1"
+    stop[] = true
+    waitFor running
+    check st.getMeta("sending_ready") == "0"
+
+  test "the heartbeat says again that it sends, after a second run wrote otherwise (review run 3, F1)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let stop = new bool
+    l.stop = stop
+    let running = l.worker()
+    waitFor sleepAsync(50)
+    st.setMeta("sending_ready", "0")      # a second `telenotify run` that TDLib then refused
+    l.beat()
+    check st.getMeta("sending_ready") == "1" and st.botSending()
+    stop[] = true
+    waitFor running
+    l.beat()                              # stopped: it doesn't claim to send
+    check st.getMeta("sending_ready") == "0"
+
+  test "a sent post that can't be marked sent is logged (review run 1, C2)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let path = statePathOf(n)
+    let lines = new seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines[].add line
+    st.addReview(-1, 7, "chat1", unclear, "no level", "role", "")
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    # a second `telenotify run` on the same file resets the post while this one sends it
+    f.afterForward = proc () {.closure, gcsafe.} =
+      {.cast(gcsafe).}:
+        let other = open(path, "", "", "")
+        defer: other.close()
+        other.exec(sql"UPDATE reviews SET status = 'pending' WHERE status = 'sending'")
+    waitFor l.sendApproved(afterWindow())
+    check f.forwarded == @[(-1'i64, 7'i64)]
+    var logged = false
+    for line in lines[]:
+      if "could not be marked sent" in line: logged = true
+    check logged
 
   test "an approved post that can't be sent goes back to the queue with the reason":
     let f = FakeTg()
@@ -615,7 +713,7 @@ suite "listener":
     let (l, st) = setup(f)
     st.addReview(-2, 8, "chat2", unclear, "no level", "role", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     let r = st.pendingReviews()
     check r.len == 1 and "could not send: no link" in r[0].reasons
 
@@ -786,7 +884,7 @@ suite "listener":
     let r = st.pendingReviews()
     check r.len == 1 and r[0].albumIds == @[80'i64, 81]
     check st.decideReview(r[0].id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     check f.forwarded == @[(-1'i64, 80'i64), (-1'i64, 81'i64)]
 
   test "a message rejected before fingerprints existed is not judged again on an edit":
@@ -1190,7 +1288,7 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     st.addReview(-1, 7, "chat1", unclear, "no level", "مهندس كهرباء", "https://t.me/c/1/7")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     waitFor l.flushNotifications()
     check sent[].len == 1 and sent[0].startsWith("✅ Published after your review") and "https://t.me/c/1/7" in sent[0]
 
@@ -1202,7 +1300,7 @@ suite "notifications through your own bot (#122)":
     l.notify = recorder(sent)
     st.addReview(-1, 8, "chat1", unclear, "no level", "مهندس كهرباء", "")
     for r in st.pendingReviews(): check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     waitFor l.flushNotifications()
     check f.texts.len == 1 and "https://t.me/c/1/8" in f.texts[0][1]
     check sent[].len == 1 and "https://t.me/c/1/8" in sent[0]
@@ -1239,7 +1337,7 @@ suite "notifications through your own bot (#122)":
     st.addReview(-1, 7, "chat1", unclear, "no level", "role", "https://t.me/c/1/7")
     for r in st.pendingReviews():
       if r.msgId == 7: check st.decideReview(r.id, "to_send")
-    waitFor l.sendApproved()
+    waitFor l.sendApproved(afterWindow())
     waitFor l.flushNotifications()
     check sent[] == @["📥 Backlog read: 1 for review\n" & reviewHint,
                       "🔎 For review: \u2068مهندس كهرباء\u2069\nchat1\nhttps://t.me/c/1/21\n" & reviewHint]

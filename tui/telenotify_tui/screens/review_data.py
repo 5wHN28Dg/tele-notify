@@ -18,7 +18,9 @@ from pathlib import Path
 
 from ..store import Review, Store
 
-DECIDED = ("to_send", "sent", "discarded", "kept")
+DECIDED = ("to_send", "sending", "sent", "discarded", "kept")
+# decisions History can take back: anything the bot hasn't claimed to send (#76)
+UNDOABLE = ("to_send", "discarded", "kept")
 # "kept" is a true match that must not be sent again: the same label as send
 LABELS = {"to_send": "TRUE", "kept": "TRUE", "discarded": "FALSE"}
 
@@ -96,7 +98,7 @@ def _rewrite(path: Path, lid: str, line: bytes | None) -> None:
 
 
 def history(store: Store, limit: int = 50) -> list[Review]:
-    """Recently decided reviews (approved, sent, kept, discarded), newest decision first."""
+    """Recently decided reviews (approved, being sent, sent, kept, discarded), newest decision first."""
     rows = [r for status in DECIDED for r in store.reviews(status)]
     rows.sort(key=lambda r: (r.decided_at or r.at, r.id), reverse=True)
     return rows[:limit]

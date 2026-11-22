@@ -20,7 +20,8 @@
 ## * **Review posts stay in tele-notify's review queue** (`telenotify
 ##   review`), not in Saved Messages, as you wanted. `review` only writes
 ##   your decision to the database (so it works while the bot runs); the
-##   running bot sends the posts you approved (`sendApproved`).
+##   running bot sends the posts you approved (`sendApproved`) once their
+##   30-second undo window is over (#62).
 ## * **Dry run** (`--dry-run` or `"dry_run": true`): judge and record
 ##   everything, but forward nothing and mark nothing read. That's stage 4:
 ##   running next to the Python bot to compare.
@@ -42,6 +43,7 @@ import config, classify, gather, fetch, telegram, state, dedup, boards, notify, 
 
 type
   Listener* = ref object
+    sendingReady*: bool        ## the worker runs: approved posts are sent (`sending_ready`, #62)
     cfg*: Config
     tg*: Telegram
     state*: State
@@ -637,11 +639,16 @@ proc retryFailedChats*(l: Listener) {.async.} =
     finally: l.retrying = false
     l.tellSummary()
 
-proc sendApproved*(l: Listener) {.async.} =
-  ## Send the posts you approved in `telenotify review`. A failure puts the
-  ## post back in the review queue, with the reason.
-  for r in l.state.approvedReviews():
+proc sendApproved*(l: Listener, at = 0'i64) {.async.} =
+  ## Send the posts you approved (`telenotify review`, the terminal screen)
+  ## whose undo window is over at `at` (0: now). Each is claimed first
+  ## (`claimReview`): one you undid meanwhile is skipped, and one being sent
+  ## can't be undone any more. A failure puts the post back in the review
+  ## queue, with the reason.
+  let at = if at == 0: getTime().toUnix else: at
+  for r in l.state.dueReviews(at):
     if l.stop[]: return
+    if not l.state.claimReview(r.id, at): continue   # undone since it was listed
     var link = r.link
     try:
       if not await l.tg.forward(l.cfg.targetChat, r.chatId, r.albumIds):
@@ -651,7 +658,10 @@ proc sendApproved*(l: Listener) {.async.} =
         link = fallback.link
         await l.tg.sendText(l.cfg.targetChat, fallback.text)
       l.state.addPublished(r.chatId, r.msgId, r.text)
-      discard l.state.decideReview(r.id, "sent", fromStatus = "to_send")
+      if not l.state.decideReview(r.id, "sent", fromStatus = "sending"):
+        # only another telenotify run on the same state file could have moved it
+        l.say &"   {r.chatTitle} #{r.msgId} was sent, but could not be marked sent: it is no longer " &
+              "'sending' (is a second telenotify run using this state file?)"
       l.say &"✅ {r.chatTitle} #{r.msgId}: sent after review"
       if l.cfg.notifyPublished:
         l.tell "✅ Published after your review: " & isolated(r.role) & "\n" &
@@ -667,9 +677,22 @@ proc sendApproved*(l: Listener) {.async.} =
       try: l.state.reopenReview(r.id, e.msg)
       except CatchableError: discard
 
+proc writeSendingReady*(l: Listener) =
+  ## `sending_ready` as this bot is: "1" while its worker runs (never in a dry
+  ## run). Written by the worker and again by every heartbeat, so a second
+  ## `telenotify run` on the same file can't leave it wrong for long.
+  try: l.state.setMeta("sending_ready", if l.sendingReady and not l.dryRun: "1" else: "0")
+  except CatchableError as e: l.say "   could not update the state database: " & e.msg
+
 proc worker*(l: Listener) {.async.} =
   ## Process live messages as they arrive, and approved reviews every few
-  ## seconds, until `stop` is set.
+  ## seconds, until `stop` is set. While it runs, the state's `sending_ready`
+  ## is "1": the terminal screen promises a send only then (#62).
+  proc ready(on: bool) =
+    l.sendingReady = on
+    l.writeSendingReady()
+  ready(true)
+  defer: ready(false)
   var ticks = 0
   while not l.stop[]:
     if l.queue.len > 0: await l.processQueue()
@@ -696,11 +719,16 @@ proc forgetOldTexts*(l: Listener) =
   try: l.state.forgetOldTexts(l.cfg.keepTextDays)
   except CatchableError as e: l.say "   could not clear old post texts: " & e.msg
 
+proc beat*(l: Listener) =
+  ## One heartbeat: "alive now", and whether approved posts are being sent.
+  try: l.state.setMeta("last_alive", $getTime().toUnix)
+  except CatchableError as e: l.say "   heartbeat: " & e.msg
+  l.writeSendingReady()
+
 proc heartbeat*(l: Listener) {.async.} =
   var lastCleanup = 0'i64
   while not l.stop[]:
-    try: l.state.setMeta("last_alive", $getTime().toUnix)
-    except CatchableError as e: l.say "   heartbeat: " & e.msg
+    l.beat()
     if getTime().toUnix - lastCleanup >= 86_400:   # at start, then daily
       lastCleanup = getTime().toUnix
       l.forgetOldTexts()

@@ -343,3 +343,19 @@ def test_a_dry_run_started_with_the_flag_sends_no_notifications():
     assert sd.notify_note(cfg) == ""
     assert sd.notify_note(cfg, dry_run_flag=True) == "The dry run shown here sends none"   # the real bot may send
     assert sd.notify_note(cfg | {"dry_run": True}, dry_run_flag=True) == "Sends nothing now: a dry run"
+
+
+# ------------------------------------------------- undo_seconds (#62, review run 1: A21)
+
+@pytest.mark.parametrize("value,ok", [(0, True), (30, True), (600, True), (601, False), (-1, False),
+                                      (True, False), ("30", False), (1.5, False)])
+def test_undo_seconds_is_checked_as_the_bot_checks_it(value, ok):
+    cfg = base_cfg()
+    cfg["undo_seconds"] = value
+    assert ("undo_seconds" in keys_of(sd.validate(cfg), error=True)) is not ok
+    assert sd.undo_seconds(cfg) == (value if ok else 30)
+
+
+def test_undo_seconds_defaults_to_30_and_is_in_the_bot_section():
+    assert sd.undo_seconds({}) == 30 and sd.DEFAULTS["undo_seconds"] == 30
+    assert "undo_seconds" in {s: k for s, _, k in sd.SECTIONS}["bot"]

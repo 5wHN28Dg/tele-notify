@@ -25,7 +25,7 @@ CREATE INDEX processed_chat_album ON processed (chat_id, album_id, msg_id);
 CREATE TABLE published (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, text TEXT, at INTEGER);
 CREATE TABLE reviews (id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER, chat_title TEXT, text TEXT,
   reasons TEXT, role TEXT, link TEXT, status TEXT DEFAULT 'pending', at INTEGER, decided_at INTEGER,
-  album_ids TEXT, UNIQUE (chat_id, msg_id));
+  album_ids TEXT, send_after INTEGER, UNIQUE (chat_id, msg_id));
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE alerts (id INTEGER PRIMARY KEY, at INTEGER, text TEXT);
 CREATE TABLE chats (id INTEGER PRIMARY KEY, title TEXT, kind TEXT, watched INTEGER, status TEXT,
@@ -54,7 +54,7 @@ def fill(db: sqlite3.Connection, now: int) -> None:
                (now - 7200,))
     db.executemany("INSERT INTO meta VALUES (?, ?)",
                    [("last_alive", str(now - 30)), ("started_at", str(now - 3600)), ("mode", "dry-run"),
-                    ("connection", "ready")])
+                    ("connection", "ready"), ("sending_ready", "1")])
     db.execute("INSERT INTO alerts (at, text) VALUES (?, ?)", (now - 600, "no connection to Telegram for 12m. Back now."))
     db.executemany("INSERT INTO chats VALUES (?, ?, ?, ?, ?, ?)",
                    [(-1, "Basra Jobs", "channel", 1, "ok", now), (-2, "Iraq Jobs", "channel", 1, "ok", now),
@@ -171,3 +171,18 @@ def bidi_default():
     rtl.set_enabled(True)
     yield
     rtl.set_enabled(was)
+
+
+@pytest.fixture
+def decided_states(state: Path, now: int) -> Path:
+    """Decided reviews in each state the undo window brings (#62): an approval counting down,
+    one the bot is sending, and one approved before the window existed (no send_after)."""
+    db = sqlite3.connect(state)
+    rows = [(41, "to_send", now - 5, now + 25), (42, "sending", now - 40, now - 10), (43, "to_send", now - 60, None)]
+    for msg_id, status, decided_at, send_after in rows:
+        db.execute("""INSERT INTO reviews (chat_id, msg_id, chat_title, text, reasons, role, link, status, at,
+                      decided_at, send_after) VALUES (-2, ?, 'Iraq Jobs', ?, 'unclear place', 'it support', '',
+                      ?, ?, ?, ?)""", (msg_id, f"post {msg_id}", status, decided_at - 100, decided_at, send_after))
+    db.commit()
+    db.close()
+    return state
