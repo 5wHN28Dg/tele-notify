@@ -58,9 +58,10 @@
 ##   source chat won't let a matched post be forwarded (#80). "link": the
 ##   old "match: <role>" and "post link: <link>" lines. "summary": a short
 ##   plain-text summary of the post in Arabic, marked automatic (role,
-##   place, how to apply); a public source is named, with the post's link,
-##   a private one is only "a private chat" (see summary.nim). Anything
-##   else is refused.
+##   place, how to apply, the public chat's name and the post's link), for
+##   public chats only; a blocked post from a private or members-only chat
+##   goes to the review queue instead (see summary.nim). Anything else is
+##   refused.
 ##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the

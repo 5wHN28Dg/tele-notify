@@ -4,16 +4,18 @@
 ## The old fallback was "match: <role>" and "post link: <link>": for a
 ## private source, the channel's readers can't open the link. The summary
 ## says what the job is, where, how to apply and where it came from, so it
-## helps even then. Owner's decisions: "Post its own summary" (#135,
-## 2026-11-21); "Summary for all, no chat name" and "Arabic" labels (#135,
-## 2026-11-22).
+## helps even then. Owner's decisions (#135): "Post its own summary"
+## (2026-11-21); "Arabic" labels and "Public only; private to review
+## (Recommended)" (2026-11-22): only a public chat's posts are summarized;
+## a blocked post from a private or members-only chat goes to the review
+## queue instead (listener.nim), and nothing is posted.
 ##
 ##   ملخص آلي لإعلان لا يمكن إعادة توجيهه
 ##   الوظيفة: electrical engineer
 ##   المكان: البصرة
 ##   التقديم: عبر LinkedIn، بالبريد الإلكتروني
 ##   المصدر: Example Jobs
-##   رابط المنشور: https://t.me/examplejobs/123     (public chats only)
+##   رابط المنشور: https://t.me/examplejobs/123
 ##
 ## Rules:
 ## * **Labelled automatic.** The first line says it's an automatic summary
@@ -24,14 +26,14 @@
 ##   /commands, web and e-mail addresses, `ton://` links, 10:30 media
 ##   timestamps, bank card numbers. So every value is defused
 ##   (`plainField`): control, invisible and direction characters are
-##   dropped (ZWNJ and ZWJ are kept: Persian and Kurdish spelling, emoji),
-##   line breaks become spaces, a space goes after "@ # $ / :" and after a
-##   dot that isn't followed by a space or another dot, and a run of 12 or
-##   more digits (spaces and dashes between them included) is regrouped
-##   in fours joined by "·". The only link is the post's own, and only for
-##   a public chat.
-## * **A private chat is never named**: "محادثة خاصة" (a private chat),
-##   and no link.
+##   dropped, and so are letters that look blank (ZWNJ and ZWJ are kept:
+##   Persian and Kurdish spelling, emoji); line breaks become spaces; a
+##   colon between digits becomes "∶" (looks the same, "10∶30"); a space
+##   goes after "@ # $ / :" and after a dot that isn't followed by a space
+##   or another dot; and in a run of 12 or more digits (with any spaces and
+##   dashes between groups) each separator gets a "·", each number kept as
+##   it was ("4111 · 1111 · …"; one group of 12+ digits is split in fours).
+##   The only link is the post's own.
 ## * **Nothing is copied from the post itself.** The role and the place
 ##   are the config's keywords the filter matched (`classify`), as written
 ##   there (Arabic stays Arabic). A place the filter found mixed (Basra and
@@ -57,7 +59,6 @@ const
   automaticLine* = "ملخص آلي لإعلان لا يمكن إعادة توجيهه"
     ## the first line: an automatic summary of an advert that can't be forwarded
   linkLabel* = "رابط المنشور: "   ## the last line, when there is a link (noteOtherBot reads it)
-  privateSource* = "محادثة خاصة"   ## "a private chat": never its name
 
 proc isolate(s: string): string =
   ## First strong isolate .. pop directional isolate: the value keeps its own
@@ -66,42 +67,70 @@ proc isolate(s: string): string =
 
 proc dropped(c: int): bool =
   ## Characters a value never keeps: invisible and direction controls (they
-  ## could end the isolation early or reorder the line), tag characters and
-  ## interlinear annotation marks. ZWNJ (U+200C) and ZWJ (U+200D) stay:
-  ## Persian and Kurdish words and emoji sequences need them.
+  ## could end the isolation early or reorder the line), tag characters,
+  ## interlinear annotation marks, and letters that look blank (Hangul
+  ## fillers, the Braille blank), which could make a name look empty. ZWNJ
+  ## (U+200C) and ZWJ (U+200D) stay: Persian and Kurdish words and emoji
+  ## sequences need them.
   c == 0x200B or c in 0x200E..0x200F or c in 0x202A..0x202E or c in 0x2060..0x206F or
     c == 0xFEFF or c == 0x00AD or c == 0x061C or c == 0x180E or
-    c in 0xFFF9..0xFFFB or c in 0xE0000..0xE007F
+    c in 0xFFF9..0xFFFB or c in 0xE0000..0xE007F or
+    c in [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x17B4, 0x17B5]
 
 proc breaksLine(c: int): bool =
   c < 0x20 or c in 0x7F..0x9F or c == 0x2028 or c == 0x2029
 
 proc isDigit(r: Rune): bool = int(r) < 128 and char(int(r)) in Digits
 
-proc spacer(r: Rune): bool = r == Rune(' ') or r == Rune('-')
+proc separator(r: Rune): bool =
+  ## What TDLib accepts between the digits of a bank card number.
+  r == Rune(' ') or r == Rune('-')
 
-proc regroupDigits(rs: seq[Rune]): seq[Rune] =
-  ## A run of 12 or more digits, with single spaces or dashes between them
-  ## ("4111 1111 1111 1111"), as fours joined by "·": TDLib finds 13 to 19
-  ## digits as a bank card even with spaces or dashes, never with "·".
+const middleDot = Rune(0x00B7)   ## "·": TDLib never takes it as part of a card number
+
+proc defuseDigits(rs: seq[Rune]): seq[Rune] =
+  ## TDLib marks 12 or more digits as a bank card number, also with any
+  ## spaces and dashes between groups ("4111 - 1111 -- 1111 1111"). Such a
+  ## run is kept, each number as it was, but its separators get a "·"
+  ## ("4111 · 1111 · …"); one group of 12 or more digits is split in fours
+  ## by "·". Shorter runs ("2026", "0770 000 0000") are left alone, and
+  ## separate numbers are never joined.
   var i = 0
   while i < rs.len:
     if not rs[i].isDigit:
       result.add rs[i]
       inc i
       continue
+    # groups of digits joined by runs of spaces and dashes
+    var groups: seq[seq[Rune]]
+    var seps: seq[seq[Rune]]
     var j = i
-    var digits: seq[Rune]
-    while j < rs.len and (rs[j].isDigit or (rs[j].spacer and j + 1 < rs.len and rs[j + 1].isDigit and
-                                            j > i)):
-      if rs[j].isDigit: digits.add rs[j]
-      inc j
-    if digits.len >= 12:
-      for k, d in digits:
-        if k > 0 and k mod 4 == 0: result.add Rune(0x00B7)
-        result.add d
-    else:
-      for k in i ..< j: result.add rs[k]
+    while true:
+      var g: seq[Rune]
+      while j < rs.len and rs[j].isDigit:
+        g.add rs[j]
+        inc j
+      groups.add g
+      var k = j
+      while k < rs.len and rs[k].separator: inc k
+      if k > j and k < rs.len and rs[k].isDigit:
+        seps.add rs[j ..< k]
+        j = k
+      else: break
+    var total = 0
+    for g in groups: total += g.len
+    for n, g in groups:
+      if n > 0:
+        if total >= 12:
+          let sep = seps[n - 1]
+          if Rune(' ') in sep: result.add @[Rune(' '), middleDot, Rune(' ')]
+          else: result.add middleDot
+        else: result.add seps[n - 1]
+      if g.len >= 12:
+        for k, d in g:
+          if k > 0 and k mod 4 == 0: result.add middleDot
+          result.add d
+      else: result.add g
     i = j
 
 proc plainField*(s: string, maxRunes: int): string =
@@ -121,7 +150,11 @@ proc plainField*(s: string, maxRunes: int): string =
     rs.add r
     space = false
   while rs.len > 0 and rs[^1] == Rune(' '): rs.setLen rs.len - 1
-  rs = regroupDigits(rs)
+  rs = defuseDigits(rs)
+  # "10:30" is a media timestamp to TDLib: a colon between digits becomes
+  # "∶" (U+2236, ratio), which looks the same
+  for i in 1 ..< max(rs.len - 1, 1):
+    if rs[i] == Rune(':') and rs[i - 1].isDigit and rs[i + 1].isDigit: rs[i] = Rune(0x2236)
   # defuse what Telegram would make an entity by itself: a space after a
   # sigil, and after a dot that isn't followed by a space or another dot
   var cut: seq[Rune]
@@ -180,22 +213,19 @@ proc applyMethods*(text: string, jobSites: openArray[string] = defaultJobPosting
 # ------------------------------------------------------------------ the text
 
 proc summaryText*(role, place: string, apply: seq[string], title, link: string): string =
-  ## The summary as sent. `link`: the post's link, only for a public chat;
-  ## "" for a private one (its link only opens for members), and then
-  ## `title` isn't shown either: the source is "محادثة خاصة".
+  ## The summary as sent, for a public chat only: `title` is its name and
+  ## `link` the post's link (the listener never summarizes a private or
+  ## members-only chat's post: it goes to review instead, #135).
   let r = plainField(role, maxRoleRunes)
   var lines = @[automaticLine,
                 "الوظيفة: " & (if r == "": "غير محددة" else: isolate(r))]   # "not named"
   let p = plainField(place, maxPlaceRunes)
   if p != "": lines.add "المكان: " & isolate(p)
   if apply.len > 0: lines.add "التقديم: " & apply.join("، ")
-  elif link != "": lines.add "التقديم: التفاصيل في المنشور"               # details in the post
-  if link != "":
-    let t = plainField(title, maxTitleRunes)
-    lines.add "المصدر: " & (if t == "": "قناة عامة" else: isolate(t))   # "a public channel"
-    lines.add linkLabel & link
-  else:
-    lines.add "المصدر: " & privateSource
+  else: lines.add "التقديم: التفاصيل في المنشور"               # details in the post
+  let t = plainField(title, maxTitleRunes)
+  lines.add "المصدر: " & (if t == "": "قناة عامة" else: isolate(t))   # "a public channel"
+  if link != "": lines.add linkLabel & link
   result = lines.join("\n")
   if result.runeLen > maxSummaryRunes:     # only a very long link could do this
     result = $result.toRunes[0 ..< maxSummaryRunes - 1] & "…"

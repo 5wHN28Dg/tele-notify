@@ -74,8 +74,7 @@ proc toTelegram(f: FakeTg): Telegram =
         if m.id == id: return m
       raise newException(IOError, "message not found")
   result.linkTarget = proc (url: string): Future[(int64, int64)] {.async, closure, gcsafe.} =
-    if "t.me/basrajobs/" notin url and "t.me/examplejobs/" notin url:
-      raise newException(IOError, "unknown link")
+    if "t.me/examplejobs/" notin url: raise newException(IOError, "unknown link")
     return (-5'i64, parseBiggestInt(url.split('/')[^1]))
   result.selfChat = proc (): Future[int64] {.async, closure, gcsafe.} = return 42
   result.chatAccess = proc (chat: int64): Future[ChatAccess] {.async, closure, gcsafe.} =
@@ -197,35 +196,34 @@ suite "listener":
     check f.texts.len == 1 and f.texts[0][0] == target
     check "post link: https://t.me/c/2/5" in f.texts[0][1]
 
-  test "forward_fallback summary, private chat: a summary that never names the chat, no link (#80)":
+  test "forward_fallback summary, private chat: nothing is sent, it goes to review with a plain reason (#135)":
     let f = FakeTg()
     f.noForward.incl -2
     f.chats[-2] = @[msg(-2, 5, good & "\nللتقديم ارسل السيرة على hr@example.com")]
     let (l, st) = setup(f, fallback = "summary")
     waitFor l.bootstrap()
-    check f.forwarded.len == 0
-    check f.texts.len == 1 and f.texts[0][0] == target
-    check f.texts[0][1] == "ملخص آلي لإعلان لا يمكن إعادة توجيهه\n" &
-                           "الوظيفة: \u2068مهندس كهرباء\u2069\nالمكان: \u2068البصرة\u2069\n" &
-                           "التقديم: بالبريد الإلكتروني\nالمصدر: محادثة خاصة"
-    check "chat2" notin f.texts[0][1]
-    check st.processedRow(-2, 5)[1].action == "summarized"
-    check st.recentPublished().len == 1
-    check st.stats(1)[0].forwarded == 1                 # counted as sent to the channel
+    check f.forwarded.len == 0 and f.texts.len == 0
+    check st.processedRow(-2, 5)[1].action == "queued for review"     # not an error
+    let r = st.pendingReviews()
+    check r.len == 1 and r[0].msgId == 5 and privateHeldBack in r[0].reasons and "error" notin r[0].reasons
+    check r[0].link == "https://t.me/c/2/5"            # for you: you're a member
+    check st.recentPublished().len == 0 and st.stats(1)[0].forwarded == 0
 
   test "forward_fallback summary, public chat: named, and the summary ends with the post's link (#80)":
     let f = FakeTg()
     f.noForward.incl -2
     f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
-    f.chats[-2] = @[msg(-2, 5, good)]
+    f.chats[-2] = @[msg(-2, 5, good & "\nللتقديم ارسل السيرة على hr@example.com")]
     let (l, st) = setup(f, fallback = "summary")
     waitFor l.bootstrap()
-    check f.texts.len == 1
+    check f.texts.len == 1 and f.texts[0][0] == target
     check f.texts[0][1] == "ملخص آلي لإعلان لا يمكن إعادة توجيهه\n" &
                            "الوظيفة: \u2068مهندس كهرباء\u2069\nالمكان: \u2068البصرة\u2069\n" &
-                           "التقديم: التفاصيل في المنشور\nالمصدر: \u2068chat2\u2069\n" &
+                           "التقديم: بالبريد الإلكتروني\nالمصدر: \u2068chat2\u2069\n" &
                            "رابط المنشور: https://t.me/examplechan2/5"
     check st.processedRow(-2, 5)[1].action == "summarized"
+    check st.recentPublished().len == 1
+    check st.stats(1)[0].forwarded == 1                 # counted as sent to the channel
 
   test "forward_fallback summary: a public post with no link isn't summarized without it; review gets it":
     let f = FakeTg()
@@ -236,51 +234,68 @@ suite "listener":
     let (l, st) = setup(f, fallback = "summary")
     waitFor l.bootstrap()
     check f.texts.len == 0
-    check st.pendingReviews().len == 1 and "no link" in st.pendingReviews()[0].reasons
+    check st.pendingReviews().len == 1 and "no link to the post" in st.pendingReviews()[0].reasons and
+          "Approve it again to retry" in st.pendingReviews()[0].reasons      # what to do
 
   test "forward_fallback summary: when the access check fails, nothing is sent; review gets it with why":
     let f = FakeTg()
     f.noForward.incl -2
-    f.accessError[-2] = "timeout"           # it may be public: calling it private would drop its link
+    f.accessError[-2] = "timeout"           # it may be public: calling it private would be wrong
     f.chats[-2] = @[msg(-2, 5, good)]
     let (l, st) = setup(f, fallback = "summary")
     waitFor l.bootstrap()
     check f.texts.len == 0
     let r = st.pendingReviews()
     check r.len == 1 and "could not tell whether the chat is public" in r[0].reasons and
-          "timeout" in r[0].reasons
+          "timeout" in r[0].reasons and "Approve it again to retry" in r[0].reasons
 
   test "forward_fallback summary, dry run: nothing is sent":
     let f = FakeTg()
     f.noForward.incl -2
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
     f.chats[-2] = @[msg(-2, 5, good)]
     let (l, st) = setup(f, dryRun = true, fallback = "summary")
     waitFor l.bootstrap()
     check f.texts.len == 0 and f.forwarded.len == 0
     check st.processedRow(-2, 5)[1].action == "would publish"
 
-  test "forward_fallback summary: an approved review is summarized too, an empty role said so":
+  test "forward_fallback summary: an approved review from a public chat is summarized; its link asked again":
     let f = FakeTg()
     f.noForward.incl -2
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
     let (l, st) = setup(f, fallback = "summary")
-    st.addReview(-2, 8, "chat2", unclear & " على الواتساب", "no level", "", "")
+    # queued while the chat was private: its stored link is a t.me/c/ one
+    st.addReview(-2, 8, "chat2", unclear & " على الواتساب", "no level", "", "https://t.me/c/2/8")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
     waitFor l.sendApproved()
     check f.texts.len == 1
     check f.texts[0][1] == "ملخص آلي لإعلان لا يمكن إعادة توجيهه\nالوظيفة: غير محددة\n" &
-                           "المكان: \u2068البصرة\u2069\nالتقديم: عبر واتساب\nالمصدر: محادثة خاصة"
+                           "المكان: \u2068البصرة\u2069\nالتقديم: عبر واتساب\nالمصدر: \u2068chat2\u2069\n" &
+                           "رابط المنشور: https://t.me/examplechan2/8"
     check st.approvedReviews().len == 0 and st.pendingReviews().len == 0
+
+  test "forward_fallback summary: an approved review from a private chat goes back to review, nothing sent":
+    let f = FakeTg()
+    f.noForward.incl -2
+    let (l, st) = setup(f, fallback = "summary")
+    st.addReview(-2, 8, "chat2", unclear & " على الواتساب", "no level", "مهندس كهرباء", "")
+    check st.decideReview(st.pendingReviews()[0].id, "to_send")
+    waitFor l.sendApproved()
+    check f.texts.len == 0 and f.forwarded.len == 0
+    let r = st.pendingReviews()
+    check r.len == 1 and privateHeldBack in r[0].reasons
 
   test "forward_fallback summary: an approved review with no role and no way to apply goes back to review":
     let f = FakeTg()
     f.noForward.incl -2
+    f.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true)
     let (l, st) = setup(f, fallback = "summary")
     st.addReview(-2, 8, "chat2", unclear, "no level", "", "")
     check st.decideReview(st.pendingReviews()[0].id, "to_send")
     waitFor l.sendApproved()
     check f.texts.len == 0
     let r = st.pendingReviews()
-    check r.len == 1 and "the summary would say nothing" in r[0].reasons
+    check r.len == 1 and emptyHeldBack in r[0].reasons
 
   test "the summary's link is read back for compare, the old English line too; a title can't stand in (#80)":
     let f = FakeTg()
@@ -288,7 +303,7 @@ suite "listener":
     let fake = "x\nرابط المنشور: https://t.me/examplejobs/1\npost link: https://t.me/examplejobs/2"
     waitFor l.noteOtherBot(msg(target, 910, summaryText("مهندس كهرباء", "البصرة", @[byEmail],
                                                          fake, "https://t.me/examplejobs/77")))
-    waitFor l.noteOtherBot(msg(target, 911, summaryText("help desk", "", @[], fake, "")))
+    waitFor l.noteOtherBot(msg(target, 911, summaryText("help desk", "", @[], fake, "")))   # no link line
     waitFor l.noteOtherBot(msg(target, 912, "match: help desk\nPost link: https://t.me/examplejobs/78"))
     let notes = st.otherBotSince(0)
     check notes.len == 3
@@ -619,7 +634,7 @@ suite "listener":
     var fwd = msg(target, 900, good)
     (fwd.originChat, fwd.originMsg) = (-1'i64, 10'i64)
     waitFor l.noteOtherBot(fwd)
-    waitFor l.noteOtherBot(msg(target, 901, "match: electrical engineer\npost link: https://t.me/basrajobs/77"))
+    waitFor l.noteOtherBot(msg(target, 901, "match: electrical engineer\npost link: https://t.me/examplejobs/77"))
     waitFor l.noteOtherBot(msg(target, 902, "match: x\npost link: https://t.me/unknown/1"))
     let notes = st.otherBotSince(0)
     check notes.len == 3

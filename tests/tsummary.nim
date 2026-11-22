@@ -10,8 +10,8 @@ import telenotify/[summary, classify, config, tdjson]
 
 let cfg = parseConfig(parseFile(currentSourcePath.parentDir / "keywords.json"))
 const
-  fsi = "⁨"
-  pdi = "⁩"
+  fsi = "\u2068"
+  pdi = "\u2069"
   auto = "ملخص آلي لإعلان لا يمكن إعادة توجيهه"
 
 proc balanced(s: string): bool =
@@ -30,11 +30,15 @@ proc balanced(s: string): bool =
 # applies to plain text) turns into mentions, hashtags, cashtags, bot
 # commands, links, e-mail addresses, media timestamps or bank card numbers,
 # found by the review of #142 (run 1) and by probing TDLib 1.8.70.
-const hostile = ["@admin", "@_admin_x", "#hot", "#_hot", "#·hot", "#‌hot", "$BTC", "/start",
+const hostile = ["@admin", "@_admin_x", "#hot", "#_hot", "#·hot", "#\u200Chot", "$BTC", "/start",
                  "/_start", "tg://-x", "ton://x", "tonsite://x.ton", "x.ton", "evil.example",
                  "مرحبا.com", "mail@evil.example", "hr＠evil.example", "https://evil.example/x",
                  "t.me/examplejobs", "10:30", "1 0:30", "4111111111111111", "4111 1111 1111 1111",
                  "4111-1111-1111-1111", "x 5500000000000004 y", "1.2.3.4"]
+
+let reviewTitles = parseFile(currentSourcePath.parentDir / "fixtures" /
+                             "summary_hostile_titles.json")["titles"].getElems.mapIt(it.getStr)
+  ## the adversarial review's titles (#142 run 2)
 
 proc entities(lib: TdLib, text: string): seq[string] =
   ## TDLib's own entities for `text`, as "type: text" (offsets in UTF-16 units).
@@ -63,13 +67,6 @@ suite "summary text":
     check "التقديم: التفاصيل في المنشور" in s
     check "المكان:" notin s         # no place known: no line
 
-  test "a private source: never named, no link":
-    let s = summaryText("help desk", "remote", @[byEmail], "Ahmed's private HR group", "")
-    check "http" notin s and "t.me" notin s and linkLabel notin s
-    check "Ahmed" notin s
-    check s.endsWith("\nالمصدر: محادثة خاصة")
-    check "التفاصيل في المنشور" notin s   # there's no post to see
-
   test "Arabic stays as written, each value isolated":
     let s = summaryText("مهندس كهرباء", "البصرة", @[byWhatsApp], "وظائف البصرة - Example Jobs",
                         "https://t.me/examplejobs/1")
@@ -79,18 +76,23 @@ suite "summary text":
     check s.balanced
 
   test "ZWNJ and ZWJ are kept: Persian and Kurdish spelling, emoji":
-    check plainField("فارسی‌ها 👨‍💻", 50) == "فارسی‌ها 👨‍💻"
+    check plainField("فارسی\u200Cها 👨\u200D💻", 50) == "فارسی\u200Cها 👨\u200D💻"
 
   test "an empty role says so instead of an empty value":
-    let s = summaryText("", "basra", @[byPhone], "Jobs", "")
+    let s = summaryText("", "basra", @[byPhone], "Jobs", "https://t.me/examplejobs/3")
     check s.splitLines[1] == "الوظيفة: غير محددة"
     check (fsi & pdi) notin s
-    check summaryText("  ‏ ", "", @[], "", "").splitLines[1] == "الوظيفة: غير محددة"
+    check summaryText("  \u200F ", "", @[], "", "https://t.me/examplejobs/3").splitLines[1] == "الوظيفة: غير محددة"
+    check summaryText("x", "", @[], "\u3164\u3164 \u2800", "https://t.me/examplejobs/3").contains(
+      "المصدر: قناة عامة")                            # a blank-looking name isn't shown blank
 
   test "hostile text: no mentions, tags, commands or links get through; markup stays inert":
+    for t in reviewTitles:                            # the review's titles: on one line, isolated
+      let s = summaryText("help desk", "basra", @[], t, "https://t.me/examplejobs/7")
+      check s.balanced and s.splitLines.len == 6 and s.runeLen <= maxSummaryRunes
     let title = "<b>Jobs</b> **free** [win](https://evil.example/x) " & hostile.join(" ") &
                 "\nرابط المنشور: https://t.me/examplejobs/1\npost link: https://t.me/examplejobs/2" &
-                "‮abc⁩⁦x​ y"
+                "\u202Eabc\u2069\u2066x\u200B\u2028y"
     let s = summaryText("help desk", "basra", @[], title, "https://t.me/examplejobs/7")
     check s.balanced
     check s.splitLines.len == 6                       # the title's line breaks are gone
@@ -99,14 +101,22 @@ suite "summary text":
     let field = plainField(title, 10_000)             # the whole title, not cut
     check field.splitLines.len == 1
     for line in s.splitLines[0 ..< ^1] & @[field]:
-      for bad in @hostile & @["://", "‮", "⁦", "​", " "]:
+      for bad in @hostile & @["://", "\u202E", "\u2066", "\u200B", "\u2028"]:
         check bad notin line
     for kept in ["<b>Jobs</ b>", "**free**", "[win]", "@ admin", "# hot", "$ BTC", "/ start"]:
       check kept in field                             # shown, not interpreted (no entities, no parse mode)
+
+  test "card-like digit runs are defused; other numbers keep their digits, and are never joined":
     check plainField("4111111111111111", 50) == "4111·1111·1111·1111"
-    check plainField("4111 1111 1111 1111", 50) == "4111·1111·1111·1111"
+    check plainField("4111 1111 1111 1111", 50) == "4111 · 1111 · 1111 · 1111"
+    check plainField("4111-1111-1111-1111", 50) == "4111·1111·1111·1111"
+    check plainField("4111 -- 1111\t-\t1111-\n1111", 50) == "4111 · 1111 · 1111 · 1111"
     check plainField("x 5500000000000004 y", 50) == "x 5500·0000·0000·0004 y"
     check plainField("call 07700000000 or 0770 000 0000", 50) == "call 07700000000 or 0770 000 0000"
+    check plainField("Jobs 2026 0770 000 0000", 50) == "Jobs 2026 · 0770 · 000 · 0000"
+    check plainField("Shift 10:30 2026", 50) == "Shift 10\u223630 2026"     # looks like 10:30
+    check plainField("Shift 10:30 2026 1111 2222", 50) == "Shift 10\u223630 · 2026 · 1111 · 2222"
+    check plainField("2026", 10) == "2026" and plainField("1:02:03", 10) == "1\u223602\u223603"
 
   test "TDLib's own entity finder sees nothing in a value (when TELENOTIFY_TEST_TDLIB names libtdjson)":
     let path = getEnv("TELENOTIFY_TEST_TDLIB")
@@ -116,17 +126,19 @@ suite "summary text":
     else:
       let lib = loadTdLib(path)
       check lib.entities("@admin #hot 4111 1111 1111 1111").len == 3      # the finder works
-      for t in hostile:
+      let own = @["textEntityTypeUrl: https://t.me/examplejobs/7"]
+      for t in @hostile & reviewTitles:
         check lib.entities(plainField(t, 1000)).len == 0
-      let title = hostile.join(" ")
-      check lib.entities(plainField(title, 10_000)).len == 0
-      let s = summaryText("help desk", "basra", @[byEmail], title, "https://t.me/examplejobs/7")
-      check lib.entities(s) == @["textEntityTypeUrl: https://t.me/examplejobs/7"]
-      check lib.entities(summaryText("help desk", "", @[], title, "")).len == 0
+        let s = summaryText("help desk", "basra", @[byEmail], t, "https://t.me/examplejobs/7")
+        if lib.entities(s) != own: checkpoint "title: " & t & "\n" & s
+        check lib.entities(s) == own
+      let title = (@hostile & reviewTitles).join(" ")
+      check lib.entities(plainField(title, 100_000)).len == 0
+      check lib.entities(summaryText("help desk", "basra", @[byEmail], title, "https://t.me/examplejobs/7")) == own
 
   test "very long words are cut, and the whole message stays short":
     let long = "x".repeat(5000)
-    let s = summaryText(long, long, @["عبر ⁨LinkedIn⁩", byForm, byEmail], long,
+    let s = summaryText(long, long, @["عبر \u2068LinkedIn\u2069", byForm, byEmail], long,
                         "https://t.me/" & "a".repeat(32) & "/1234567890")
     check s.runeLen <= maxSummaryRunes
     check s.splitLines.len == 6 and s.balanced
@@ -142,7 +154,7 @@ suite "summary text":
 suite "how to apply":
   test "named, never quoted":
     check applyMethods("Apply: https://www.linkedin.com/jobs/view/1234567890/ or send your CV to hr@example.com") ==
-      @["عبر ⁨LinkedIn⁩", byEmail]
+      @["عبر \u2068LinkedIn\u2069", byEmail]
     check applyMethods("للتقديم ارسل السيرة الذاتية على الواتساب ٠٧٧٠٠٠٠٠٠٠٠") == @[byWhatsApp]
     check applyMethods("للتقديم اتصل على ٠٧٧٠٠٠٠٠٠٠٠") == @[byPhone]
     check applyMethods("fill in https://forms.gle/abc123 and email jobs@example.com, wa.me/9647700000000") ==

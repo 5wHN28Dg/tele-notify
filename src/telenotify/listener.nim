@@ -259,18 +259,28 @@ proc checkWatchedChats*(l: Listener) {.async.} =
       else: l.say &"   could not check access to chat {chat}: " & e.msg.splitLines()[0]
     l.accessChecked.incl chat
 
+type HeldBack* = object of CatchableError
+  ## Not sent on purpose, not a failure: the post goes to the review queue
+  ## with this reason, for you to decide by hand.
+
+const privateHeldBack* = "not summarized: it's from a private or members-only chat, whose posts " &
+  "aren't republished in your public channel (#80). Send it by hand if its admins agree, or discard it"
+const emptyHeldBack* = "not summarized: the summary would say nothing (no role and no way to apply " &
+  "found in the post). Send it by hand, or discard it"
+
 proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
                   known: string): Future[tuple[text, link: string]] {.async.} =
   ## What goes to your channel when Telegram won't forward a matched post
   ## (#80). `forward_fallback` "link": the old "match: <role>" + "post link:
-  ## <link>" text. "summary": the bot's own summary (summary.nim); a public
-  ## chat is named, with the post's link; a private one is only "a private
-  ## chat" (a private chat's link opens only for its members). Raises (the
-  ## post then goes to the review queue with the reason) when it can't
-  ## tell whether the chat is public, when a public chat's link can't be
-  ## had, and when the summary would say nothing (no role, no way to apply). `known`: the post's link if already known; else it is
-  ## asked for (its errors propagate when it's needed, as before). Returns
-  ## the text and the link (for your notification).
+  ## <link>" text (`known`, the post's link if already known, else asked).
+  ## "summary": the bot's own summary (summary.nim), only for a public chat,
+  ## named, with the post's link asked again (a stored one may be from
+  ## before the chat went public, or from an old username). Owner's
+  ## decision, #135, 2026-11-22: "Public only; private to review".
+  ## Raises HeldBack (to review, plainly) for a private or members-only
+  ## chat and for a summary that would say nothing; other errors (the
+  ## access check or the link failed) go to review as errors. Returns the
+  ## text and the link (for your notification).
   var link = known
   if l.cfg.forwardFallback == ffLink:
     if link == "": link = await l.tg.link(chat, msg)
@@ -278,9 +288,7 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
     return ("match: " & role & "\npost link: " & link, link)
   let apply = applyMethods(text, @defaultJobPostingSites & l.cfg.extraJobSites)
   if role.strip == "" and apply.len == 0:
-    # "the role isn't named" and nothing more: readers couldn't act on it
-    raise newException(ValueError, "the summary would say nothing: no role and no way to apply " &
-                       "found in the post. Send it by hand, or discard it")
+    raise newException(HeldBack, emptyHeldBack)
   var public = false
   var name = title
   try:
@@ -288,17 +296,19 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
     public = a.public
     if name == "": name = a.title
   except CatchableError as e:
-    # calling a public chat private would drop its link and its name
-    raise newException(ValueError, "could not tell whether the chat is public, so no summary was sent: " &
-                       e.msg.splitLines()[0].strip)
-  if link == "":
-    try: link = await l.tg.link(chat, msg)
-    except CatchableError:
-      if public: raise         # readers could have opened it: try again from review
+    # calling a public chat private would send it to review for the wrong reason
+    raise newException(ValueError, "could not tell whether the chat is public, so no summary was sent " &
+                       "(" & e.msg.splitLines()[0].strip & "). Approve it again to retry")
+  if not public: raise newException(HeldBack, privateHeldBack)
+  try: link = await l.tg.link(chat, msg)
+  except CatchableError as e:
+    raise newException(ValueError, "no link to the post from Telegram (" & e.msg.splitLines()[0].strip &
+                       "), so no summary was sent. Approve it again to retry")
   # TDLib's links to private chats are t.me/c/...: never in a public summary
-  let shown = if public and link != "" and "/c/" notin link: link else: ""
-  if public and shown == "": raise newException(ValueError, "no public link to the post")
-  return (summaryText(role, place, apply, name, shown), link)
+  if link == "" or "/c/" in link:
+    raise newException(ValueError, "Telegram gave no public link to the post, so no summary was sent. " &
+                       "Approve it again to retry, or send it by hand")
+  return (summaryText(role, place, apply, name, link), link)
 
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
@@ -390,11 +400,21 @@ proc handleGroup*(l: Listener, group: seq[TgMessage]) {.async.} =
         l.state.addPublished(m.chatId, m.id, g.text)
       else:
         # forwarding is forbidden in this chat: the role and a link, or a summary (#80)
-        let fallback = await l.fallbackText(m.chatId, m.id, m.chatTitle, role, d.place, g.text, postLink)
-        postLink = fallback.link
-        await l.tg.sendText(l.cfg.targetChat, fallback.text)
-        action = if l.cfg.forwardFallback == ffSummary: "summarized" else: "linked"
-        l.state.addPublished(m.chatId, m.id, g.text)
+        try:
+          let fallback = await l.fallbackText(m.chatId, m.id, m.chatTitle, role, d.place, g.text, postLink)
+          postLink = fallback.link
+          await l.tg.sendText(l.cfg.targetChat, fallback.text)
+          action = if l.cfg.forwardFallback == ffSummary: "summarized" else: "linked"
+          l.state.addPublished(m.chatId, m.id, g.text)
+        except HeldBack as e:
+          # not an error: you decide by hand (#135)
+          reasons.add "; " & e.msg
+          if postLink == "":
+            try: postLink = await l.tg.link(m.chatId, m.id)
+            except CatchableError: discard
+          l.state.addReview(m.chatId, m.id, m.chatTitle, g.text, reasons, role, postLink, ids)
+          action = "queued for review"
+          queued = true
     of vReview:
       try: postLink = await l.tg.link(m.chatId, m.id)
       except CatchableError: discard
