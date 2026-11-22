@@ -301,11 +301,11 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
   except CatchableError as e:
     # calling a public chat private would send it to review for the wrong reason
     raise newException(ValueError, "could not tell whether the chat is public, so no summary was sent " &
-                       "(" & e.msg.splitLines()[0].strip & "). Approve it again to retry")
+                       "(" & problemText(e.msg) & "). Approve it again to retry")   # never "()"
   if not public: raise newException(HeldBack, privateHeldBack)
   try: link = await l.tg.link(chat, msg)
   except CatchableError as e:
-    raise newException(ValueError, "no link to the post from Telegram (" & e.msg.splitLines()[0].strip &
+    raise newException(ValueError, "no link to the post from Telegram (" & problemText(e.msg) &
                        "), so no summary was sent. Approve it again to retry")
   # TDLib's links to private chats are t.me/c/...: never in a public summary
   if link == "" or "/c/" in link:

@@ -126,6 +126,7 @@ suite "state":
     check ".; " notin withProblem("role x; " & empty, "no link", heldBack = false)
     # no message at all: a fixed text, counted like any other (wp6 P3, P4)
     check problemText("") == unknownProblem and problemText("  \n ") == unknownProblem
+    check problemText("\nAsync traceback:\n  a.nim(1)") == unknownProblem   # a debug build's empty message
     var r = withProblem("role", "")
     check r == "role; could not send: unknown error"
     r = withProblem(r, "  \n ")
@@ -138,6 +139,20 @@ suite "state":
     r = withProblem(r, "boom (2 tries)")
     check r == "role; boom (2 tries) (2 tries)"
     check withProblem(r, "boom (2 tries)") == "role; boom (2 tries) (3 tries)"
+
+  test "older rows fold too: a closing \".\", empty lead-ins (#142 run 7)":
+    # a stored part ending in "." is the same reason (wp7 N10, N5, N8)
+    check withProblem("x; error: Bad thing happened.", "Bad thing happened.") ==
+      "x; error (2 tries): Bad thing happened"
+    let pv = "not posted: it isn't from a public channel. Otherwise discard it."
+    check withProblem("x; " & pv & " (2 tries)", pv, heldBack = true) ==
+      "x; not posted (3 tries): it isn't from a public channel. Otherwise discard it"
+    check withProblem("x; could not send: " & pv & " (3 tries)", "could not send: " & pv) ==
+      "x; could not send (4 tries): not posted: it isn't from a public channel. Otherwise discard it"
+    # an older bot's "error: " / "could not send: " with nothing after is "unknown error" (U3, U4)
+    check withProblem("role; error: ", "") == "role; error (2 tries): unknown error"
+    check withProblem("role; could not send: ", "  ") == "role; could not send (2 tries): unknown error"
+    check withProblem("a; ; x", "") == "a; ; x; could not send: unknown error"   # an empty part isn't one
 
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")

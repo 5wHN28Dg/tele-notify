@@ -351,7 +351,9 @@ proc problemText*(msg: string): string =
   ## adds an async traceback), with "; " (which separates the parts)
   ## written ", ", and no closing "." (another part may follow it). No
   ## message at all is "unknown error".
-  let lines = msg.strip.splitLines
+  # a debug build's traceback starts on its own line, even after an empty message
+  let i = msg.find("Async traceback:")
+  let lines = (if i >= 0: msg[0 ..< i] else: msg).strip.splitLines
   result = (if lines.len > 0: lines[0].strip else: "").replace("; ", ", ")
   if result.endsWith(".") and not result.endsWith(".."): result.setLen result.len - 1
   result = result.strip
@@ -383,6 +385,16 @@ proc splitCount(part: string): tuple[base: string, tries: int] =
   let n = parseTries(part[open + 2 ..< part.len - 1])
   if n >= 0: result = (part[0 ..< open], n)
 
+proc comparable(base: string): string =
+  ## A stored part as `problemText` would have written it: no closing "."
+  ## (older rows have one), and "unknown error" after a lead-in with
+  ## nothing after it (an older bot wrote "error: " for no message).
+  result = base.strip
+  if result.endsWith(".") and not result.endsWith(".."): result = result[0 ..< ^1].strip
+  for lead in leads:
+    if result == lead & ":": return lead & ": " & unknownProblem
+  if result == "": result = unknownProblem
+
 proc withCount(base: string, n: int): string =
   ## `base` with "(n tries)" where it reads naturally: after its lead-in
   ## ("error (3 tries): …"), else at the end.
@@ -410,9 +422,11 @@ proc withProblem*(reasons, problem: string, heldBack = false): string =
   var kept: seq[string]
   for part in parts:
     # the whole part first: the problem itself may end in something count-like
-    var (base, tries) = (part, -1)
-    if part notin forms: (base, tries) = splitCount(part)
-    if base in forms:
+    var (base, tries) = (part.comparable, -1)
+    if base notin forms:
+      (base, tries) = splitCount(part)
+      base = base.comparable
+    if base in forms and part.strip != "":
       total += (if tries >= 0: tries else: 1)
       if first < 0:
         first = kept.len

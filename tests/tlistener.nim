@@ -26,6 +26,7 @@ type FakeTg = ref object
   accessError: Table[int64, string]  # chats chatAccess fails for
   linkCalls: int
   linkHangs: bool                    # link never answers
+  linkFailsEmpty: bool               # link fails with an empty message
 
 proc toTelegram(f: FakeTg): Telegram =
   result = Telegram()
@@ -62,7 +63,7 @@ proc toTelegram(f: FakeTg): Telegram =
     {.cast(gcsafe).}:
       inc f.linkCalls
       if f.linkHangs: await newFuture[void]("hangs")
-      if f.linkFails: raise newException(IOError, "no link")
+      if f.linkFails: raise newException(IOError, (if f.linkFailsEmpty: "" else: "no link"))
       # like TDLib: a public chat's link has its username, a private one's is t.me/c/
       if f.access.getOrDefault(chat).public: return "https://t.me/examplechan" & $(-chat) & "/" & $id
     return "https://t.me/c/" & $(-chat) & "/" & $id
@@ -360,6 +361,32 @@ suite "listener":
     check ".; " notin r and "could not send: not posted" notin r
     check r.endsWith(problemText(privateHeldBack) & "; could not send: no link to the post from Telegram " &
                      "(no link), so no summary was sent. Approve it again to retry")
+
+  test "an empty message from Telegram reads \"unknown error\", never \"()\" (#142 run 7: R7d)":
+    let f = FakeTg()
+    f.noForward.incl -2
+    f.accessError[-2] = ""
+    let (l, st) = setup(f, fallback = "summary")
+    st.addReview(-2, 8, "chat2", good & " على الواتساب", "no level", "مهندس كهرباء", "")
+    for _ in 1 .. 2:
+      check st.decideReview(st.pendingReviews()[0].id, "to_send")
+      waitFor l.sendApproved()
+    let r = st.pendingReviews()[0].reasons
+    check "()" notin r
+    check r == "no level; could not send (2 tries): could not tell whether the chat is public, so no " &
+               "summary was sent (unknown error). Approve it again to retry"
+    # the same for the link
+    let g = FakeTg()
+    g.noForward.incl -2
+    g.access[-2] = ChatAccess(title: "Example Jobs", status: "ok", public: true, channel: true)
+    g.linkFails = true
+    g.linkFailsEmpty = true
+    let (m, sm) = setup(g, fallback = "summary")
+    sm.addReview(-2, 8, "chat2", good & " على الواتساب", "no level", "مهندس كهرباء", "")
+    check sm.decideReview(sm.pendingReviews()[0].id, "to_send")
+    waitFor m.sendApproved()
+    check sm.pendingReviews()[0].reasons == "no level; could not send: no link to the post from Telegram " &
+                                            "(unknown error), so no summary was sent. Approve it again to retry"
 
   test "forward_fallback summary: an approved review with no role and no way to apply goes back to review":
     let f = FakeTg()
