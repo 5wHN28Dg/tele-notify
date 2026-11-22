@@ -42,8 +42,9 @@ type
     verdict*: Verdict
     role*: string           ## the role that matched (shown in link-only forwards)
     place*: string          ## the place keyword that counted, as written in the
-                            ## config ("البصرة", "Rumaila"); "" when none did. For
-                            ## the summary posted when forwarding is blocked (#80)
+                            ## config ("البصرة", "Rumaila"); "" when none did or
+                            ## the place is mixed (Basra and elsewhere). For the
+                            ## summary posted when forwarding is blocked (#80)
     reasons*: seq[string]   ## human-readable explanation, for logs and `explain`
 
 proc around(line: string, h: Hit, before, after: int): string =
@@ -116,7 +117,7 @@ proc locate(lines: seq[string], cfg: Config, why, word: var string): Place =
   ##   ("📍", "Location:", "موقع العمل", "من سكنه ...") decides first.
   ## * Otherwise: Basra mentioned and no other city -> Basra; both -> mixed.
   ## `word`: the Basra-side keyword that counted (as written in the config),
-  ## or "" (none, or elsewhere).
+  ## or "" (none, elsewhere, or mixed: then no single place is right).
   var markedBasra, markedBasraWord, markedOther, anyBasra, anyOther = ""
   word = ""
   for line in lines:
@@ -128,8 +129,7 @@ proc locate(lines: seq[string], cfg: Config, why, word: var string): Place =
     if line.contains("📍") or flat.contains(cfg.locationMarkers):
       if b.len > 0 and o:
         why = "location line names Basra and elsewhere: '" & line.short & "'"
-        word = b[0].keyword
-        return plMixed
+        return plMixed            # no single place to name
       if b.len > 0 and markedBasra == "":
         markedBasra = line.short
         markedBasraWord = b[0].keyword
@@ -147,7 +147,6 @@ proc locate(lines: seq[string], cfg: Config, why, word: var string): Place =
     return plBasra
   if anyBasra != "":
     why = "mentions both " & anyBasra & " and " & anyOther
-    word = anyBasra
     return plMixed
   if anyOther != "":
     why = "location: " & anyOther

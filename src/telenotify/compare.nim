@@ -3,7 +3,7 @@
 ## While `telenotify run --dry-run` runs, it also notes every post the
 ## Python bot sends to your channel (they show up as your own outgoing
 ## messages there: forwards, or "match: ... post link: ..." texts; the real
-## Nim bot's summaries, #80, are read the same way through their "Post link:"
+## Nim bot's summaries, #80, are read the same way through their "رابط المنشور:"
 ## line, and a summary of a private chat has none). Then
 ## `telenotify compare` puts the two side by side:
 ##

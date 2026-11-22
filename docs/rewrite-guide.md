@@ -477,28 +477,34 @@ Open it with `sqlite3 ~/.local/share/tele-notify/state.sqlite3`. For example, `S
 
 ### When forwarding is blocked (#80, `forward_fallback`)
 
-Some chats don't allow forwarding. The old answer was a text of two lines, `match: <role>` and `post link: <link>`, and for a private chat that link only opens for its members, so the channel's readers got nothing they could use. The owner decided on 2026-11-21 (#135, "Post its own summary") that the bot writes a short summary instead. It is a tier-2 change (a message in a live public channel), so it sits behind a switch in config.json until the owner has checked it:
+Some chats don't allow forwarding. The old answer was a text of two lines, `match: <role>` and `post link: <link>`, and for a private chat that link only opens for its members, so the channel's readers got nothing they could use. The owner's decisions on #135: "Post its own summary" (2026-11-21); "Summary for all, no chat name" and "Arabic" labels (2026-11-22). Every blocked post gets the summary, from public and private sources alike, and a private chat is never named. It is a tier-2 change (a message in a live public channel), so it sits behind a switch in config.json until the owner has checked it:
 
 - `"forward_fallback": "link"` (the default, also when the key is missing or empty): the old two lines. The state records `linked`.
 - `"forward_fallback": "summary"`: the summary below. The state records `summarized`, which counts as forwarded everywhere (`telenotify stats`, `compare`, the screen's Dashboard; History and Search show "summarized").
 - Anything else stops the bot at start-up with a config error naming the key.
 
-The summary (`summary.nim`), at most 5 lines and 400 characters:
+The summary (`summary.nim`), at most 6 lines and 400 characters. From a public chat (made-up example):
 
 ```
-Job match: electrical engineer
-Place: البصرة
-Apply: on LinkedIn, by e-mail
-From: Basra Jobs
-Post link: https://t.me/basrajobs/123
+ملخص آلي لإعلان لا يمكن إعادة توجيهه
+الوظيفة: electrical engineer
+المكان: البصرة
+التقديم: عبر LinkedIn، بالبريد الإلكتروني
+المصدر: Example Jobs
+رابط المنشور: https://t.me/examplejobs/123
 ```
 
-- **Job match**: the role keyword the filter matched, as written in the config; "Job match (no role named)" when there is none (an approved review with no role).
-- **Place**: the place keyword that counted for the filter, as written in the config (`Decision.place`, new); left out when none did.
-- **Apply**: how the post says to apply, named and never quoted: "on Khana/Taeen/LinkedIn/Workable/a job site" (the job links `boards.nim` knows), "through a form", "by e-mail", "on WhatsApp", "by phone" (an Iraqi mobile number), at most three. Addresses and numbers are never copied, since Telegram would turn them into links. With none found: "see the post" when there is a link, else no line.
-- **From**: the chat's title. For a public chat (TDLib says it has a username, and its link isn't a `t.me/c/` one) the last line is `Post link: <link>`; for a private one the From line ends "(a private chat, so no link)". A public chat whose link can't be had isn't summarized without it: the post goes to the review queue with the error, as before.
+From a private chat, the last line is `المصدر: محادثة خاصة` ("a private chat") and there is no link line.
 
-Safety: it is plain text, sent with no entities and no parse mode. Telegram still makes links of some plain text by itself, so every value is defused: control, invisible and direction characters (U+200B–U+200F, U+202A–U+202E, U+2060–U+206F, U+061C and others) are dropped, line breaks become spaces, a space goes after `@`, `#`, `$`, `/` and a dot glued to the next word (no @mention that pings, no hashtag, cashtag, bot command or web or e-mail address), and runs of digits are broken into fours (no "bank card"). Each value is cut (role and title 60 characters, place 40) and wrapped in Unicode isolation marks, as in the notifications, so Arabic and English don't reorder each other. Nothing else from the post is copied. A dry run sends nothing, as before. The `Post link: ` line is the last one and starts a line, so the dry run's note of the real bot's posts (`noteOtherBot`, for `compare`) reads it like the old `post link: `, and a title can't stand in for it; a private chat's summary has no link, so `compare` can't tie it to its post and lists it under the other bot only.
+- **First line**: says it's an automatic summary of an advert that can't be forwarded.
+- **الوظيفة** (the job): the role keyword the filter matched, as written in the config; "غير محددة" (not named) when there is none.
+- **المكان** (the place): the place keyword that counted for the filter, as written in the config (`Decision.place`, new); left out when none did, and when the filter found the place mixed (Basra and somewhere else), since no single place is right then.
+- **التقديم** (how to apply): named and never quoted: "عبر Khana/Taeen/LinkedIn/Workable" or "عبر موقع توظيف" (a job site; the job links `boards.nim` knows), "عبر استمارة" (a form), "بالبريد الإلكتروني" (e-mail), "عبر واتساب" (WhatsApp), "بالهاتف" (phone: an Iraqi mobile number), at most three. Addresses and numbers are never copied, since Telegram would turn them into links. With none found: "التفاصيل في المنشور" (details in the post) when there is a link, else no line.
+- **المصدر** (the source): for a public chat (TDLib says it has a username, and its link isn't a `t.me/c/` one) the chat's title, then `رابط المنشور: <link>` as the last line. For any other chat, "محادثة خاصة", never its title (it can be a person's name), and no link.
+
+The post goes to the review queue with the reason instead, and nothing is sent, when: the access check fails (it can't tell whether the chat is public, and calling a public chat private would drop its name and link); a public chat's link can't be had; or the summary would say nothing (no role and no way to apply found, which can happen for a post you approved in review). For the last one, send it by hand or discard it.
+
+Safety: it is plain text, sent with no entities and no parse mode. TDLib still finds entities in plain text by itself (`getTextEntities`, which `sendMessage` applies): mentions, hashtags, cashtags, bot commands, web, `ton://` and e-mail addresses, media timestamps like `10:30`, bank card numbers. So every value is defused: control, invisible and direction characters (U+200B, U+200E, U+200F, U+202A–U+202E, U+2060–U+206F, U+061C and others) are dropped, though ZWNJ and ZWJ (U+200C, U+200D) stay for Persian and Kurdish spelling and emoji; line breaks become spaces; a space goes after `@`, `#`, `$`, `/` and `:` (whatever follows: `#_x` and `/_x` are entities too) and after a dot not followed by a space or another dot; and a run of 12 or more digits (spaces or dashes between them included) is regrouped in fours joined by `·`, which TDLib never reads as a card number. `tests/tsummary.nim` checks the cases found in review against these rules and, with `TELENOTIFY_TEST_TDLIB=/path/to/libtdjson.so`, against TDLib's own finder (skipped otherwise, as in CI, which has no TDLib). Each value is cut (role and title 60 characters, place 40) and wrapped in Unicode isolation marks, as in the notifications, so Arabic and Latin text don't reorder each other. Nothing else from the post is copied. A dry run sends nothing, as before. The `رابط المنشور: ` line is the last one and starts a line, so the dry run's note of the real bot's posts (`noteOtherBot`, for `compare`) reads it, and the old English `post link: ` too, and a title can't stand in for it. A private chat's summary has no link, so `compare` can't tie it to its post and lists it under the other bot only.
 
 ### Downtime alerts (#3, #16)
 
@@ -547,7 +553,7 @@ The plan: run `telenotify run --dry-run` next to the Python bot for about a week
 
 The Python bot uses the same Telegram account, so what it sends to your channel shows up as *your own outgoing messages* there. During a dry run, the Nim bot notes each one (table `other_bot` in `state-dryrun.sqlite3`) with where it came from:
 - a forward from a channel carries its origin (channel and message id);
-- a "match: … post link: https://t.me/…" message, or a summary's last line "Post link: https://t.me/…" (#80), is resolved with TDLib's `getMessageLinkInfo` (only a line that starts with it, the last one);
+- a "match: … post link: https://t.me/…" message, or a summary's last line "رابط المنشور: https://t.me/…" (#80), is resolved with TDLib's `getMessageLinkInfo` (only a line that starts with it, the last one);
 - anything else (a forward from a group) is matched by text later.
 
 `telenotify compare --days:7` then prints three lists:

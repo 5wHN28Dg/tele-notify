@@ -57,9 +57,10 @@
 ## * `forward_fallback` (default "link"): what goes to `target_chat` when a
 ##   source chat won't let a matched post be forwarded (#80). "link": the
 ##   old "match: <role>" and "post link: <link>" lines. "summary": a short
-##   plain-text summary of the post (role, place, how to apply), the source
-##   chat's title and, only for a public chat, the post's link (see
-##   summary.nim). Anything else is refused.
+##   plain-text summary of the post in Arabic, marked automatic (role,
+##   place, how to apply); a public source is named, with the post's link,
+##   a private one is only "a private chat" (see summary.nim). Anything
+##   else is refused.
 ##
 ## `responsibility_keywords` is accepted but no longer used: the new
 ## classifier does not guess level from responsibilities (that guess was the

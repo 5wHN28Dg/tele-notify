@@ -263,9 +263,12 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
                   known: string): Future[tuple[text, link: string]] {.async.} =
   ## What goes to your channel when Telegram won't forward a matched post
   ## (#80). `forward_fallback` "link": the old "match: <role>" + "post link:
-  ## <link>" text. "summary": the bot's own summary (summary.nim), with the
-  ## link only when the chat is public (a private chat's link opens only for
-  ## its members). `known`: the post's link if already known; else it is
+  ## <link>" text. "summary": the bot's own summary (summary.nim); a public
+  ## chat is named, with the post's link; a private one is only "a private
+  ## chat" (a private chat's link opens only for its members). Raises (the
+  ## post then goes to the review queue with the reason) when it can't
+  ## tell whether the chat is public, when a public chat's link can't be
+  ## had, and when the summary would say nothing (no role, no way to apply). `known`: the post's link if already known; else it is
   ## asked for (its errors propagate when it's needed, as before). Returns
   ## the text and the link (for your notification).
   var link = known
@@ -273,6 +276,11 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
     if link == "": link = await l.tg.link(chat, msg)
     if link == "": raise newException(ValueError, "no link to the post")
     return ("match: " & role & "\npost link: " & link, link)
+  let apply = applyMethods(text, @defaultJobPostingSites & l.cfg.extraJobSites)
+  if role.strip == "" and apply.len == 0:
+    # "the role isn't named" and nothing more: readers couldn't act on it
+    raise newException(ValueError, "the summary would say nothing: no role and no way to apply " &
+                       "found in the post. Send it by hand, or discard it")
   var public = false
   var name = title
   try:
@@ -280,7 +288,9 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
     public = a.public
     if name == "": name = a.title
   except CatchableError as e:
-    l.say &"   could not tell whether chat {chat} is public ({e.msg}): its link is left out"
+    # calling a public chat private would drop its link and its name
+    raise newException(ValueError, "could not tell whether the chat is public, so no summary was sent: " &
+                       e.msg.splitLines()[0].strip)
   if link == "":
     try: link = await l.tg.link(chat, msg)
     except CatchableError:
@@ -288,8 +298,7 @@ proc fallbackText(l: Listener, chat, msg: int64, title, role, place, text,
   # TDLib's links to private chats are t.me/c/...: never in a public summary
   let shown = if public and link != "" and "/c/" notin link: link else: ""
   if public and shown == "": raise newException(ValueError, "no public link to the post")
-  return (summaryText(role, place, applyMethods(text, @defaultJobPostingSites & l.cfg.extraJobSites),
-                      name, shown), link)
+  return (summaryText(role, place, apply, name, shown), link)
 
 const maxAlbumPhotos = 6   ## OCR is slow; the ad is almost always in the first few
 
@@ -453,11 +462,16 @@ proc noteOtherBot*(l: Listener, m: TgMessage) {.async.} =
   ## for `telenotify compare`. Never raises.
   try:
     var (chat, msg) = (m.originChat, m.originMsg)
-    # "post link: " (the old text) or "Post link: " (the summary, #80), at the
-    # start of a line: the last such line, so no text above it can stand in
-    let i = ("\n" & m.text).toLowerAscii.rfind("\npost link: ")
+    # "post link: " (the old text, any case) or "رابط المنشور: " (the
+    # summary, #80), at the start of a line: the last such line, so no text
+    # above it can stand in for it
+    let lower = ("\n" & m.text).toLowerAscii
+    var i = lower.rfind("\npost link: ")
+    var label = "post link: "
+    let j = lower.rfind("\n" & linkLabel)
+    if j > i: (i, label) = (j, linkLabel)
     if chat == 0 and i >= 0:
-      let words = m.text[i + "post link: ".len .. ^1].splitWhitespace
+      let words = m.text[i + label.len .. ^1].splitWhitespace
       if words.len > 0:
         try: (chat, msg) = await l.tg.linkTarget(words[0])
         except CatchableError:

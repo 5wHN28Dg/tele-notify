@@ -56,6 +56,7 @@ suite "compare":
     let s2 = openState(d2 / "state.sqlite3")
     s2.markProcessed(-1, 20, "Jobs", "publish", "help desk", "entry role", "summarized")
     s2.addPublished(-1, 20, "IT help desk intern wanted in Basra")
-    s2.addOtherBot(200, -1, 20, "Job match: help desk\nFrom: Jobs\nPost link: https://t.me/jobs/20")
+    s2.addOtherBot(200, -1, 20, "ملخص آلي لإعلان لا يمكن إعادة توجيهه\nالوظيفة: help desk\n" &
+                                "المصدر: Example Jobs\nرابط المنشور: https://t.me/examplejobs/20")
     let c = s2.compareRuns(getTime().toUnix - 86400)
     check c.both.len == 1 and c.pythonOnly.len == 0 and c.nimOnly.len == 0
