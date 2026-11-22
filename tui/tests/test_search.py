@@ -323,30 +323,65 @@ async def test_start_up_runs_no_search_before_the_tab_is_shown(paths, monkeypatc
         assert len(threads) == 2   # the chat list and one search
 
 
+async def until(pilot, ready, what: str) -> None:
+    """Wait until `ready()` holds. Pilot's own waits can return early on a busy
+    machine (they judge "idle" by CPU time), so a step that must have happened
+    is waited for by its result."""
+    for _ in range(200):
+        if ready():
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(f"never happened: {what}")
+
+
 async def test_a_newer_search_wins_over_a_slower_older_one(paths, monkeypatch):
     search = search_data.search
+    queries: list[str] = []
+    release = threading.Event()   # the slow search waits for this, so it is surely still running
+    slow_done = threading.Event()
 
     def slow_for_location(store, query, *a, **k):
+        queries.append(query)
         if query == "location":
-            time.sleep(SLOW_QUERY)
+            release.wait(10)
+            slow_done.set()
         return search(store, query, *a, **k)
 
     monkeypatch.setattr(search_data, "search", slow_for_location)
+    # Only Enter searches here: a pause of 0.35 s on a busy runner would let the
+    # typing debounce search a half-typed or empty box and move the focus.
+    from telenotify_tui.screens import search as search_mod
+    monkeypatch.setattr(search_mod, "DEBOUNCE_SECONDS", 3600)
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(120, 40)) as pilot:
-        await open_search(app, pilot)
-        await settle(app, pilot)
-        box = app.query_one("#q", Input)
-        box.focus()
-        await pilot.press(*"location", "enter")    # slow
-        box.value = ""
-        box.focus()                                # (Enter moved focus to the results table)
-        await pilot.press(*"Iraq", "enter")        # fast, typed while the slow one runs
-        await settle(app, pilot)
-        await pilot.pause(SLOW_QUERY)
-        await settle(app, pilot)
-        assert app.query_one("#results", DataTable).row_count == 2
-        assert "2 results" in text_of(app, "#count")
+        try:
+            await open_search(app, pilot)
+            await settle(app, pilot)
+            box = app.query_one("#q", Input)
+            table = app.query_one("#results", DataTable)
+            box.focus()
+            await pilot.press(*"location", "enter")    # slow
+            # pilot.press can return before Enter reaches the pane. Clearing the box
+            # then would make that late Enter search the empty box and move the
+            # focus to the table after box.focus() below, so "Iraq" went to the
+            # table and all 4 rows showed (#134). Wait for the slow search itself.
+            await until(pilot, lambda: "location" in queries and app.focused is table,
+                        "the slow search started and Enter moved to the results")
+            box.value = ""
+            box.focus()                                # (Enter moved focus to the results table)
+            await until(pilot, lambda: app.focused is box, "the box has the focus again")
+            await pilot.press(*"Iraq", "enter")        # fast, typed while the slow one runs
+            await until(pilot, lambda: "Iraq" in queries, "the newer search started")
+            assert not slow_done.is_set()              # the slow one was still running then
+            await until(pilot, lambda: "2 results" in text_of(app, "#count"), "the newer results show")
+            release.set()                              # now the older, slower one finishes
+            await until(pilot, slow_done.is_set, "the slow search finished")
+            await settle(app, pilot)
+            assert queries.index("location") < queries.index("Iraq")
+            assert app.query_one("#results", DataTable).row_count == 2
+            assert "2 results" in text_of(app, "#count")
+        finally:
+            release.set()                              # never leave the slow thread waiting at teardown
 
 
 async def test_searching_note_is_readable(paths, monkeypatch):
