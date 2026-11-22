@@ -1057,8 +1057,9 @@ class SettingsPane(Vertical):
         errs = sd.errors(sd.validate(self.edited))
         if errs:
             self.changed()
+            # the messages quote config.json's own values (not chat IDs: …): never read as markup (run 11)
             self.notify("Not saved: fix these first:\n" + "\n".join(f"{p.key}: {p.message}" for p in errs[:5]),
-                        severity="error", timeout=8)
+                        severity="error", timeout=8, markup=False)
             return
         if not self.dirty:
             self.notify("Nothing to save.")

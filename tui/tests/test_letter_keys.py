@@ -10,6 +10,7 @@ import dataclasses
 import errno
 import json
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -579,12 +580,13 @@ async def test_the_screen_starts_with_a_deeply_nested_screen_file(paths):
 
 
 def test_a_failed_save_leaves_no_temporary_file(paths):
-    """Run 8 fail 4: with a folder where screen.json goes, save left screen.json.tmp behind."""
+    """Run 8 fail 4: with a folder where screen.json goes, save left its temporary file behind."""
     target = prefs.path_for(paths.config)
     target.mkdir()
+    before = set(target.parent.iterdir())
     with pytest.raises(OSError):
         prefs.save(paths.config, prefs.Prefs(letter_keys=False))
-    assert not target.with_name(target.name + ".tmp").exists()
+    assert set(target.parent.iterdir()) == before
 
 
 async def test_a_textual_that_ignores_the_override_turns_the_switch_off_visibly(paths, monkeypatch):
@@ -771,7 +773,10 @@ def test_a_link_to_a_device_means_the_defaults(paths):
 
 @pytest.mark.parametrize("code, why, todo", [
     (errno.EISDIR, "it's a folder", "Remove or rename that folder"),
-    (errno.EACCES, "no permission to write there", "Give yourself write permission there"),
+    (errno.EACCES, "no permission to write there", "Give yourself write permission to that folder"),
+    (errno.ENOTDIR, "a file is in the way where its folder should be", "Remove or rename that file"),
+    (errno.ENAMETOOLONG, "the path is too long", "Move config.json to a shorter path"),
+    (errno.ELOOP, "its path loops through links", "Fix the links in that path"),
     (errno.EROFS, "the disk is read-only", "Make that disk writable"),
     (errno.ENOENT, "its folder is missing", "Create that folder"),
     (errno.EIO, "the system refused", "Check that file"),
@@ -834,3 +839,142 @@ def test_reading_a_folder_named_screen_json_leaks_no_descriptor(paths):
     for _ in range(20):
         assert prefs.load(paths.config).letter_keys is True
     assert open_fds() == before
+
+
+# ------------------------------------------------------------------ run 11
+
+MARKUP_FOLDERS = ["x[/]y", "notes[", "[@click=app.bell]RING[/]"]
+
+
+def config_in(paths, folder: str):
+    """The conftest config, moved into a folder with this name."""
+    where = paths.config.parent / folder
+    where.mkdir(parents=True)   # "x[/]y" is "x[" holding "]y"
+    moved = where / "config.json"
+    moved.write_text(paths.config.read_text(encoding="utf-8"), encoding="utf-8")
+    return dataclasses.replace(paths, config=moved)
+
+
+@pytest.mark.parametrize("folder", MARKUP_FOLDERS)
+async def test_a_path_with_markup_in_the_not_saved_toast_stays_text(paths, monkeypatch, folder):
+    """Run 11 fail 1 (sev 2): the palette's not-saved toast read the config path as markup. A folder
+    named "x[/]y" crashed the screen (unsaved Settings edits lost); "[@click=app.bell]…" made a
+    clickable action. Now the path is shown as it is and nothing runs."""
+    paths = config_in(paths, folder)
+    prefs.path_for(paths.config).mkdir()          # can't be written: the toast names the path
+    rung: list[bool] = []
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    monkeypatch.setattr(app, "bell", lambda: rung.append(True))
+    async with app.run_test(size=(120, 40), notifications=True) as pilot:
+        await settle(app, pilot)
+        command = next(c for c in app.get_system_commands(app.screen) if c.title == "Letter keys: turn off")
+        command.callback()
+        await settle(app, pilot)
+        toast = app.screen.query_one("Toast")
+        said = [n.message for n in app._notifications if "couldn't save that" in n.message]
+        assert said and folder in said[0]
+        lines = parse(app.export_screenshot(), 120, 40).text()
+        inside = [lines[y][toast.region.x:toast.region.right] for y in range(toast.region.y, toast.region.bottom)]
+        drawn = "".join(line.strip(" ▌▐▊▎") for line in inside)   # the toast wraps the long path
+        assert folder in drawn, inside
+        ring = [(x, y) for y in range(toast.region.y, toast.region.bottom)
+                for x in [lines[y].find("RING", toast.region.x)] if x >= 0]
+        if ring:   # a click on the word a [@click] link would make
+            await pilot.click(offset=ring[0])
+            await settle(app, pilot)
+        assert app.is_running and not rung
+
+
+async def test_the_no_corpus_note_shows_a_markup_path_as_text(paths, monkeypatch, tmp_path):
+    """Run 11: "No corpus at {corpus}" carries a path from TELENOTIFY_CORPUS."""
+    corpus = tmp_path / "x[/]y" / "[@click=app.bell]RING[/].jsonl"
+    monkeypatch.setenv("TELENOTIFY_CORPUS", str(corpus))
+    fake = tmp_path / "telenotify"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    rung: list[bool] = []
+    app = TeleNotifyApp(dataclasses.replace(paths, binary=fake), refresh_seconds=0)
+    monkeypatch.setattr(app, "bell", lambda: rung.append(True))
+    async with app.run_test(size=(140, 40), notifications=True) as pilot:
+        await pilot.press("4")
+        await settle(app, pilot)
+        settings = app.query_one(SettingsPane)
+        settings.action_test_corpus()
+        await settle(app, pilot)
+        said = [n.message for n in app._notifications if n.message.startswith("No corpus at")]
+        assert said and str(corpus) in said[0]
+        assert app.is_running and not rung
+        assert "x[/]y" in "\n".join(parse(app.export_screenshot(), 140, 40).text())
+
+
+async def test_the_not_saved_problems_toast_shows_config_values_as_text(paths):
+    """Run 11, the same class: "Not saved: fix these first" quotes config.json's values (a chat ID
+    that isn't one) with markup on, so "[/]" there crashed the screen."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40), notifications=True) as pilot:
+        await pilot.press("4")
+        await settle(app, pilot)
+        settings = app.query_one(SettingsPane)
+        settings.edited["chats"] = ["x[/]y"]
+        settings.changed()
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+        assert app.is_running
+        said = [n.message for n in app._notifications if n.message.startswith("Not saved: fix these first")]
+        assert said and "x[/]y" in said[0]
+        assert "x[/]y" in "\n".join(parse(app.export_screenshot(), 140, 40).text())
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only folder")
+def test_a_folder_that_cant_be_written_is_the_one_named(paths):
+    """Run 11, 2a: name what actually failed. A read-only folder: no file can be made in it, so the
+    message names the folder, says it needs write permission, and leaves nothing behind."""
+    folder = paths.config.parent
+    folder.chmod(0o555)
+    try:
+        with pytest.raises(OSError) as caught:
+            prefs.save(paths.config, prefs.Prefs(letter_keys=False))
+        said = prefs.not_saved(paths.config, False, caught.value)
+    finally:
+        folder.chmod(0o755)
+    assert said == (f"Letter keys: off for now, but couldn't save that in {prefs.shown_path(folder)} "
+                    "(no permission to write there). Give yourself write permission to that folder "
+                    "to keep this setting.")
+    assert not [p for p in folder.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_screen_json_that_cant_be_replaced_is_the_one_named(paths):
+    target = prefs.path_for(paths.config)
+    target.mkdir()
+    with pytest.raises(OSError) as caught:
+        prefs.save(paths.config, prefs.Prefs(letter_keys=False))
+    assert f"to {prefs.shown_path(target)} (it's a folder)" in prefs.not_saved(paths.config, False, caught.value)
+
+
+@pytest.mark.parametrize("kind", ["fifo", "folder", "file"])
+async def test_save_never_touches_a_tmp_it_didnt_make(paths, kind):
+    """Run 11, 2f: save unlinked screen.json.tmp whatever it was. It now writes a new file of its own
+    (O_EXCL, its own name), so what's there already is left as it is, and the save still works."""
+    other = prefs.path_for(paths.config).with_name("screen.json.tmp")
+    if kind == "fifo":
+        os.mkfifo(other)
+    elif kind == "folder":
+        other.mkdir()
+    else:
+        other.write_text("someone else's", encoding="utf-8")
+    try:   # bounded: writing into someone else's FIFO would wait forever
+        await asyncio.wait_for(asyncio.to_thread(prefs.save, paths.config, prefs.Prefs(letter_keys=False)), 5)
+    finally:   # a writer still waiting on the FIFO (the bug) gets a reader, then end of file
+        if kind == "fifo":
+            try:
+                os.close(os.open(other, os.O_RDONLY | os.O_NONBLOCK))
+            except OSError:
+                pass   # nothing waiting
+    assert prefs.load(paths.config).letter_keys is False
+    assert other.exists()
+    if kind == "fifo":
+        assert stat.S_ISFIFO(other.lstat().st_mode)
+    elif kind == "folder":
+        assert other.is_dir()
+    else:
+        assert other.read_text(encoding="utf-8") == "someone else's"

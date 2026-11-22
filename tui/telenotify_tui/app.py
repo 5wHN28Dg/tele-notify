@@ -262,7 +262,7 @@ class TeleNotifyApp(App):
         """The palette's "Letter keys: turn …": as the switch, and a note if it wasn't kept (run 9)."""
         problem = self.set_letter_keys(on)
         if problem:
-            self.notify(problem, severity="warning", timeout=10)
+            self.notify(problem, severity="warning", timeout=10, markup=False)   # it holds a path (run 11)
 
     def key_hint(self, text: str) -> str:
         """`text` (a key named on screen, such as " [f]") while the letter keys are on, else ""."""

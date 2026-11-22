@@ -10,6 +10,7 @@ import errno
 import json
 import os
 import stat
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -67,13 +68,15 @@ def _read_small(path: Path) -> str:
 # why screen.json couldn't be written, in plain words, and what to do about it (run 10)
 _WHY = {
     errno.EISDIR: ("it's a folder", "Remove or rename that folder"),
-    errno.EACCES: ("no permission to write there", "Give yourself write permission there"),
-    errno.EPERM: ("no permission to write there", "Give yourself write permission there"),
+    errno.EACCES: ("no permission to write there", "Give yourself write permission to that folder"),
+    errno.EPERM: ("no permission to write there", "Give yourself write permission to that folder"),
     errno.EROFS: ("the disk is read-only", "Make that disk writable"),
     errno.ENOENT: ("its folder is missing", "Create that folder"),
-    errno.ENOTDIR: ("its folder is missing", "Create that folder"),
+    errno.ENOTDIR: ("a file is in the way where its folder should be", "Remove or rename that file"),
     errno.ENOSPC: ("the disk is full", "Free some space"),
     errno.EDQUOT: ("the disk is full", "Free some space"),
+    errno.ENAMETOOLONG: ("the path is too long", "Move config.json to a shorter path"),
+    errno.ELOOP: ("its path loops through links", "Fix the links in that path"),
 }
 
 
@@ -88,20 +91,30 @@ def shown_path(path: Path) -> str:
 
 def not_saved(config: Path, on: bool, error: OSError) -> str:
     """What to say when the letter-keys switch couldn't be kept: what happened, what it means and
-    what to do, naming the file; the raw error is logged, not shown."""
+    what to do, naming what failed (save() puts it in error.filename: the file, or the folder it
+    goes in when no file could be made there); the raw error is logged, not shown."""
     why, todo = _WHY.get(error.errno or 0, ("the system refused", "Check that file"))
-    return (f"Letter keys: {'on' if on else 'off'} for now, but couldn't save that to "
-            f"{shown_path(path_for(config))} ({why}). {todo} to keep this setting.")
+    failed = Path(error.filename) if error.filename else path_for(config)
+    where = "to" if failed.name == FILE_NAME else "in"
+    return (f"Letter keys: {'on' if on else 'off'} for now, but couldn't save that {where} "
+            f"{shown_path(failed)} ({why}). {todo} to keep this setting.")
 
 
 def save(config: Path, prefs: Prefs) -> None:
-    """Write the settings beside `config` (a temporary file, then renamed, so a crash never
-    leaves half a file). Raises OSError when it can't be written."""
+    """Write the settings beside `config`: a new temporary file of its own (made with O_EXCL, under
+    a name no one else uses, so nothing that was already there is ever written or removed), then
+    renamed over screen.json, so a crash never leaves half a file. Raises OSError naming what
+    failed: the folder (no file could be made in it) or screen.json (it couldn't be replaced)."""
     path = path_for(config)
-    tmp = path.with_name(path.name + ".tmp")
     try:
-        tmp.write_text(json.dumps(asdict(prefs), indent=2) + "\n", encoding="utf-8")
+        fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    except OSError as e:
+        raise OSError(e.errno, e.strerror, str(path.parent)) from e
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(prefs), indent=2) + "\n")
         os.replace(tmp, path)
-    except OSError:
-        tmp.unlink(missing_ok=True)   # never leave the half-made file behind
-        raise
+    except OSError as e:
+        tmp.unlink(missing_ok=True)   # ours, made above: never leave it behind
+        raise OSError(e.errno, e.strerror, str(path)) from e
