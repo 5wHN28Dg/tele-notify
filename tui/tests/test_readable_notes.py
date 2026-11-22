@@ -9,6 +9,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from textual.containers import Vertical
 from textual.widgets import OptionList, Static, TabbedContent
 
 from audit.svg import contrast_exact, parse
@@ -85,7 +86,9 @@ async def test_error_and_warning_text_is_readable(paths, config, monkeypatch, th
         await pilot.press("a")
         await settle(app, pilot)
         seen["health status"] = worst(app, "banned")
-        await pilot.press("R")
+        await pilot.press("s")   # the service menu (#83, option C): Restart is its third item
+        await pilot.pause()
+        await pilot.press("down", "down", "enter")
         await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)
@@ -164,7 +167,9 @@ async def test_a_failed_action_stays_readable_after_a_theme_change(paths, monkey
     async with app.run_test(size=SIZE) as pilot:
         app.theme = other
         await settle(app, pilot)
-        await pilot.press("R")
+        await pilot.press("s")   # the service menu (#83, option C): Restart is its third item
+        await pilot.pause()
+        await pilot.press("down", "down", "enter")
         await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)
@@ -243,3 +248,65 @@ async def test_a_focused_scroll_area_shows_a_mark(paths, config, monkeypatch, th
                 old, new = before.cells[y][r.x], after.cells[y][r.x]
                 assert not old.ch.strip(), (box, y, old)              # unfocused: nothing there
                 assert new.ch.strip() and contrast_exact(new.fg, old.bg) >= 3, (box, y, new, old)
+
+
+@pytest.mark.parametrize("theme, no_color", CONDITIONS)
+async def test_the_service_menu_is_readable_and_whole_at_80x24(paths, monkeypatch, theme, no_color):
+    """#83, option C: the menu's title, items, highlighted row and "why it's off" line in the
+    theme's text pair (4.5:1), whole at 80 x 24; the highlighted row is told apart without colour
+    (its text colour becomes its background, and it is bold), and the words say why the items are off."""
+    import asyncio
+
+    set_colour(monkeypatch, no_color)
+    gate = asyncio.Event()
+
+    async def slow(mode, what):
+        await gate.wait()
+        return True, ""
+    monkeypatch.setattr(bot, "service_action", slow)
+    name = bot.SERVICES["dry-run"]
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.theme = theme
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        box = app.screen.query_one(Vertical).region
+
+        def in_menu(sample: str) -> list:
+            """The cells drawing `sample` inside the menu, which must show it whole."""
+            grid = parse(app.export_screenshot(), 80, 24)
+            for y in range(box.y, box.bottom):
+                line = "".join(c.ch for c in grid.cells[y][box.x:box.right])
+                if sample in line:
+                    x = box.x + line.index(sample)
+                    return [grid.cells[y][j] for j in range(x, x + len(sample))]
+            raise AssertionError(f"{sample!r} isn't whole in the menu")
+
+        for sample in (f"Service: {name}", "↑↓ move · enter pick · esc close", "Start", "Stop", "Restart"):
+            cells = [c for c in in_menu(sample) if c.ch.strip()]
+            assert min(contrast_exact(c.fg, c.bg) for c in cells) >= 4.5, sample
+        start, stop = in_menu("Start")[0], in_menu("Stop")[0]
+        assert start.bold and not stop.bold                            # not by colour alone
+        assert start.bg == stop.fg and start.fg != stop.fg              # the text pair, reversed
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.press("down", "down", "enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        box = app.screen.query_one(Vertical).region
+        grid = parse(app.export_screenshot(), 80, 24)
+        inside = [[c for c in grid.cells[y][box.x + 1:box.right - 1]] for y in range(box.y + 1, box.bottom - 1)]
+        drawn = " ".join("".join(c.ch for c in row) for row in inside).split()
+        why = f"Restarting {name}: these are off until it's done.".split()
+        assert drawn[:len(why)] == why, drawn                          # whole, before the items
+        words = [c for row in inside[:2] for c in row if c.ch.strip()]
+        assert min(contrast_exact(c.fg, c.bg) for c in words) >= 4.5
+        gate.set()
+        await settle(app, pilot)

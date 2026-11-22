@@ -5,15 +5,16 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from textual.containers import Vertical
 from textual.geometry import Region
-from textual.widgets import DataTable, Select, Static, TabbedContent
+from textual.widgets import DataTable, OptionList, Select, Static, TabbedContent
 
 from telenotify_tui import bot
 from telenotify_tui.app import TeleNotifyApp
 from telenotify_tui.paths import Paths
 from telenotify_tui.postview import PostView
 from telenotify_tui.screens import dashboard_data as dd
-from telenotify_tui.screens.dashboard import ConfirmScreen, DashboardPane
+from telenotify_tui.screens.dashboard import ConfirmScreen, DashboardPane, ServiceMenu
 from telenotify_tui.store import Store
 
 
@@ -831,69 +832,163 @@ async def test_an_unreadable_state_file_is_said_in_words_with_a_next_step(paths,
         assert f"journalctl --user -u {service}" in status
 
 
-@pytest.mark.parametrize("key, action", [("S", "start"), ("X", "stop"), ("R", "restart")])
-async def test_service_keys_ask_first_then_act(paths, fake_systemctl, key, action):
-    """#83: Start, Stop and Restart have keys (S, X, R); each goes through the same question as
-    its button, and only a yes acts."""
+ACTIONS = ["start", "stop", "restart"]   # the service menu's items, in order
+
+
+async def open_menu(app, pilot) -> ServiceMenu:
+    await pilot.press("s")
+    await pilot.pause()
+    assert isinstance(app.screen, ServiceMenu)
+    return app.screen
+
+
+def actions_run(calls) -> list[tuple[str, ...]]:
+    return [c for c in calls if c[0] == "action"]
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+async def test_s_opens_the_service_menu_and_each_item_asks_first(paths, fake_systemctl, action):
+    """#83, the owner's option C: `s` opens "Service: <name>" listing Start, Stop and Restart; the
+    arrows move, enter picks, and the pick goes through the same question as its button (Cancel
+    focused); only a yes acts."""
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
         shown = {b.binding.key: b for b in app.active_bindings.values()}
-        assert shown[key].enabled and shown[key].binding.description == action.capitalize()   # the keys panel
-        assert f"{key} {action}" in str(app.query_one("#dash-bot").border_subtitle)   # named under the Bot box
-        await pilot.press(key)
+        assert shown["s"].enabled and shown["s"].binding.description == "Service"   # the keys panel
+        assert "s service" in str(app.query_one("#dash-bot").border_subtitle)    # named under the Bot box
+        for answer in ("n", "y"):
+            menu = await open_menu(app, pilot)
+            box = menu.query_one(Vertical)
+            assert box.border_title == f"Service: {bot.SERVICES['dry-run']}"
+            options = menu.query_one(OptionList)
+            assert [str(options.get_option_at_index(i).prompt).strip() for i in range(3)] == [
+                "Start", "Stop", "Restart"]
+            assert options.has_focus and options.highlighted == 0
+            for _ in range(ACTIONS.index(action)):
+                await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+            assert app.focused.id == "confirm-no"
+            assert str(app.screen.query_one("#confirm-yes").label).startswith(f"{action.capitalize()} the bot")
+            if answer == "n":
+                await pilot.press("n")
+                await settle(app, pilot)
+                assert not actions_run(fake_systemctl)
+                assert not isinstance(app.screen, (ConfirmScreen, ServiceMenu))
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert actions_run(fake_systemctl) == [("action", "dry-run", action)]
+
+
+async def test_escape_closes_the_service_menu_with_nothing_done(paths, fake_systemctl):
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        await open_menu(app, pilot)
+        await pilot.press("down", "escape")
+        await settle(app, pilot)
+        assert not isinstance(app.screen, (ServiceMenu, ConfirmScreen))
+        assert not actions_run(fake_systemctl)
+        assert "cancelled" not in text(app, "#svc-result")
+
+
+@pytest.mark.parametrize("row, action", list(enumerate(ACTIONS)))
+async def test_a_click_on_a_service_menu_item_picks_it(paths, fake_systemctl, row, action):
+    """The mouse works too: a click on an item asks about that action."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        menu = await open_menu(app, pilot)
+        await pilot.click(menu.query_one(OptionList), offset=(3, row))
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen)
         assert str(app.screen.query_one("#confirm-yes").label).startswith(f"{action.capitalize()} the bot")
-        await pilot.press("n")
-        await settle(app, pilot)
-        assert not [c for c in fake_systemctl if c[0] == "action"]
-        await pilot.press(key)
-        await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)
-        assert [c for c in fake_systemctl if c[0] == "action"] == [("action", "dry-run", action)]
+        assert actions_run(fake_systemctl) == [("action", "dry-run", action)]
 
 
-async def test_service_keys_are_off_while_one_runs(paths, monkeypatch):
-    """#83: while a start / stop / restart runs, the keys are shown dimmed and ask nothing, as the
-    buttons are disabled."""
+async def test_the_service_menu_is_off_while_an_action_runs(paths, monkeypatch):
+    """#83: while a start / stop / restart runs, the menu's items are off (dimmed), it says why, and
+    neither a key nor a click asks anything; once the action is done they are on again."""
     import asyncio
 
     gate = asyncio.Event()
+    calls: list[str] = []
 
     async def slow(mode, what):
+        calls.append(what)
         await gate.wait()
         return True, ""
     monkeypatch.setattr(bot, "service_action", slow)
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
-        await pilot.press("R")
+        await open_menu(app, pilot)
+        await pilot.press("down", "down", "enter")
         await pilot.pause()
         await pilot.press("y")
         await pilot.pause()
         await pilot.pause()
-        assert not app.query_one(DashboardPane).check_action("service", ("stop",))
-        await pilot.press("X")
+        assert calls == ["restart"]
+        menu = await open_menu(app, pilot)
+        options = menu.query_one(OptionList)
+        assert all(options.get_option_at_index(i).disabled for i in range(3))
+        assert options.highlighted is None
+        why = menu.query_one("#service-why", Static)
+        assert why.display and f"Restarting {bot.SERVICES['dry-run']}" in str(why.render())
+        await pilot.press("down", "enter")
         await pilot.pause()
-        assert not isinstance(app.screen, ConfirmScreen)
+        await pilot.click(options, offset=(3, 1))
+        await pilot.pause()
+        assert app.screen is menu
         gate.set()
         await settle(app, pilot)
-        assert app.query_one(DashboardPane).check_action("service", ("stop",))
+        assert app.screen is menu
+        assert not any(options.get_option_at_index(i).disabled for i in range(3))
+        assert not why.display and options.highlighted == 0
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        assert str(app.screen.query_one("#confirm-yes").label).startswith("Stop the bot")
 
 
-async def test_a_service_key_in_a_narrow_window_shows_the_bot_box(paths, fake_systemctl):
-    """#83: under NARROW columns one top box shows at a time; S shows the Bot box, where the answer appears."""
+async def test_s_in_a_narrow_window_shows_the_bot_box(paths, fake_systemctl):
+    """#83: under NARROW columns one top box shows at a time; `s` shows the Bot box, where the answer appears."""
     app = TeleNotifyApp(paths, refresh_seconds=0)
     async with app.run_test(size=(80, 24)) as pilot:
         await settle(app, pilot)
         pane = app.query_one(DashboardPane)
         pane.add_class("-show-activity")
         await pilot.pause()
-        await pilot.press("S")
+        await open_menu(app, pilot)
+        assert not pane.has_class("-show-activity")
+        await pilot.press("enter")
         await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)
         assert not pane.has_class("-show-activity")
-        assert "done" in text(app, "#svc-result")
+        assert "start tele-notify-dryrun: done" in text(app, "#svc-result")
+
+
+async def test_the_capital_service_keys_are_gone_and_s_is_the_dashboards_only(paths, fake_systemctl):
+    """Option A's S / X / R are replaced by the menu; `s` opens it on the Dashboard only (on Review
+    it is still Send)."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        keys = {b.binding.key: b.binding.action for b in app.active_bindings.values()}
+        assert not {"S", "X", "R"} & set(keys)
+        assert keys["s"] == "service_menu"
+        for key in "SXR":
+            await pilot.press(key)
+            await pilot.pause()
+            assert not isinstance(app.screen, (ServiceMenu, ConfirmScreen)), key
+        await pilot.press("2")
+        await settle(app, pilot)
+        keys = {b.binding.key: b.binding.action for b in app.active_bindings.values()}
+        assert keys.get("s") != "service_menu"
+        assert not [b for b in app.active_bindings.values() if b.binding.action == "service_menu"]
+        assert not actions_run(fake_systemctl)
