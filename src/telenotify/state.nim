@@ -349,15 +349,21 @@ const leads = ["could not send", "error", "not posted"]
 proc problemText*(msg: string): string =
   ## A failure's message as one reason part: its first line (a debug build
   ## adds an async traceback), with "; " (which separates the parts)
-  ## written ", ", and no closing "." (another part may follow it). No
-  ## message at all is "unknown error".
+  ## written ", ", and no closing single "." or ";" (another part or a
+  ## count may follow it): those and the spaces around them are stripped
+  ## until none is left ("x. ." and "x;" are "x"; "..", "..." and "…" stay). No message at all
+  ## is "unknown error", and so is the rest of a bare lead-in ("error:" is
+  ## "error: unknown error"). So it's always as `comparable` leaves it.
   # a debug build's traceback starts on its own line, even after an empty message
   let i = msg.find("Async traceback:")
   let lines = (if i >= 0: msg[0 ..< i] else: msg).strip.splitLines
   result = (if lines.len > 0: lines[0].strip else: "").replace("; ", ", ")
-  if result.endsWith(".") and not result.endsWith(".."): result.setLen result.len - 1
-  result = result.strip
+  # a closing ";" too: a count after it, "x; (2 tries)", would read as a new part
+  while result.endsWith(";") or (result.endsWith(".") and not result.endsWith("..")):
+    result = result[0 ..< ^1].strip
   if result == "": result = unknownProblem
+  for lead in leads:
+    if result == lead & ":": result = lead & ": " & unknownProblem
 
 proc parseTries(words: string): int =
   ## "3 tries" / "1 try" -> 3 / 1; -1 if it isn't a count in 0 .. maxTries.
@@ -385,16 +391,18 @@ proc splitCount(part: string): tuple[base: string, tries: int] =
   let n = parseTries(part[open + 2 ..< part.len - 1])
   if n >= 0: result = (part[0 ..< open], n)
 
-proc comparable(base: string): string =
-  ## A stored part as `problemText` would have written it: no closing "."
-  ## (older rows have one), and "unknown error" after a lead-in with
-  ## nothing after it (an older bot wrote "error: " for no message). A
-  ## part that's empty, or only dots and spaces, is "".
+proc comparable*(base: string): string =
+  ## A stored part, trimmed, as it's compared: without one closing single
+  ## "." (older rows have one; ".." stays), and with "unknown error" after
+  ## a lead-in with nothing after it (an older bot wrote "error: " for no
+  ## message). A part that's empty, or one "." (with any spaces around
+  ## it), is "", which never matches. `problemText`'s output is always left
+  ## as it is.
   result = base.strip
   if result.endsWith(".") and not result.endsWith(".."): result = result[0 ..< ^1].strip
   for lead in leads:
     if result == lead & ":": return lead & ": " & unknownProblem
-  # a part of only dots and spaces stays "": it's no reason, and never folds
+  # an empty part, or one ".", stays "": it's no reason, and never folds
 
 proc withCount(base: string, n: int): string =
   ## `base` with "(n tries)" where it reads naturally: after its lead-in

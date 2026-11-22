@@ -1,4 +1,4 @@
-import std/[unittest, os, tables, strutils, times]
+import std/[unittest, os, tables, strutils, times, random]
 import telenotify/state
 import db_connector/db_sqlite
 from std/posix import nil
@@ -156,6 +156,39 @@ suite "state":
     # nor is a part of only dots and spaces (#142 run 8: wp8 C1, C21)
     check withProblem("a; .; x", "") == "a; .; x; could not send: unknown error"
     check withProblem("a;  . ; b", "") == "a;  . ; b; could not send: unknown error"
+
+  test "closing dots go until none is left, so a message always folds with itself (#142 run 9)":
+    # wp9 G21, G22, G24
+    var r = "role"
+    for _ in 1 .. 3: r = withProblem(r, ". .")
+    check r == "role; could not send (3 tries): unknown error"
+    r = "role"
+    for _ in 1 .. 3: r = withProblem(r, "x. .")
+    check r == "role; could not send (3 tries): x"
+    check withProblem(withProblem("role", ". ."), "") == "role; could not send (2 tries): unknown error"
+    check problemText("Failed . .") == "Failed"
+    # ellipses stay as written
+    check problemText("..") == ".." and problemText("wait...") == "wait..." and problemText("x…") == "x…"
+    check problemText("x. ..") == "x. .."
+    check problemText("error:") == "error: unknown error"     # a bare lead-in
+    # the property: for seeded messages of awkward pieces, problemText's output is as comparable
+    # leaves it, and the same message twice folds into one counted part
+    const pieces = [".", " ", "\t", "\n", ";", "; ", "(", ")", "tries", "try", ":", "error", "could not send",
+                    "not posted", "1", "2", " (", "وظيفة", "..", "…", "x"]
+    var rng = initRand(80142)
+    for _ in 1 .. 3000:
+      var m = ""
+      for _ in 1 .. rng.rand(1 .. 8): m.add pieces[rng.rand(pieces.high)]
+      let p = problemText(m)
+      check comparable(p) == p and comparable("could not send: " & p) == "could not send: " & p
+      for held in [false, true]:
+        let once = withProblem("role", m, held)
+        let twice = withProblem(once, m, held)
+        let folded = twice.split("; ").len == once.split("; ").len and
+                     twice.count("(2 tries)") == once.count("(2 tries)") + 1
+        if not folded:
+          checkpoint "message: " & m.escape & " held: " & $held & "\n once: " & once & "\n twice: " & twice
+        check folded
 
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")
