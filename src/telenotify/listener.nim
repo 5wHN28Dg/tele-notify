@@ -658,7 +658,7 @@ proc sendApproved*(l: Listener) {.async.} =
     except HeldBack as e:
       # held back again (#80): its own words only, so a reason it already
       # has (from the live post, or an earlier approval) isn't added again
-      l.say &"   reviewed {r.chatTitle} #{r.msgId} not posted: {e.msg.splitLines()[0]}"
+      l.say &"   reviewed {r.chatTitle} #{r.msgId}: {e.msg.splitLines()[0]}"
       try: l.state.reopenReview(r.id, e.msg.splitLines()[0])
       except CatchableError: discard
     except CatchableError as e:

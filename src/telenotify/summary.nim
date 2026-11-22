@@ -28,13 +28,15 @@
 ##   (`plainField`): control, invisible and direction characters are
 ##   dropped, and so are letters that look blank (ZWNJ and ZWJ are kept:
 ##   Persian and Kurdish spelling, emoji); line breaks become spaces; a
-##   colon between digits gets a word joiner (U+2060) after it ("10:30"
-##   looks the same, reads in order in Arabic, and isn't a timestamp); a
-##   space goes after "@ # $ / :" and after a dot that isn't followed by a
-##   space or another dot; and in a run TDLib would take as a card number
-##   (13 to 19 digits with the card checksum, any spaces and dashes between
-##   groups) each separator gets a "·", each number kept as it was ("4111 ·
-##   1111 · …"; one group is split in fours). Other numbers are untouched.
+##   ".", "/" or ":" between two digits (any script) gets a word joiner
+##   (U+2060) after it ("10:30", "1.500.000", "22/11/2026" look the same,
+##   read in order in Arabic, and are no timestamp, link or IP address);
+##   elsewhere a space goes after "@ # $ / :" and after a dot that isn't
+##   followed by a space or another dot; and in a run TDLib would take as a
+##   card number (13 to 19 digits with the card checksum, any spaces and
+##   dashes between groups, not right after "+") each separator gets a "·",
+##   each number kept as it was ("4111 · 1111 · …"; one group is split in
+##   fours). Other numbers are untouched.
 ##   The only link is the post's own.
 ## * **Nothing is copied from the post itself.** The role and the place
 ##   are the config's keywords the filter matched (`classify`), as written
@@ -51,6 +53,7 @@
 
 import std/[strutils, unicode]
 import regex
+import unicodedb/properties
 import normalize, keywords, boards
 
 const
@@ -83,6 +86,10 @@ proc breaksLine(c: int): bool =
   c < 0x20 or c in 0x7F..0x9F or c == 0x2028 or c == 0x2029
 
 proc isDigit(r: Rune): bool = int(r) < 128 and char(int(r)) in Digits
+
+proc isAnyDigit(r: Rune): bool =
+  ## Any decimal digit: 0-9, Arabic-Indic, Persian ...
+  r.unicodeCategory == ctgNd
 
 proc separator(r: Rune): bool =
   ## What TDLib accepts between the digits of a bank card number.
@@ -137,7 +144,8 @@ proc defuseDigits(rs: seq[Rune]): seq[Rune] =
       else: break
     var all: seq[Rune]
     for g in groups: all.add g
-    let card = all.cardLike
+    # TDLib takes no card from a run right after "+" (a phone number: "+964 …")
+    let card = all.cardLike and not (i > 0 and rs[i - 1] == Rune('+'))
     for n, g in groups:
       if n > 0:
         if card:
@@ -172,15 +180,17 @@ proc plainField*(s: string, maxRunes: int): string =
   rs = defuseDigits(rs)
   # defuse what Telegram would make an entity by itself: a space after a
   # sigil, and after a dot that isn't followed by a space or another dot.
-  # A colon between digits ("10:30", a media timestamp to TDLib) keeps its
-  # place and gets a word joiner (U+2060) after it instead: the time still
-  # reads in order inside Arabic text, which a space or another colon-like
-  # character wouldn't keep.
+  # Between two digits (any script) a ".", "/" or ":" ("1.500.000",
+  # "22/11/2026", "10:30" or "٩:٣٠", "192.168.1.1") keeps its place and
+  # gets a word joiner (U+2060) after it instead: no timestamp, link or IP
+  # address to TDLib, and the number still reads in order inside Arabic
+  # text, which a space wouldn't keep.
   var cut: seq[Rune]
   for i, r in rs:
     cut.add r
     if i + 1 >= rs.len or rs[i + 1] == Rune(' '): continue
-    if r == Rune(':') and i > 0 and rs[i - 1].isDigit and rs[i + 1].isDigit: cut.add Rune(0x2060)
+    let betweenDigits = i > 0 and rs[i - 1].isAnyDigit and rs[i + 1].isAnyDigit
+    if betweenDigits and ($r in [":", "/"] or $r in dots): cut.add Rune(0x2060)
     elif $r in sigils or ($r in dots and $rs[i + 1] notin dots): cut.add Rune(' ')
   if cut.len > maxRunes:
     cut.setLen maxRunes - 1

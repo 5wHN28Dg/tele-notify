@@ -71,6 +71,32 @@ suite "state":
     for r in st.stats(7):
       if r.chat == "Fourth": check r.verdicts == [0, 1, 0] and r.forwarded == 0
 
+  test "a failed send adds its reason once, compared as whole parts, and counts repeats (#142 run 4)":
+    check withProblem("no level", "level") == "no level; could not send: level"
+    check withProblem("no link to the post", "no link") == "no link to the post; could not send: no link"
+    let held = "error: no link to the post from Telegram (no link), so no summary was sent. Approve it again to retry"
+    check withProblem("role x; " & held, "no link") == "role x; " & held & "; could not send: no link"
+    var r = "role x"
+    for _ in 1 .. 3: r = withProblem(r, "FLOOD_WAIT")
+    check r == "role x; could not send: FLOOD_WAIT (3 tries)"
+    # a reason the live post was held back for counts its tries, never repeated
+    r = "role x; not posted: it isn't from a public channel"
+    r = withProblem(r, "not posted: it isn't from a public channel")
+    check r == "role x; not posted: it isn't from a public channel (1 try)"
+    r = withProblem(r, "not posted: it isn't from a public channel")
+    check r == "role x; not posted: it isn't from a public channel (2 tries)"
+    check withProblem("", "no link") == "could not send: no link"
+    # through the database
+    st.addReview(-300, 1, "Jobs", "text", "no level", "role", "")
+    var id = 0'i64
+    for x in st.pendingReviews():
+      if x.chatId == -300: id = x.id
+    for _ in 1 .. 2:
+      check st.decideReview(id, "to_send")
+      st.reopenReview(id, "level")
+    for x in st.pendingReviews():
+      if x.chatId == -300: check x.reasons == "no level; could not send: level (2 tries)"
+
   test "alerts are kept for the terminal screen, newest first":
     st.addAlert("first")
     st.addAlert("second")

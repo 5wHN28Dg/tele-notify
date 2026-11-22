@@ -302,12 +302,22 @@ suite "listener":
     f.noForward.incl -2
     f.chats[-2] = @[msg(-2, 5, good)]
     let (l, st) = setup(f, fallback = "summary")
+    var lines: seq[string]
+    l.log = proc (line: string) {.closure, gcsafe.} =
+      {.cast(gcsafe).}: lines.add line
     waitFor l.bootstrap()                                # live: held back, to review
     for _ in 1 .. 3:
       check st.decideReview(st.pendingReviews()[0].id, "to_send")
       waitFor l.sendApproved()                           # bounces back each time
     let r = st.pendingReviews()
     check f.texts.len == 0 and r.len == 1 and r[0].reasons.count(privateHeldBack) == 1
+    check r[0].reasons.endsWith(privateHeldBack & " (3 tries)")    # a trace of the tries
+    var said = 0
+    for x in lines:
+      if "not posted:" in x:
+        inc said
+        check x.count("not posted:") == 1                # said once per line (#142 run 4)
+    check said >= 3
     # an approved review that wasn't held back live gets the reason once too
     st.addReview(-2, 9, "chat2", unclear, "no level", "", "")
     for _ in 1 .. 2:

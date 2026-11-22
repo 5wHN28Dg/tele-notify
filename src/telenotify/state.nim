@@ -339,14 +339,47 @@ proc decideReview*(s: State, id: int64, status: string, fromStatus = "pending"):
             status, now(), id, fromStatus)
   s.db.getValue(sql"SELECT changes()") == "1"
 
+const couldNotSend = "could not send: "
+
+proc withProblem*(reasons, problem: string): string =
+  ## `reasons` ("a; b; …") after a failed send for `problem`. A reason it
+  ## already has as a whole part isn't added again; that part counts the
+  ## tries instead: "could not send: <problem> (2 tries)", or, for a reason
+  ## the live post was held back for (#80), "<problem> (1 try)". A part is
+  ## whole when it starts the text or follows "; ", and ends the text or
+  ## comes before "; " (a reason may itself contain "; "), so "no link"
+  ## doesn't match "no link to the post".
+  let problem = problem.strip
+  if problem != "":
+    for (wanted, held) in [(couldNotSend & problem, false), (problem, true)]:
+      var at = reasons.find(wanted)
+      while at >= 0:
+        let stop = at + wanted.len
+        if at == 0 or reasons[0 ..< at].endsWith("; "):
+          # what follows: nothing, "; ", or a count " (N try)" / " (N tries)" then that
+          var rest = reasons[stop .. ^1]
+          var tries = -1
+          if rest.startsWith(" ("):
+            let close = rest.find(')')
+            let words = (if close > 0: rest[2 ..< close] else: "").split(' ')
+            if words.len == 2 and words[1] in ["try", "tries"]:
+              try:
+                tries = parseInt(words[0])
+                rest = rest[close + 1 .. ^1]
+              except ValueError: discard
+          if rest == "" or rest.startsWith("; "):
+            let n = (if tries >= 0: tries elif held: 0 else: 1) + 1
+            return reasons[0 ..< at] & wanted & " (" & $n & (if n == 1: " try)" else: " tries)") & rest
+        at = reasons.find(wanted, at + 1)
+  (if reasons == "": "" else: reasons & "; ") & couldNotSend & problem
+
 proc reopenReview*(s: State, id: int64, problem: string) =
-  ## Sending failed: put it back in the queue, with the reason. A reason it
-  ## already has (the same post bouncing back again, or held back live for
-  ## the same reason, #80) isn't added again.
-  s.db.exec(sql"""UPDATE reviews SET status = 'pending',
-                   reasons = CASE WHEN ? <> '' AND instr(COALESCE(reasons, ''), ?) > 0 THEN reasons
-                                  ELSE reasons || '; could not send: ' || ? END
-                   WHERE id = ? AND status = 'to_send'""", problem, problem, problem, id)
+  ## Sending failed: put it back in the queue, with the reason
+  ## (`withProblem`: a reason it already has is counted, not repeated).
+  let row = s.db.getRow(sql"SELECT COALESCE(reasons, '') FROM reviews WHERE id = ? AND status = 'to_send'", id)
+  if row.len == 0: return
+  s.db.exec(sql"""UPDATE reviews SET status = 'pending', reasons = ?
+                   WHERE id = ? AND status = 'to_send'""", withProblem(row[0], problem), id)
 
 proc getMeta*(s: State, key: string): string =
   s.db.getValue(sql"SELECT value FROM meta WHERE key = ?", key)

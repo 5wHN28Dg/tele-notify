@@ -34,7 +34,8 @@ const hostile = ["@admin", "@_admin_x", "#hot", "#_hot", "#·hot", "#\u200Chot",
                  "/_start", "tg://-x", "ton://x", "tonsite://x.ton", "x.ton", "evil.example",
                  "مرحبا.example.com", "mail@evil.example", "hr＠evil.example", "https://evil.example/x",
                  "t.me/examplejobs", "10:30", "1 0:30", "4111111111111111", "4111 1111 1111 1111",
-                 "4111-1111-1111-1111", "x 5500000000000004 y", "1.2.3.4"]
+                 "4111-1111-1111-1111", "x 5500000000000004 y", "1.2.3.4", "192.168.1.1",
+                 "1.1.1.1/x"]
 
 let reviewTitles = parseFile(currentSourcePath.parentDir / "fixtures" /
                              "summary_hostile_titles.json")["titles"].getElems.mapIt(it.getStr)
@@ -127,6 +128,20 @@ suite "summary text":
     check plainField("1:02:03", 10) == "1:\u206002:\u206003"
     check plainField("دوام 10:30-12:30", 50) == "دوام 10:\u206030-12:\u206030"
     check plainField("Location:Basra", 50) == "Location: Basra"        # other colons get a space
+
+  test "between two digits, any script, a dot, slash or colon gets a word joiner, not a space (#142 run 4)":
+    const wj = "\u2060"
+    check plainField("الراتب 1.500.000", 50) == "الراتب 1." & wj & "500." & wj & "000"
+    check plainField("22/11/2026", 50) == "22/" & wj & "11/" & wj & "2026"
+    check plainField("دوام ٩:٣٠", 50) == "دوام ٩:" & wj & "٣٠"
+    check plainField("۱۰:۳۰", 50) == "۱۰:" & wj & "۳۰"
+    check plainField("192.168.1.1", 50) == "192." & wj & "168." & wj & "1." & wj & "1"
+    check plainField("1.1.1.1/x", 50) == "1." & wj & "1." & wj & "1." & wj & "1/ x"
+    check plainField("a/b x.y", 50) == "a/ b x. y"                      # elsewhere: the space rule
+
+  test "a number right after \"+\" is never taken as a card, checksum or not (#142 run 4)":
+    check plainField("+964 770 000 0002", 50) == "+964 770 000 0002"     # passes the checksum
+    check plainField("x 964 770 000 0002", 50) == "x 964 · 770 · 000 · 0002"   # without "+" it would be a card
     # a long number cut short can't become card-like
     let cutShort = plainField("x".repeat(40) & " 42222222222220000000", 55)
     check cutShort == "x".repeat(40) & " 4222·2222·2222·2…"
@@ -144,6 +159,10 @@ suite "summary text":
       check lib.entities("mailto:a@example.com") == @["textEntityTypeEmailAddress: a@example.com"]
       check lib.entities("x 4222222222222 y").len == 1 and lib.entities("x 4222222222223 y").len == 0
       check lib.entities("10:30").len == 1 and lib.entities(plainField("10:30", 10)).len == 0
+      check lib.entities("+964 770 000 0002").len == 0 and lib.entities("964 770 000 0002").len == 1
+      check lib.entities("192.168.1.1").len == 1             # the finder sees an IP address
+      for t in ["الراتب 1.500.000", "22/11/2026", "دوام ٩:٣٠", "192.168.1.1", "1.1.1.1/x", "+964 770 000 0002"]:
+        check lib.entities(plainField(t, 100)).len == 0
       let own = @["textEntityTypeUrl: https://t.me/examplejobs/7"]
       for t in @hostile & reviewTitles:
         check lib.entities(plainField(t, 1000)).len == 0
