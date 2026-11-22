@@ -1292,7 +1292,7 @@ async def test_the_bot_problems_are_never_cut_at_80x24(paths, cfg_path):
             box.focus()
             await pilot.press("end")
             await pilot.pause()
-        assert "libtdjson.so doesn't exist" in drawn(app)
+        assert "libtdjson.so doesn't exist" in " ".join(drawn(app).split())   # whole, wherever it wraps
 
 
 async def test_many_problems_scroll_with_a_scrollbar(paths, cfg_path):
@@ -1311,7 +1311,7 @@ async def test_many_problems_scroll_with_a_scrollbar(paths, cfg_path):
         box.focus()
         await pilot.press("end")
         await pilot.pause()
-        assert "libtdjson.so doesn't exist" in drawn(app)
+        assert "libtdjson.so doesn't exist" in " ".join(drawn(app).split())   # whole, wherever it wraps
 
 
 @pytest.mark.parametrize("api_id, api_hash", [(4242, 123), ("4242", "abc"), (4242, ["abc"]), (True, "abc")])
