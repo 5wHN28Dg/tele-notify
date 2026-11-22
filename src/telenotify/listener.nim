@@ -43,6 +43,7 @@ import config, classify, gather, fetch, telegram, state, dedup, boards, notify, 
 
 type
   Listener* = ref object
+    sendingReady*: bool        ## the worker runs: approved posts are sent (`sending_ready`, #62)
     cfg*: Config
     tg*: Telegram
     state*: State
@@ -595,13 +596,20 @@ proc sendApproved*(l: Listener, at = 0'i64) {.async.} =
       try: l.state.reopenReview(r.id, e.msg)
       except CatchableError: discard
 
+proc writeSendingReady*(l: Listener) =
+  ## `sending_ready` as this bot is: "1" while its worker runs (never in a dry
+  ## run). Written by the worker and again by every heartbeat, so a second
+  ## `telenotify run` on the same file can't leave it wrong for long.
+  try: l.state.setMeta("sending_ready", if l.sendingReady and not l.dryRun: "1" else: "0")
+  except CatchableError as e: l.say "   could not update the state database: " & e.msg
+
 proc worker*(l: Listener) {.async.} =
   ## Process live messages as they arrive, and approved reviews every few
   ## seconds, until `stop` is set. While it runs, the state's `sending_ready`
   ## is "1": the terminal screen promises a send only then (#62).
   proc ready(on: bool) =
-    try: l.state.setMeta("sending_ready", if on and not l.dryRun: "1" else: "0")
-    except CatchableError as e: l.say "   could not update the state database: " & e.msg
+    l.sendingReady = on
+    l.writeSendingReady()
   ready(true)
   defer: ready(false)
   var ticks = 0
@@ -630,11 +638,16 @@ proc forgetOldTexts*(l: Listener) =
   try: l.state.forgetOldTexts(l.cfg.keepTextDays)
   except CatchableError as e: l.say "   could not clear old post texts: " & e.msg
 
+proc beat*(l: Listener) =
+  ## One heartbeat: "alive now", and whether approved posts are being sent.
+  try: l.state.setMeta("last_alive", $getTime().toUnix)
+  except CatchableError as e: l.say "   heartbeat: " & e.msg
+  l.writeSendingReady()
+
 proc heartbeat*(l: Listener) {.async.} =
   var lastCleanup = 0'i64
   while not l.stop[]:
-    try: l.state.setMeta("last_alive", $getTime().toUnix)
-    except CatchableError as e: l.say "   heartbeat: " & e.msg
+    l.beat()
     if getTime().toUnix - lastCleanup >= 86_400:   # at start, then daily
       lastCleanup = getTime().toUnix
       l.forgetOldTexts()

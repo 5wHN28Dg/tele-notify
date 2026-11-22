@@ -25,6 +25,7 @@ Decisions are written exactly as `telenotify review` writes them
 from __future__ import annotations
 
 import dataclasses
+import re
 import sqlite3
 import subprocess
 import time
@@ -54,10 +55,25 @@ UI_TIMEOUT = 1.0   # seconds to wait for the bot's lock: these reads and writes 
 TICK_TIMEOUT = 0.25   # the countdown's once-a-second read waits less, and skips that second when busy
 
 # why a send failed, in plain words (TDLib's error text otherwise)
-SEND_ERRORS = {"CHAT_WRITE_FORBIDDEN": "this account may not post in the channel",
+SEND_ERRORS = {"Have no write access to the chat": "this account may not post in the channel",
+               "CHAT_WRITE_FORBIDDEN": "this account may not post in the channel",
+               "Need administrator rights in the channel chat": "this account isn't an admin of the channel",
                "CHAT_ADMIN_REQUIRED": "this account isn't an admin of the channel",
+               "Message has protected content and can't be forwarded":
+                   "the source doesn't allow forwarding, and the post has no link to share",
                "no link to the post": "the post has no link to share",
                "FLOOD_WAIT": "Telegram asked to slow down"}
+# TDLib's flood limit, as its own text says it: "Too Many Requests: retry after 30"
+RETRY_AFTER = re.compile(r"Too Many Requests: retry after (\d+)")
+
+
+def send_error_words(why: str) -> str:
+    """Why a send failed, in plain words: TDLib's own strings (and the older codes) mapped;
+    anything else as it was given, shortened."""
+    m = RETRY_AFTER.search(why)
+    if m:
+        return f"Telegram asked to wait {m.group(1)} s before sending more"
+    return next((v for k, v in SEND_ERRORS.items() if k in why), cut(why, 60))
 
 # a decision's status in plain words, for notes
 PLAIN = {"pending": "back in the queue", "to_send": "approved", "sending": "being sent", "sent": "sent",
@@ -291,6 +307,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
     def on_show(self) -> None:
         self.call_after_refresh(self._focus_main)
         self._arm()
+
+    def on_resize(self, _event: events.Resize) -> None:
+        # a new width: the height kept for the note is measured again, once laid out (P4)
+        self.call_after_refresh(lambda: self._reserve_note(self._watching_last()))
 
     def on_hide(self) -> None:
         if self._ticker is not None:
@@ -527,7 +547,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 shown = [str(c) for c in table.get_row(str(r.id))]
                 for col, value, was in zip(self._hist_cols, cells(r), shown, strict=True):
                     if str(value) != was:
-                        table.update_cell(str(r.id), col, value)
+                        # a longer value widens its column ("waits for bot", a date after midnight)
+                        table.update_cell(str(r.id), col, value, update_width=True)
             self._note_history_row()
             return
         scroll_y = table.scroll_y
@@ -645,9 +666,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         """Why an approval made here is pending again, in plain words."""
         failed, stopped = "; could not send: ", "the bot stopped while sending it"
         if now.reasons.count(failed) > decided.reasons.count(failed):
-            why = now.reasons.rsplit(failed, 1)[1].split(";")[0].strip()
-            plain = next((v for k, v in SEND_ERRORS.items() if k in why), why)
-            return f"#{decided.msg_id}: sending failed: {cut(plain, 60)}; it's back in the queue"
+            why = now.reasons.rsplit(failed, 1)[1].strip()   # the last failure, whole (it may hold a ";")
+            return f"#{decided.msg_id}: sending failed: {send_error_words(why)}; it's back in the queue"
         if now.reasons.count(stopped) > decided.reasons.count(stopped):
             return f"#{decided.msg_id}: the bot stopped while sending; check the channel before sending it again"
         return f"#{decided.msg_id} was changed elsewhere: it is now back in the queue"
@@ -657,9 +677,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         if now is not None and now.status == "to_send":
             return self._approved_note(decided, now.send_after), "good"
         if now is not None and now.status == "sending" and self._bot_up:
-            return f"#{decided.msg_id} is being sent to the channel now: too late to undo", "warn"
+            return f"#{decided.msg_id} is being handed to Telegram now: too late to undo", "warn"
         if now is not None and now.status == "sent":
-            return f"#{decided.msg_id} sent to the channel", "good"
+            # TDLib has taken it to send; whether the channel got it, Telegram says later (an alert if not)
+            return f"#{decided.msg_id} handed to Telegram for the channel", "good"
         if now is not None and now.status == "sending":
             return (f"#{decided.msg_id}: sending was interrupted when the bot stopped; "
                     "it goes back to the queue when the bot starts"), "warn"
@@ -731,7 +752,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._press_at = event.time
             r = self._history_pick()
             if self._undo_settling and r is not None:
-                self.note(f"#{r.msg_id} has only just come under the cursor: check it, then press u", "warn")
+                self._action_note = (f"#{r.msg_id} has only just come under the cursor: check it, then press u",
+                                     "warn")
+                self._refresh_note()
         else:
             self._press_at = None
 
@@ -812,7 +835,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         r, status = target
         if self._history_mode and self._made() - self._hist_shown_at < self.DECIDE_DELAY:
             # a double tap, a held key or a double click: the row only just came under the cursor
-            self.note(f"#{r.msg_id} has only just come under the cursor: check it, then press u", "warn")
+            self._action_note = (f"#{r.msg_id} has only just come under the cursor: check it, then press u", "warn")
+            self._refresh_note()
             return
         try:
             with self.app.store(UI_TIMEOUT) as st:
@@ -826,9 +850,10 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._decided_note = ""
         if not ok:
             if now == "sent":
-                self._action_note = (f"too late to undo: the bot has already sent #{r.msg_id} to the channel", "bad")
+                gone = f"too late to undo: the bot has already handed #{r.msg_id} to Telegram for the channel"
+                self._action_note = (gone, "bad")
             elif now == "sending":
-                self._action_note = (f"too late to undo: the bot is sending #{r.msg_id} to the channel now", "bad")
+                self._action_note = (f"too late to undo: the bot is handing #{r.msg_id} to Telegram now", "bad")
             else:
                 gone = PLAIN.get(now, now) if now else "gone from the queue"
                 self._action_note = (f"#{r.msg_id} can't be undone: it is now {gone}", "warn")

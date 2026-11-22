@@ -407,15 +407,19 @@ proc getMeta*(s: State, key: string): string =
 proc setMeta*(s: State, key, value: string) =
   s.db.exec(sql"INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value)
 
-proc botSending*(s: State, at = now()): bool =
-  ## Is a bot on this file running and sending approved posts? Its heartbeat
-  ## (`last_alive`, every minute) is under 120 s old, it didn't record a clean
-  ## stop, and its worker has started (`sending_ready`). The terminal screen
-  ## asks the same (store.py `bot_sending`).
+proc botRunning*(s: State, at = now()): bool =
+  ## Is a bot on this file running? Its heartbeat (`last_alive`, every
+  ## minute) is under 120 s old and it didn't record a clean stop. The
+  ## terminal screen asks the same (store.py `bot_running`).
   let alive = s.getMeta("last_alive")
-  if alive == "" or s.getMeta("connection") == "stopped" or s.getMeta("sending_ready") != "1": return false
+  if alive == "" or s.getMeta("connection") == "stopped": return false
   try: at - parseBiggestInt(alive) < 120
   except ValueError: false
+
+proc botSending*(s: State, at = now()): bool =
+  ## Is it also sending approved posts: its worker has started, after the
+  ## start-up backlog (`sending_ready`)? (store.py `bot_sending`)
+  s.botRunning(at) and s.getMeta("sending_ready") == "1"
 
 type StatRow* = object
   chat*: string

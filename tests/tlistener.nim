@@ -448,6 +448,21 @@ suite "listener":
     waitFor running
     check st.getMeta("sending_ready") == "0"
 
+  test "the heartbeat says again that it sends, after a second run wrote otherwise (review run 3, F1)":
+    let f = FakeTg()
+    let (l, st) = setup(f)
+    let stop = new bool
+    l.stop = stop
+    let running = l.worker()
+    waitFor sleepAsync(50)
+    st.setMeta("sending_ready", "0")      # a second `telenotify run` that TDLib then refused
+    l.beat()
+    check st.getMeta("sending_ready") == "1" and st.botSending()
+    stop[] = true
+    waitFor running
+    l.beat()                              # stopped: it doesn't claim to send
+    check st.getMeta("sending_ready") == "0"
+
   test "a sent post that can't be marked sent is logged (review run 1, C2)":
     let f = FakeTg()
     let (l, st) = setup(f)

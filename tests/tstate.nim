@@ -527,5 +527,16 @@ suite "state":
     st.setMeta("connection", "stopped")
     check not st.botSending(t)
 
+  test "botRunning without sending_ready: running, not sending yet (review run 3, F5)":
+    let t = getTime().toUnix
+    st.setMeta("last_alive", $(t - 10))
+    st.setMeta("connection", "starting")
+    st.setMeta("sending_ready", "0")
+    check st.botRunning(t) and not st.botSending(t)
+    st.setMeta("sending_ready", "1")
+    check st.botRunning(t) and st.botSending(t)
+    st.setMeta("connection", "stopped")
+    check not st.botRunning(t) and not st.botSending(t)
+
 st.close()
 removeDir(dir)

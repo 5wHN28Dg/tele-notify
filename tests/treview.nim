@@ -129,6 +129,23 @@ suite "what review promises (review run 2)":
       st.setMeta("last_alive", $getTime().toUnix)
       st.setMeta("connection", "ready")
       st.setMeta("sending_ready", "1")
+    block:                                    # running, still reading its backlog (F5)
+      let st = openState(statePath(cfg, false))
+      defer: st.close()
+      st.setMeta("last_alive", $getTime().toUnix)
+      st.setMeta("connection", "starting")
+      st.setMeta("sending_ready", "0")
+    addOne(9)
+    f = answers("starting.txt", "s\ny\n")
+    shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)
+    f.close()
+    check "the bot is starting: it is sent once it has caught up" in shown
+    check "isn't running" notin shown
+    block:
+      let st = openState(statePath(cfg, false))
+      defer: st.close()
+      st.setMeta("connection", "ready")
+      st.setMeta("sending_ready", "1")
     addOne(7)
     f = answers("up.txt", "s\ny\n")
     shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)

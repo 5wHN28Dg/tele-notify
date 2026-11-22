@@ -142,16 +142,6 @@ proc cmdAlert*(cfg: Config, text: string, fetcher: Fetcher = nil) {.async.} =
 proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
   let dry = dryRunFlag or cfg.dryRun
   let st = openState(statePath(cfg, dry))
-  # for the terminal screen, at once: the last run's "stopped" / "ready" mustn't
-  # show while this one logs in (connection updates before the listener exists
-  # are dropped)
-  try:
-    st.setMeta("mode", if dry: "dry-run" else: "real")
-    st.setMeta("started_at", $getTime().toUnix)
-    st.setMeta("connection", "starting")
-    st.setMeta("sending_ready", "0")       # until the worker starts, after the backlog
-  except CatchableError as e:
-    echo "   could not update the state database: ", e.msg
   var l: Listener
   var sessionLost = ""
   # Your own bot (#122), before connecting: the log-out alert goes through it,
@@ -230,9 +220,18 @@ proc cmdRun*(cfg: Config, dryRunFlag: bool) {.async.} =
     raise connecting.readError
   let s = connecting.read
   # Telegram's session is open, so this run holds TDLib's lock on the data
-  # folder: no other bot on this state file is sending. A post the last run
-  # was sending when it stopped goes back to the queue, for you to check,
-  # never out twice.
+  # folder: no other bot on this state file is running. Only now does it say
+  # it runs (a second `telenotify run` that TDLib refuses must not overwrite
+  # the running bot's state, review run 3), and a post the last run was
+  # sending when it stopped goes back to the queue, for you to check, never
+  # out twice.
+  try:
+    st.setMeta("mode", if dry: "dry-run" else: "real")
+    st.setMeta("started_at", $getTime().toUnix)
+    st.setMeta("connection", "starting")
+    st.setMeta("sending_ready", "0")       # until the worker starts, after the backlog
+  except CatchableError as e:
+    echo "   could not update the state database: ", e.msg
   try:
     let reopened = st.reopenInterruptedSends()
     if reopened > 0:
@@ -343,6 +342,7 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
     echo "Nothing to review."
     return 0
   let botUp = st.botSending()
+  let botStarting = not botUp and st.botRunning()
   let sendQuestion = if dryRun: "Record as approved (dry run, nothing is sent)?"
                      else: "Send this post to the channel?"
   let discardQuestion = if dryRun: "Record as discarded (dry run)?" else: "Discard?"
@@ -373,6 +373,9 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
         elif st.decideReview(r.id, "to_send", undoSeconds = cfg.undoSeconds):
           inc approved
           if dryRun: echo "approved ✅ (dry run: recorded, never sent)"
+          elif botStarting:
+            echo "approved ✅ (the bot is starting: it is sent once it has caught up; until then the " &
+                 "terminal screen's Review tab can undo it)"
           elif not botUp:
             echo "approved ✅ (the bot isn't running: it is sent when the bot starts; until then the " &
                  "terminal screen's Review tab can undo it)"
@@ -395,6 +398,7 @@ proc cmdReview*(cfg: Config, dryRun: bool, input: File = stdin, answers = askEac
     if quitting: break
   if approved > 0:
     if dryRun: echo &"\n{approved} approved (dry run: recorded, never sent)."
+    elif botStarting: echo &"\n{approved} approved: the bot is starting, so they are sent once it has caught up."
     elif not botUp: echo &"\n{approved} approved: the bot isn't running, so they are sent when it starts."
     elif cfg.undoSeconds > 0: echo &"\n{approved} approved: the bot sends them after {cfg.undoSeconds} s."
     else: echo &"\n{approved} approved: the bot sends them right away."

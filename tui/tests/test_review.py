@@ -494,7 +494,7 @@ async def test_undo_after_the_bot_sent_it_is_too_late(paths, state, labels):
         db.close()
         await pilot.press("u")
         await pilot.pause()
-        assert "too late" in note(app) and "already sent" in note(app)
+        assert "too late" in note(app) and "already handed #11 to Telegram" in note(app)
         assert status_of(state, 11) == "sent"
     assert [l["label"] for l in read_labels(labels)] == ["TRUE"]   # it did go out: the label stays
 
@@ -540,12 +540,12 @@ async def test_approving_counts_down_then_says_it_was_sent(paths, state, labels)
         set_row(state, 11, status="sent")                     # the bot sent it
         pane._countdown()
         await pilot.pause()
-        assert note(app) == "#11 sent to the channel"
+        assert note(app) == "#11 handed to Telegram for the channel"
         assert pane.check_action("undo", ()) is None          # no undo offered once sent
         assert not app.query_one("#btn-undo", Button).display
         await pilot.press("u")
         await pilot.pause()
-        assert status_of(state, 11) == "sent" and note(app) == "#11 sent to the channel"
+        assert status_of(state, 11) == "sent" and note(app) == "#11 handed to Telegram for the channel"
     assert [l["label"] for l in read_labels(labels)] == ["TRUE"]
 
 
@@ -584,7 +584,7 @@ async def test_u_once_the_bot_has_started_sending_is_too_late(paths, state, labe
         set_row(state, 11, send_after=int(time.time()) - 1, status="sending")
         await pilot.press("u")
         await pilot.pause()
-        assert "too late to undo" in note(app) and "sending #11" in note(app)
+        assert "too late to undo" in note(app) and "handing #11 to Telegram" in note(app)
         assert status_of(state, 11) == "sending"
     assert [l["label"] for l in read_labels(labels)] == ["TRUE"]
 
@@ -807,7 +807,7 @@ async def test_an_approval_note_counting_down_never_moves_the_post(paths, state,
             pane._countdown() if pane._last is not None else pane.reload()
             await pilot.pause()
             assert split.region.y == y and app.query_one("#review-note").region.height == h, note(app)
-        assert note(app) == "#1234567890123 sent to the channel"
+        assert note(app) == "#1234567890123 handed to Telegram for the channel"
 
 
 async def test_the_timer_runs_only_while_review_is_shown_and_counting(paths, state):
@@ -1116,6 +1116,140 @@ async def test_a_label_error_stays_and_the_post_doesnt_move(paths, state, now, m
         await pilot.press("space")
         await pilot.pause()
         assert "corpus label not saved" not in note(app)
+
+
+# ------------------------------------------------- review run 3
+
+async def test_a_second_bot_run_doesnt_switch_off_the_countdown(paths, state, config, binary, tmp_path):
+    """F1: a second `telenotify run` that can't start (here: no api_id) leaves the running bot's
+    state alone, so the screen still counts down."""
+    import asyncio
+    import shutil
+    real_state = state.parent / "state.sqlite3"           # the real run's state, beside the dry run's
+    shutil.copy(state, real_state)
+    app = TeleNotifyApp(dataclasses.replace(paths, state=real_state, dry_run=False, dry_run_flag=False),
+                        refresh_seconds=0)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "sent to the channel in" in note(app)
+        proc = await asyncio.create_subprocess_exec(str(binary), "run", f"--config:{config}",
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), 60)
+        assert proc.returncode != 0, out                              # it didn't start
+        pane.reload()
+        await pilot.pause()
+        assert "sent to the channel in" in note(app) and pane._counting(), note(app)
+    with Store(real_state) as st:
+        assert st.meta("sending_ready") == "1" and st.meta("connection") == "ready"
+
+
+async def test_history_widens_a_column_when_a_cell_grows(paths, state, now, monkeypatch):
+    """F3: "sends in 5 s" becomes "waits for bot", and a date gains its day after midnight."""
+    db = sqlite3.connect(state)
+    db.execute("DELETE FROM reviews")
+    db.commit()
+    db.close()
+    add_decided(state, 1, "sent", now - 100)
+    add_decided(state, 3, "to_send", now - 25, now + 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        table = app.query_one("#review-history", DataTable)
+        decided_col, status_col = list(table.columns.values())[:2]
+        set_meta(state, "connection", "stopped")
+        pane.reload()
+        await pilot.pause()
+        assert str(table.get_row_at(0)[1]) == "waits for bot"
+        assert status_col.content_width >= len("waits for bot")
+        monkeypatch.setattr(review_mod, "when", lambda at: "11-21 23:59")   # the day has turned
+        pane.reload()
+        await pilot.pause()
+        assert decided_col.content_width >= len("11-21 23:59")
+
+
+@pytest.mark.parametrize("why,words", [
+    ("Have no write access to the chat (400)", "this account may not post in the channel"),
+    ("Need administrator rights in the channel chat (400)", "this account isn't an admin of the channel"),
+    ("Too Many Requests: retry after 30 (429)", "Telegram asked to wait 30 s before sending more"),
+    ("Message has protected content and can't be forwarded (400)",
+     "the source doesn't allow forwarding, and the post has no link to share"),
+    ("CHAT_WRITE_FORBIDDEN (403)", "this account may not post in the channel"),
+    ("no answer; after 60 s", "no answer; after 60 s"),     # not cut at its ";"
+])
+async def test_tdlibs_own_errors_are_put_in_plain_words(paths, state, why, words):
+    """F4."""
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        db = sqlite3.connect(state)
+        db.execute("UPDATE reviews SET status = 'pending', send_after = NULL, reasons = reasons || ? "
+                   "WHERE msg_id = 11", ("; could not send: " + why,))
+        db.commit()
+        db.close()
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == f"#11: sending failed: {words}; it's back in the queue"
+
+
+async def test_a_resize_measures_the_kept_note_height_again(paths, state, now, monkeypatch, tmp_path):
+    """F6: label error at 200 x 50, then 80 x 24: the post doesn't move when the bot stops."""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x")
+    monkeypatch.setenv("TELENOTIFY_LABELS", str(blocker / "deep" / "review-labels.jsonl"))
+    add_pending(state, 90, "the next post", now - 5)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        await pilot.pause()
+        split = app.query_one("#review-split")
+        y = split.region.y
+        set_meta(state, "connection", "stopped")
+        pane._countdown()
+        pane.reload()
+        await pilot.pause()
+        assert split.region.y == y, note(app)
+        set_row(state, 11, status="sent")
+        set_meta(state, "connection", "ready")
+        pane._countdown()
+        await pilot.pause()
+        assert split.region.y == y, note(app)
+
+
+async def test_the_undo_wait_warning_survives_a_reload(paths, state, now, monkeypatch):
+    """F7: "only just come under the cursor" stays while an approval made here is watched."""
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
+    add_decided(state, 50, "discarded", now - 10)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10
+        await pilot.press("s")                              # #11 approved and watched
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("u")                              # too soon after #50 came under the cursor
+        await pilot.pause()
+        assert "only just come under the cursor" in note(app)
+        pane.reload()
+        pane._countdown()
+        await pilot.pause()
+        assert "only just come under the cursor" in note(app) and "#11 approved" in note(app)
+        assert status_of(state, 50) == "discarded"
 
 
 async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):
