@@ -314,7 +314,7 @@ def period_stats(store: Store, period: Period, max_bars: int) -> PeriodStats:
         # processed_at index instead of walking the file in key order.
         sql = f"""{with_firsts}SELECT chat_id, chat_title, MAX(at), date(at, 'unixepoch', 'localtime') d,
                   SUM(verdict = 'publish'), SUM(verdict = 'review'), SUM(verdict = 'reject'),
-                  SUM(action = 'forwarded' OR action = 'linked' {_sent_review(store)})
+                  SUM(action IN ('forwarded', 'linked', 'summarized') {_sent_review(store)})
                   FROM processed p WHERE at >= ? AND at < ? {first_of_album}
                   GROUP BY d, chat_id"""
         for chat_id, title, newest, day, pub, rev, rej, fwd in store._rows(sql, (period.start, period.end)):

@@ -66,7 +66,9 @@ may install it. Not a reader, viewer, sharing tool, training product, family fil
   its reasons, chat (watched or the target), keyword list, review queue, alert, period (for the numbers), the bot
   (real or dry run).
 - **Not the original post:** when forwarding is blocked, the bot posts its own short "match / post link" text in the
-  channel (#80).
+  channel, or, with `"forward_fallback": "summary"` (#80, off until the owner checks it), its own plain-text summary
+  in Arabic, marked automatic: role, place, how to apply, and the public channel by name with the post's link. A
+  blocked post from anywhere else (a private or members-only chat, or a group) isn't summarized: it goes to the review queue.
 - **Verbs:** watch / unwatch a chat; judge (the filter); forward; review a post (send, discard, match no send, undo);
   search; re-judge; test settings on the corpus; save settings; start / stop / restart the bot.
 
@@ -247,6 +249,7 @@ table adds the intent order and the rest of the product. One row per layout; gro
 | Messages: alerts in the owner's Saved Messages (back after downtime, no connection, a watched chat lost, a backlog cut, a send failed) | tell the owner something needs them | the first line says why | n/a | Telegram | 1 why; 2 what to do |
 | Messages: forwards to the public channel | the original post, unchanged | n/a (Telegram's UI) | n/a | n/a | n/a |
 | Messages: the fallback "match / post link" text in the public channel (when forwarding is blocked) | point readers to the post | the role and a link readers can open | n/a | Telegram | 1 what the job is; 2 the link (#80) |
+| Messages: the fallback summary in the public channel (`"forward_fallback": "summary"`, #80) | tell readers about the job without the post | marked automatic; role, place, how to apply, the public channel named with its link (public channels only; anything else goes to review); Arabic labels; plain, at most 6 lines / 400 characters | n/a | Telegram | 1 that it's an automatic summary; 2 what the job is; 3 where; 4 how to apply; 5 the source and its link |
 
 ## Budgets (with tolerance) and the benchmark walk
 
@@ -337,11 +340,13 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
 | A6, A13 to A16, A29, A30 | no pictures behind text, no video, no sound, no generated documents, no haptics |
 | N5 | no URLs or incoming links |
 | T9 | no children use it |
-| L1, L6, and L4's UI-locale part | the UI is English only (L4's search part applies: Arabic letter forms and diacritics) |
+| L1, L6, and L4's UI-locale part, for the screen and the command line | they are English only (L4's search part applies: Arabic letter forms and diacritics). Not for messages: see below |
 | D7 | no updater of its own (`deploy/install.sh` is run by hand) |
 | MSG4's command menu | it acts as a user account, not a bot; its controls live in the screen (MSG4 says so) |
 
-Not N/A, so they apply: A20 (copying: `y`, or a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
+Not N/A, so they apply: L1 and L6 for messages, since the summary posted in the channel when forwarding is blocked
+(#80, `"forward_fallback": "summary"`) is in Arabic (labels and phrases; values as written), so a fluent speaker's
+reading of it is an owner-check item (below); A20 (copying: `y`, or a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
 Dashboard's alert count, #79), A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
 targets: terminal cells, and a destructive button spaced from others; Delete sits beside Edit and Add, and Discard
 beside Send: checked in the first full audit, #87), A22, T2 and T4 (a Telegram session; the bot
@@ -356,7 +361,9 @@ each release (8.5) unless agent evidence covers them:
 - how it really looks and feels in Kitty and VTE, and whether an OSC 52 copy reaches the clipboard (about 5 min);
 - Orca reading the command line's output in GNOME Terminal (about 10 min);
 - whether alerts in Saved Messages notify the owner's phone (about 2 min);
-- Orca reading the screen itself in GNOME Terminal (about 10 min).
+- Orca reading the screen itself in GNOME Terminal (about 10 min);
+- reading the Arabic summary of a blocked post (#80) as a fluent speaker, and how it shows in Telegram's apps,
+  mixed Arabic and Latin included, before `forward_fallback` is turned on (about 5 min).
 
 Proposed reasons, each a severity-2 tracked item due by the next release, expiring 2027-05-19:
 - a real Telegram ban or log-out of the account (needs the live account; covered with fakes in tests; #85);
@@ -388,12 +395,12 @@ that touches it.
 | 4 | No "actions on behalf of the user without the user's knowledge and consent"; no "ghost mode" read tampering | API Terms 1.4 | forwards happen only by the owner's own setup and review; reading marks chats read as a normal client does (to check) | |
 | 5 | No "flooding, spamming, faking subscriber and view counters"; accounts on unofficial clients are "under observation" | Obtaining | one forward per match, no counters; there are no numeric limits on these pages, and TDLib's `FLOOD_WAIT` is obeyed (to check) | |
 | 6 | No use of Telegram data to "train, fine-tune … or deployment of artificial intelligence, machine learning models" | API Terms 1.5; Content Licensing | the filter is keyword rules, not ML. **Unsure:** OCR uses tesseract's LSTM model on images from posts; the private corpus is used only to test the rules | |
-| 7 | Content access "for any purpose other than ordinary, legitimate, and intended use" is prohibited; data scraping is prohibited | Content Licensing; ToS | **unsure:** it reads chats the account joined, as a client; "scraping" isn't defined. The bot also follows job-board links outside Telegram | |
-| 8 | "Adhere to any stipulated conditions … in regard to copyright" placed by the content's owners | Content Licensing | **unsure:** it republishes others' posts by forwarding (the source shows); no source's conditions were checked | |
+| 7 | Content access "for any purpose other than ordinary, legitimate, and intended use" is prohibited; data scraping is prohibited | Content Licensing; ToS | **unsure:** it reads chats the account joined, as a client; "scraping" isn't defined. The bot also follows job-board links outside Telegram | **yes, for the summary of blocked posts from public channels only (#80, #142)** (owner, 2026-11-22, #135: "Yes, public channels only", with the option text "I accept it for public sources; I'll mark lines 7, 8, 11 and 12 yes for that case."; and "Public only; private to review (Recommended)", with the option text "Summaries only for public sources. A blocked post from a private or members-only chat goes to your review queue; you decide by hand. No waiver needed.") |
+| 8 | "Adhere to any stipulated conditions … in regard to copyright" placed by the content's owners | Content Licensing | **unsure:** it republishes others' posts by forwarding (the source shows); no source's conditions were checked | **yes, for the summary of blocked posts from public channels only (#80, #142)** (owner, 2026-11-22, #135: "Yes, public channels only", with the option text "I accept it for public sources; I'll mark lines 7, 8, 11 and 12 yes for that case."; and "Public only; private to review (Recommended)", with the option text "Summaries only for public sources. A blocked post from a private or members-only chat goes to your review queue; you decide by hand. No waiver needed.") |
 | 9 | Clients that access channel content "must include support for official sponsored messages … and may not interfere" | API Terms 3.3 | **unsure:** it shows no channel to a person, so it neither shows nor blocks sponsored messages | |
 | 10 | Guard users' privacy "with utmost care" and follow the Security Guidelines | API Terms 1.1 | the session and state are kept in `~/.local/share/tele-notify` (mode 700); others' messages are stored, and their text is cleared after `keep_text_days`. The guidelines weren't read yet | |
-| 11 | Republishing only from public sources, or with the admins' agreement | this policy, T13 | not checked today (#68) | |
-| 12 | Iraq's and your local rules on republishing job adverts and storing others' messages (phone numbers in posts) | local law | owner question | |
+| 11 | Republishing only from public sources, or with the admins' agreement | this policy, T13 | not checked today (#68) | **yes, for the summary of blocked posts from public channels only (#80, #142)** (owner, 2026-11-22, #135: "Yes, public channels only", with the option text "I accept it for public sources; I'll mark lines 7, 8, 11 and 12 yes for that case."; and "Public only; private to review (Recommended)", with the option text "Summaries only for public sources. A blocked post from a private or members-only chat goes to your review queue; you decide by hand. No waiver needed.") |
+| 12 | Iraq's and your local rules on republishing job adverts and storing others' messages (phone numbers in posts) | local law | owner question | **yes, for the summary of blocked posts from public channels only (#80, #142)** (owner, 2026-11-22, #135: "Yes, public channels only", with the option text "I accept it for public sources; I'll mark lines 7, 8, 11 and 12 yes for that case."; and "Public only; private to review (Recommended)", with the option text "Summaries only for public sources. A blocked post from a private or members-only chat goes to your review queue; you decide by hand. No waiver needed.") |
 | 13 | A bot "must not harass or spam users with unsolicited messages"; it "must be bound by a privacy policy that is easily accessible to their users"; no collecting or storing data "beyond what is essential" | [Bot Developer Terms](https://telegram.org/tos/bot-developers) 5.2(b), 4, 4.3 (agent read 2026-11-21; the page has no revision date) | with `notify_bot_token` (#122) your own bot sends only to you, its owner, after you press Start: no other users, no commands, no group or channel. tele-notify keeps only your own user id and two flags for this (`notify_chat_id`, `notify_on_for`, and whether the bot can't reach you) in its state file; Telegram keeps the messages it sent you (role, chat title, link, alerts). On the privacy policy, section 4 says Telegram's "Standard Policy applies by default to all TPA that don't provide a privacy policy of their own", so this bot needs none of its own. **Unsure:** nothing open beyond your mark; sends are a few per post, far under the 30 a second in 6.2.5 | **yes** (owner, 2026-11-21: "I read T0 line 13 in `docs/ux-profile.md` for #122, I approve") |
 
 If the account is banned without a breach, Telegram's page says to write to recover@telegram.org (Obtaining).

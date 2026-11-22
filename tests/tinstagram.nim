@@ -10,7 +10,7 @@ proc kittygramAnswer(code: string): string =
   $(%*[
     {"image_url": "https://cdn.example/" & code & "-1.webp", "shortcode": code,
      "alt_text": "Photo by Basra Jobs. May be an image of text that says 'مطلوب مهندس'",
-     "user": {"username": "basrajobs"}},
+     "user": {"username": "examplejobs"}},
     {"image_url": "https://cdn.example/" & code & "-2.webp", "shortcode": code, "alt_text": ""}])
 
 proc fakeFrontend(seen: ref seq[string], answer = ""): Fetcher =
@@ -30,7 +30,7 @@ suite "instagram links":
     check instagramCodes("see https://www.instagram.com/p/Df665JXhgxw/?hvrq=x and instagram.com/reel/AbC_d-1") ==
       @["Df665JXhgxw", "AbC_d-1"]
     check instagramCodes("https://instagram.com/p/X1/ https://www.instagram.com/p/X1/?a=b") == @["X1"]
-    check instagramCodes("https://www.instagram.com/basrajobs/") == newSeq[string]()   # a profile, not a post
+    check instagramCodes("https://www.instagram.com/examplejobs/") == newSeq[string]()   # a profile, not a post
 
   test "a linked post's pictures are read and its descriptions kept":
     let seen = new seq[string]
@@ -113,7 +113,7 @@ suite "instagram review fixes (PR #126)":
 
   test "the user-name link form instagram.com/<user>/reel/<code>":
     check instagramCodes("https://www.instagram.com/basra.jobs_1/reel/DAbc-12_x/?igsh=x") == @["DAbc-12_x"]
-    check instagramCodes("https://www.instagram.com/basrajobs/p/DAbc-13/") == @["DAbc-13"]
+    check instagramCodes("https://www.instagram.com/examplejobs/p/DAbc-13/") == @["DAbc-13"]
 
   test "an empty image_url falls back to thumbnail; a missing one too":
     let seen = new seq[string]
@@ -422,5 +422,5 @@ suite "instagram review fixes, round 2 (PR #126)":
     check unreadable("ب".repeat(100) & " https://www.instagram.com/p/W1/")
     check not unreadable("ب".repeat(101) & " https://www.instagram.com/p/W1/")
     check unreadable("ب".repeat(100) & " instagram.com/p/W1/")                    # a bare link isn't counted
-    check unreadable("ب".repeat(90) & " #وظائف_البصرة #وظائف @basrajobs https://www.instagram.com/p/W1/")
-    check unreadable("ب".repeat(100) & " @basrajobs https://www.instagram.com/p/W1/")   # a mention isn't counted either
+    check unreadable("ب".repeat(90) & " #وظائف_البصرة #وظائف @examplejobs https://www.instagram.com/p/W1/")
+    check unreadable("ب".repeat(100) & " @examplejobs https://www.instagram.com/p/W1/")   # a mention isn't counted either
