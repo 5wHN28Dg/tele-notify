@@ -149,6 +149,7 @@ suite "what review promises (review run 2)":
       let st = openState(statePath(cfg, false))
       defer: st.close()
       st.setMeta("connection", "starting")
+      st.setMeta("login_needed", "1")         # a restart after a log-out: still starting (R5-1)
     addOne(9)
     f = answers("starting.txt", "s\ny\n")
     shown = captured(proc () = check cmdReview(cfg, false, f, interactive = true) == 0)

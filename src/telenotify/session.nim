@@ -12,6 +12,10 @@ import config, td, tdjson
 type
   NotLoggedIn* = object of ValueError
     ## The account isn't logged in (never was, or Telegram logged it out).
+  LoginEnded* = object of ValueError
+    ## TDLib closed, or asked for a login step tele-notify can't do, before
+    ## the login finished. `state` is the authorization state it ended in.
+    state*: string
   Session* = object
     client*: TdClient
     lib*: TdLib
@@ -83,13 +87,18 @@ proc connectWith*(lib: TdLib, cfg: Config, interactive: bool,
     of "authorizationStateReady":
       return Session(client: c, lib: lib)
     of "authorizationStateClosed", "authorizationStateClosing", "authorizationStateLoggingOut":
-      raise newException(ValueError, "TDLib closed during login (" & authState & ")")
+      c.stopped = true   # nothing more to wait for
+      var e = newException(LoginEnded, "TDLib closed during login (" & authState & ")")
+      e.state = authState
+      raise e
     else:
       # e.g. Telegram asking for an e-mail address, or a new account's
       # registration: waiting would hang forever, so say what it wants
       c.stopped = true
-      raise newException(ValueError, "unsupported login step: " & authState &
+      var e = newException(LoginEnded, "unsupported login step: " & authState &
         ". Log in once with an official Telegram app on this account, then try again")
+      e.state = authState
+      raise e
 
 proc connect*(cfg: Config, interactive: bool,
               onUpdate: UpdateHandler = nil,

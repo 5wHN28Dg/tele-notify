@@ -961,6 +961,9 @@ async def test_history_undo_acts_once_per_deliberate_press(paths, state, now, la
 
 
 async def test_a_double_click_on_undo_in_history_undoes_one(paths, state, now, monkeypatch):
+    """The two clicks are made 0.1 s apart, whenever a loaded machine handles them: each carries
+    the time it was made (as a real mouse's does), so the second is judged by that time."""
+    from textual import events
     monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.8)
     for i, status in enumerate(["discarded", "kept", "discarded"]):
         add_decided(state, 60 + i, status, now - 10 - i)
@@ -970,10 +973,18 @@ async def test_a_double_click_on_undo_in_history_undoes_one(paths, state, now, m
         pane = app.query_one(ReviewPane)
         await pilot.press("h")
         await pilot.pause()
-        pane._hist_shown_at -= 10
+        pane._hist_shown_at -= 10                      # the first row has been read
         pane._sync_controls()
-        await pilot.click("#btn-undo")
-        await pilot.click("#btn-undo")
+        await pilot.pause()
+        btn = app.query_one("#btn-undo")
+        x, y = btn.region.x + 1, btn.region.y
+        first = time.monotonic()
+        for made in (first, first + 0.1):              # a double click
+            for cls in (events.MouseDown, events.MouseUp):
+                e = cls(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y)
+                e.time = made
+                app.post_message(e)
+            await pilot.pause()
         await pilot.pause()
         assert [m for m in (60, 61, 62) if status_of(state, m) == "pending"] == [60]
 
@@ -1180,7 +1191,7 @@ async def test_history_widens_a_column_when_a_cell_grows(paths, state, now, monk
     ("Message has protected content and can't be forwarded (400)",
      "the source doesn't allow forwarding, and the post has no link to share"),
     ("CHAT_WRITE_FORBIDDEN (403)", "this account may not post in the channel"),
-    ("no answer; after 60 s", "no answer; after 60 s"),     # not cut at its ";"
+    ("no answer, after 60 s", "no answer, after 60 s"),     # whole (#142 writes a reason's "; " as ", ")
 ])
 async def test_tdlibs_own_errors_are_put_in_plain_words(paths, state, why, words):
     """F4."""
@@ -1306,6 +1317,52 @@ async def test_a_failed_send_beside_a_label_error_never_moves_the_post(paths, st
                 moved.append(width)
     assert {87, 88} <= note_widths                    # the widths where it matters were reached
     assert moved == []
+
+
+# ------------------------------------------------- review run 5, and #142's reasons
+
+async def test_a_restart_after_a_log_out_says_starting_everywhere(paths, state):
+    """R5-1: connection "starting" with login_needed still set: the note and History agree."""
+    set_meta(state, "sending_ready", "0")
+    set_meta(state, "connection", "starting")
+    set_meta(state, "login_needed", "1")
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        assert "The bot is starting" in note(app)
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(app.query_one("#review-history", DataTable).get_row_at(0)[1]) == "waits for bot"
+
+
+@pytest.mark.parametrize("before,after,expected", [
+    # #142's withProblem: a second failure of the same kind is counted, not added again
+    ("x; could not send: Have no write access to the chat (400)",
+     "x; could not send (2 tries): Have no write access to the chat (400)",
+     "#11: sending failed: this account may not post in the channel; it's back in the queue"),
+    # folded into the live post's own error
+    ("x; error: Too Many Requests: retry after 30 (429)", "x; error (2 tries): Too Many Requests: retry after 30 (429)",
+     "#11: sending failed: Telegram asked to wait 30 s before sending more; it's back in the queue"),
+    # held back on purpose (#80), as the bot words it
+    ("x", ("x; not posted: it isn't from a public channel (it's a private or members-only chat, or a group), "
+           "and only public channels' posts are republished in your public channel (#80)."),
+     ("#11: not sent: it isn't from a public channel, so it can't be republished; post it yourself or discard it; "
+      "it's back in the queue")),
+])
+async def test_142s_counted_and_held_back_reasons_in_plain_words(paths, state, before, after, expected):
+    set_row(state, 11, reasons=before)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("s")
+        await pilot.pause()
+        set_row(state, 11, status="pending", send_after=None, reasons=after)
+        pane._countdown()
+        await pilot.pause()
+        assert note(app) == expected
 
 
 async def test_the_double_tap_wait_shows_on_the_buttons(paths, state, now, monkeypatch):

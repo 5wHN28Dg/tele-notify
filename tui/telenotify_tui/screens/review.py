@@ -104,7 +104,7 @@ def cut(s: str, n: int) -> str:
 
 
 def status_label(r: Review, dry_run: bool, bot_up: bool = True, now: float | None = None,
-                 logged_out: bool = False) -> str:
+                 logged_out: bool = False, starting: bool = False) -> str:
     """A decided post's status in a few words (History's column: 15 characters at most, so the
     post column still starts on an 80-column screen), with an approved post's countdown (#62).
     `bot_up`: the bot is running; without it nothing is sent, and nothing is promised."""
@@ -112,7 +112,9 @@ def status_label(r: Review, dry_run: bool, bot_up: bool = True, now: float | Non
         if dry_run:
             return "approved"
         if not bot_up:
-            return "needs login" if logged_out else "waits for bot"
+            # one rule with the note and `telenotify review`: a bot starting up is starting,
+            # even while the last log-out's "login needed" is still recorded (review run 5)
+            return "needs login" if logged_out and not starting else "waits for bot"
         left = (r.send_after or 0) - int(time.time() if now is None else now)
         return f"sends in {left} s" if left > 0 else "sending soon"
     if r.status == "sending":
@@ -548,7 +550,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
         def cells(r: Review) -> tuple:
             return (when(r.decided_at or r.at),
-                    Text(status_label(r, dry, self._bot_up, now, self._bot_logged_out)),
+                    Text(status_label(r, dry, self._bot_up, now, self._bot_logged_out, self._bot_starting)),
                     Text(visual(cut(r.chat_title, 20))), Text(visual(cut(r.role, 22))),
                     Text(visual(cut(r.text, 40))))
         ids = [r.id for r in past]

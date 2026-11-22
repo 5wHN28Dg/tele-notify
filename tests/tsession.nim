@@ -1,6 +1,7 @@
 ## Logging in against a fake libtdjson, and where state is kept.
 
 import std/[unittest, asyncdispatch, json, deques, os, strutils, unicode]
+import db_connector/db_sqlite
 import telenotify/[session, tdjson, config, commands, state]
 
 var outbox = initDeque[string]()
@@ -15,6 +16,13 @@ proc fakeCreate(): cint {.cdecl, gcsafe.} = 1
 proc fakeExecute(req: cstring): cstring {.cdecl, gcsafe.} = nil
 proc fakeSend(id: cint, req: cstring) {.cdecl, gcsafe.} = {.cast(gcsafe).}:
   let r = parseJson($req)
+  if r{"@type"}.getStr == "loadChats":      # every chat loaded
+    outbox.addLast $(%*{"@type": "error", "code": 404, "message": "Not Found", "@extra": r["@extra"]})
+    return
+  if r{"@type"}.getStr == "close":
+    outbox.addLast $(%*{"@type": "ok", "@extra": r["@extra"]})
+    outbox.addLast authUpdate("authorizationStateClosed")
+    return
   if paramsRefused and r{"@type"}.getStr == "setTdlibParameters":
     outbox.addLast $(%*{"@type": "error", "code": 400, "@extra": r["@extra"], "message":
       "Can't lock file \"td.binlog\", because it is already in use; check for another program instance running"})
@@ -81,6 +89,67 @@ suite "session":
     check fut.finished and not fut.failed
     check st.getMeta("login_needed") == ""
     fut.read.client.stopped = true   # its pump would read the next test's updates
+
+  test "telenotify login clears 'not logged in' in both state files (review run 5)":
+    let real = openState(cfg.dataDir / "state.sqlite3")
+    real.setMeta("login_needed", "1")
+    real.setMeta("connection", "logged out")
+    real.close()
+    let dry = openState(cfg.dataDir / "state-dryrun.sqlite3")
+    dry.setMeta("login_needed", "1")
+    dry.setMeta("connection", "ready")         # not a log-out: left as it is
+    dry.close()
+    nextState = "authorizationStateReady"
+    outbox.addLast authUpdate("authorizationStateWaitTdlibParameters")
+    let fut = cmdLoginWith(cfg, connectWith(lib, cfg, interactive = true))
+    for _ in 0 ..< 100:
+      if fut.finished: break
+      poll(50)
+    check fut.finished and not fut.failed
+    let r2 = openState(cfg.dataDir / "state.sqlite3")
+    check r2.getMeta("login_needed") == "" and r2.getMeta("connection") == "stopped" and not r2.loggedOut()
+    r2.close()
+    let d2 = openState(cfg.dataDir / "state-dryrun.sqlite3")
+    check d2.getMeta("login_needed") == "" and d2.getMeta("connection") == "ready"
+    d2.close()
+
+  test "a busy state file at the lock: saying 'starting' is tried again after the login (review run 5)":
+    let st = openState(getTempDir() / "tn-session-start" / "state.sqlite3")
+    defer: st.close()
+    st.setMeta("sending_ready", "1")           # a bot that crashed
+    let raw = open(getTempDir() / "tn-session-start" / "state.sqlite3", "", "", "")
+    raw.exec(sql"""CREATE TRIGGER busy BEFORE INSERT ON meta WHEN NEW.key = 'sending_ready'
+                   BEGIN SELECT RAISE(ABORT, 'database is locked'); END""")
+    let start = newRunStart(st, false)
+    start.onLocked()()
+    check start.locked and not start.recorded and st.getMeta("sending_ready") == "1"
+    raw.exec(sql"DROP TRIGGER busy")
+    raw.close()
+    start.afterLogin()
+    check start.recorded and st.getMeta("sending_ready") == "0" and st.getMeta("connection") == "starting"
+    st.setMeta("started_at", "1")
+    start.afterLogin()                         # done already: not written again
+    check st.getMeta("started_at") == "1"
+
+  for (ending, connection) in [("authorizationStateLoggingOut", "logged out"),
+                               ("authorizationStateClosed", "stopped"),
+                               ("authorizationStateWaitEmailAddress", "stopped")]:
+    test "the login ends in " & ending & " after the lock: it says " & connection & ", not starting (review run 5)":
+      let st = openState(getTempDir() / "tn-session-end" / "state.sqlite3")
+      defer: st.close()
+      st.setMeta("login_needed", "")
+      let start = newRunStart(st, false)
+      nextState = ending
+      outbox.addLast authUpdate("authorizationStateWaitTdlibParameters")
+      let fut = connectWith(lib, cfg, interactive = false, onLocked = start.onLocked)
+      for _ in 0 ..< 40:
+        if fut.finished: break
+        poll(50)
+      check fut.failed and fut.readError of LoginEnded
+      check st.getMeta("connection") == "starting"
+      start.loginFailed(fut.readError)
+      check st.getMeta("connection") == connection
+      check (st.getMeta("login_needed") == "1") == (connection == "logged out")
 
   test "a second bot that TDLib refuses (its lock) never says it starts (review run 4)":
     var calls = new seq[string]
