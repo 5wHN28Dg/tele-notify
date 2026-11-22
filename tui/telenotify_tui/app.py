@@ -77,6 +77,15 @@ class MainScreen(Screen):
                     del bindings.key_to_bindings[key]
         return chain
 
+    def on_key(self, event: events.Key) -> None:
+        """With the focus on the tab bar, the shown tab sees the key first, as it does with the focus
+        inside it: Review notes when each key was *pressed* (its double-tap guard, #141) and says why
+        an early s / k / d / u is ignored (run 9). This runs before the app's bindings do."""
+        shown = self.tab_from_bar()
+        handler = getattr(shown, "on_key", None)
+        if callable(handler):
+            handler(event)
+
     def tab_from_bar(self) -> Widget | None:
         """The shown tab's own widget (its pane) while the app's tab bar has the focus, else None."""
         focused = self.focused
@@ -184,6 +193,7 @@ class TeleNotifyApp(App):
         self.paths = paths
         self.letter_keys = prefs.load(paths.config).letter_keys   # the screen's own setting (#140)
         self.letter_keys_work = True   # False: the start-up self-check found the switch can't act
+        self.letter_keys_problem = ""   # why the last switch wasn't kept for next time, if it wasn't
         self._letters_off_said = False   # "Letter keys are off" said once since they were turned off
         self.refresh_seconds = refresh_seconds
         self._reload_queued: float | None = None   # when a reload was queued (monotonic), until it runs
@@ -209,6 +219,7 @@ class TeleNotifyApp(App):
             prefs.save(self.paths.config, prefs.Prefs(letter_keys=on))
         except OSError as e:
             problem = f"not saved for next time: {e.strerror or e}"
+        self.letter_keys_problem = problem   # the Settings Screen tab shows it, however it was switched
         self._show_sub_title()
         self._refresh_key_hints()
         return problem
@@ -232,7 +243,7 @@ class TeleNotifyApp(App):
             turn = "off" if self.letter_keys else "on"
             yield SystemCommand(f"Letter keys: turn {turn}",
                                 "single-letter shortcuts such as s, p and y (also in Settings, Screen)",
-                                partial(self.set_letter_keys, not self.letter_keys))
+                                partial(self._letter_keys_from_palette, not self.letter_keys))
         tab = (self.query_one(TabbedContent).active or "").capitalize()   # the tab's name, without its marks
         seen: set[str] = set()
         for node in screen.key_nodes():
@@ -245,6 +256,12 @@ class TeleNotifyApp(App):
                     yield SystemCommand(f"{tab}: {binding.description}",
                                         f"the {key} key{'' if self.letter_keys else ' (letter keys are off)'}",
                                         partial(self.run_action, binding.action, node))
+
+    def _letter_keys_from_palette(self, on: bool) -> None:
+        """The palette's "Letter keys: turn …": as the switch, and a note if it wasn't kept (run 9)."""
+        problem = self.set_letter_keys(on)
+        if problem:
+            self.notify(f"Letter keys: {problem}", severity="warning", timeout=8)
 
     def key_hint(self, text: str) -> str:
         """`text` (a key named on screen, such as " [f]") while the letter keys are on, else ""."""
@@ -293,6 +310,8 @@ class TeleNotifyApp(App):
         """The letter-keys switch and the tab bar's keys rest on MainScreen extending a private part
         of Textual. Check that Textual still reads the keys through it; if not, say so (log, and on
         the Settings Screen tab) and leave the letter keys on, rather than a switch that does nothing."""
+        # This proves only the path the footer and keys panel read (active_bindings); the key handling
+        # reads the same chain in Textual 8.2, which the pin (<8.3, pyproject.toml) holds (run 9).
         screen = self.screen
         before = getattr(screen, "chains_built", 0)
         _ = screen.active_bindings   # what the footer and the key handling both read

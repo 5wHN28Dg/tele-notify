@@ -963,9 +963,7 @@ class SettingsPane(Vertical):
     def _letter_keys(self, event: Checkbox.Changed) -> None:
         event.stop()
         event.checkbox.label = "on" if event.value else "off"
-        problem = self.app.set_letter_keys(event.value)  # type: ignore[attr-defined]
-        note = self.query_one("#screen-note", Static)
-        note.update(Content.styled(f"warning: {problem}", "$tn-warning") if problem else "")
+        self.app.set_letter_keys(event.value)  # type: ignore[attr-defined]   # show_key_hints says if not kept
 
     def show_key_hints(self) -> None:
         """The keys named on this tab's buttons and lines: the letter ones only while they work (#140)."""
@@ -974,10 +972,13 @@ class SettingsPane(Vertical):
         with self.prevent(Checkbox.Changed):   # the palette's command turns them on or off too
             box.value = on
         box.label = "on" if on else "off"
+        note = self.query_one("#screen-note", Static)
         if not self.app.letter_keys_work:  # type: ignore[attr-defined]
             box.disabled = True
-            self.query_one("#screen-note", Static).update(
-                Content.styled(f"warning: {prefs.LETTER_KEYS_BROKEN}", "$tn-warning"))
+            note.update(Content.styled(f"warning: {prefs.LETTER_KEYS_BROKEN}", "$tn-warning"))
+        else:   # however it was switched (here or the palette): say if it wasn't kept (run 9)
+            problem = self.app.letter_keys_problem  # type: ignore[attr-defined]
+            note.update(Content.styled(f"warning: {problem}", "$tn-warning") if problem else "")
         self.query_one("#test", Button).label = "Test t" if on else "Test"
         self.query_one("#dedupe", Button).label = "Remove duplicates D" if on else "Remove duplicates"
         for editor in self.query(KeywordEditor):

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import os
 import time
 
 import pytest
@@ -608,3 +609,157 @@ async def test_the_start_up_check_passes_on_this_textual(paths):
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         assert app.letter_keys_work
+
+
+# ------------------------------------------------------------------- run 9
+
+async def test_a_late_handled_tap_from_the_tab_bar_doesnt_decide(paths, state, now, monkeypatch):
+    """Run 9 fail 1: from Review's tab bar the bindings ran but ReviewPane.on_key never saw the key,
+    so #141's guard took the time the key was *handled*. A second s made 0.1 s after the next post
+    appeared but handled late approved it unread. Mirrors test_review.py's clock-proof test."""
+    from test_review import add_pending, open_review, status_of
+    from textual import events
+
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    add_pending(state, 100, "second post never shown", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 10                     # the first post has been read
+        tab_bar(app).focus()
+        await pilot.pause()
+        for key in ("s", "k", "d"):
+            assert keys_in_effect(app)[key] in ("send", "keep", "discard")
+        await pilot.press("s")
+        await pilot.pause()
+        assert status_of(state, 11) == "to_send"
+        assert isinstance(app.focused, Tabs)
+        shown = pane._shown_at                   # the second post appeared now
+        for key in ("s", "k", "d"):
+            early = events.Key(key, key)
+            early.time = shown + 0.1             # made inside the delay...
+            await pilot.pause(0.6)               # ...handled after it
+            app.post_message(early)
+            await pilot.pause()
+            assert status_of(state, 100) == "pending", key
+
+
+async def test_a_late_handled_undo_from_the_tab_bar_undoes_one_row(paths, state, now, monkeypatch):
+    """Run 9 fail 1, History: a late second u from the tab bar undid a second row."""
+    from test_review import add_decided, open_review, status_of
+    from textual import events
+
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 0.4)
+    for i, status in enumerate(["discarded", "kept", "discarded"]):
+        add_decided(state, 50 + i, status, now - 10 - i)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("h")
+        await pilot.pause()
+        pane._hist_shown_at -= 10                # the first row has been read
+        tab_bar(app).focus()
+        await pilot.pause()
+        await pilot.press("u")
+        await pilot.pause()
+        assert [m for m in (50, 51, 52) if status_of(state, m) == "pending"] == [50]
+        came = pane._hist_shown_at               # the next row came under the cursor now
+        early = events.Key("u", "u")
+        early.time = came + 0.1
+        await pilot.pause(0.6)
+        app.post_message(early)
+        await pilot.pause()
+        assert [m for m in (50, 51, 52) if status_of(state, m) == "pending"] == [50]
+
+
+async def test_an_early_tap_from_the_tab_bar_says_why(paths, state, now, monkeypatch):
+    """Run 9 fail 2: from the tab bar, s while a post settles was dropped silently."""
+    from test_review import add_pending, note, open_review, status_of
+
+    monkeypatch.setattr(ReviewPane, "DECIDE_DELAY", 30.0)
+    add_pending(state, 7, "second post", now - 10)
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        await pilot.press("down")                # the next post appears and settles
+        await pilot.pause()
+        assert pane._settling
+        tab_bar(app).focus()
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        assert "only just appeared" in note(app) and status_of(state, 7) == "pending"
+
+
+@pytest.mark.parametrize("start_on", [True, False])
+async def test_reviews_note_rewords_when_the_switch_changes(paths, state, now, start_on):
+    """Run 9 fail 3: "(u undoes)" stayed after the letter keys went off, and "(Undo undoes)" after
+    they came back on."""
+    from test_review import note, open_review
+
+    if not start_on:
+        keys_off_from_the_start(paths)
+    app = TeleNotifyApp(dataclasses.replace(paths, dry_run=False), refresh_seconds=0)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_review(pilot)
+        pane = app.query_one(ReviewPane)
+        pane._shown_at -= 60
+        await pilot.click("#btn-discard")
+        await pilot.pause()
+        before, after = ("(u undoes)", "(Undo undoes)") if start_on else ("(Undo undoes)", "(u undoes)")
+        assert before in note(app)
+        app.set_letter_keys(not start_on)
+        await pilot.pause()
+        assert after in note(app) and before not in note(app)
+        app.set_letter_keys(start_on)
+        await pilot.pause()
+        assert before in note(app) and after not in note(app)
+
+
+async def test_the_palettes_switch_says_when_it_isnt_kept(paths):
+    """Run 9 fail 4: the palette's command threw away "not saved for next time"; nothing said it,
+    and the Settings Screen note stayed empty."""
+    prefs.path_for(paths.config).mkdir()     # a folder where screen.json goes: it can't be written
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(app, pilot)
+        command = next(c for c in app.get_system_commands(app.screen) if c.title == "Letter keys: turn off")
+        command.callback()
+        await pilot.pause()
+        assert not app.letter_keys
+        said = [n.message for n in app._notifications if "not saved for next time" in n.message]
+        assert said and said[0].startswith("Letter keys: not saved for next time")
+        assert "not saved for next time" in str(app.query_one("#screen-note").render())
+
+
+async def test_a_fifo_named_screen_json_doesnt_stop_the_screen(paths):
+    """Run 9 fail 5: a FIFO there made prefs.load wait forever, so the screen never started."""
+    fifo = prefs.path_for(paths.config)
+    os.mkfifo(fifo)
+    try:
+        loaded = await asyncio.wait_for(asyncio.to_thread(prefs.load, paths.config), timeout=5)
+        assert loaded.letter_keys is True
+    finally:   # a reader still waiting (the bug) gets a writer and then end of file, so nothing hangs
+        try:
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        except OSError:
+            pass   # no reader waiting: nothing to release
+
+
+def test_an_oversized_screen_file_means_the_defaults(paths):
+    """Run 9 fail 5: only a regular file of at most 64 KiB is read (a link to an endless device
+    would read until memory runs out)."""
+    big = '{"letter_keys": false' + " " * (prefs.MAX_BYTES + 10) + "}"
+    prefs.path_for(paths.config).write_text(big, encoding="utf-8")
+    assert prefs.load(paths.config).letter_keys is True
+    small = '{"letter_keys": false' + " " * 100 + "}"
+    prefs.path_for(paths.config).write_text(small, encoding="utf-8")
+    assert prefs.load(paths.config).letter_keys is False
+
+
+def test_a_link_to_a_device_means_the_defaults(paths):
+    prefs.path_for(paths.config).symlink_to("/dev/zero")
+    assert prefs.load(paths.config).letter_keys is True

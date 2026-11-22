@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -29,7 +30,7 @@ def load(config: Path) -> Prefs:
     """The settings saved beside `config`; the defaults where the file is missing, unreadable
     or holds something else (a value that isn't true or false keeps its default)."""
     try:
-        raw = json.loads(path_for(config).read_text(encoding="utf-8"))
+        raw = json.loads(_read_small(path_for(config)))
     # every way reading and parsing can fail, whatever the file holds: unreadable, not UTF-8 or not
     # JSON (ValueError), nested too deep (RecursionError), too big (MemoryError)
     except (OSError, ValueError, RecursionError, MemoryError):
@@ -38,6 +39,23 @@ def load(config: Path) -> Prefs:
     if isinstance(raw, dict) and isinstance(raw.get("letter_keys"), bool):
         prefs.letter_keys = raw["letter_keys"]
     return prefs
+
+
+MAX_BYTES = 64 * 1024   # the file holds a line or two; anything bigger isn't one of ours
+
+
+def _read_small(path: Path) -> str:
+    """The text of `path` if it is a regular file of at most MAX_BYTES, else ValueError. Opened
+    without blocking (a FIFO named screen.json would wait forever) and checked before reading (a
+    link to an endless device would read until memory runs out) (run 9)."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"{path} isn't a regular file")
+        data = f.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise ValueError(f"{path} is over {MAX_BYTES} bytes")
+    return data.decode("utf-8")
 
 
 def save(config: Path, prefs: Prefs) -> None:

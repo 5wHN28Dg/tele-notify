@@ -810,6 +810,18 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._refresh_note()
         self._reserve_note(self._watching_last())
 
+    def show_key_hints(self) -> None:
+        """The letter keys were turned on or off: the notes' key names follow (run 9)."""
+        old, new = ("Undo", "u") if self.app.letter_keys else ("u", "Undo")
+
+        def swap(text: str) -> str:
+            return text.replace(f"({old} undoes", f"({new} undoes").replace(f"then press {old}", f"then press {new}")
+        self._decided_note = swap(self._decided_note)
+        if self._action_note is not None:
+            self._action_note = (swap(self._action_note[0]), self._action_note[1])
+        if self.is_mounted:
+            self._refresh_note()
+
     def _undo_key(self) -> str:
         """How the notes name undo: `u`, or the Undo button while the letter keys are off (#140)."""
         return "u" if self.app.letter_keys else "Undo"
