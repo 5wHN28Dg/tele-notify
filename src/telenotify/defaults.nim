@@ -130,6 +130,63 @@ const
     "رسوم التسجيل", "registration fee", "course fees", "job simulation", "job simulations", "virtual experience program",
   ]
 
+  ## Signs of a course or training the reader registers on or pays for
+  ## (false positive 2026-11-23: a training centre's paid course "for
+  ## engineering graduates, discount for new graduates" was published).
+  ## One sign proves nothing ("سيخضع لدورة تدريبية" is a job that trains
+  ## you); `courseAdvert` in classify.nim needs three of the five kinds,
+  ## one of them a fee or a training centre, and no hiring or pay
+  ## (`courseHiring`). All are whole words: "رسوم" is not "رسومات".
+  courseRegistration* = [
+    "فتح باب التسجيل", "باب التسجيل", "للتسجيل", "سجل الان", "سارع بالتسجيل",
+    "التسجيل في الدوره", "التسجيل في البرنامج", "التسجيل في الكورس",
+    "رابط التسجيل", "التسجيل مفتوح", "register now", "registration is open",
+    "registration open", "registrations are open", "registrations open",
+    "enroll now", "enrol now", "sign up now",
+  ]
+  ## Not "مجاناً"/"free": a free course has no fee. A fee word right after
+  ## one of `courseFree` ("بدون رسوم", "no fees") doesn't count.
+  courseFees* = [
+    "خصم", "خصومات", "رسوم", "سعر", "اجور الدوره", "اجور الكورس",
+    "اجور الاشتراك", "اجور التسجيل", "قسط الدوره", "تكلفه الدوره",
+    "discount", "fee", "fees", "price", "tuition",
+  ]
+  courseFree* = [
+    "بدون", "بلا", "دون", "لا", "مجانا", "مجاني", "مجانيه", "no", "without",
+    "free", "zero",
+  ]
+  courseStructure* = [
+    "محاور", "مده الدوره", "مده البرنامج", "مده الكورس", "ايام تدريبيه",
+    "يوم تدريبي", "ساعات تدريبيه", "ساعه تدريبيه", "شهاده مشاركه",
+    "شهاده معتمده", "شهاده حضور", "الفئه المستهدفه", "course outline",
+    "course content", "course contents", "course duration", "training hours",
+    "training days", "certificate of completion", "certificate of attendance",
+    "accredited certificate", "target audience",
+  ]
+  courseProviders* = [
+    "مركز تدريب", "مركز التدريب", "مركز للتدريب", "معهد تدريب", "اكاديميه",
+    "training center", "training centre", "development center",
+    "development centre", "training institute", "academy",
+  ]
+  courseWords* = [
+    "دوره", "دورات", "كورس", "كورسات", "ورشه عمل", "ورش عمل", "ورشه تدريبيه",
+    "برنامج تدريبي", "البرنامج التدريبي", "course", "courses",
+    "training workshop", "bootcamp", "boot camp",
+  ]
+  ## Hiring or pay: with one of these, the training is part of a job or a
+  ## paid internship, not a course advert. Not a bare "paid"/"مدفوعه":
+  ## that is also "a paid course".
+  courseHiring* = [
+    "راتب", "رواتب", "مكافاه", "مكافات", "مخصصات", "اجر شهري",
+    "مدفوع الاجر", "مدفوعه الاجر", "تدريب مدفوع", "تعيين", "توظيف",
+    "فرصه عمل", "فرص عمل", "فرصه وظيفيه", "فرص وظيفيه", "وظيفه", "وظائف",
+    "شاغر", "شواغر", "عقد عمل", "تدريب صيفي", "حاجتها الى",
+    "salary", "salaries", "stipend", "allowance", "paid internship",
+    "paid training", "paid traineeship", "hiring", "hire", "employment",
+    "employed", "job offer", "vacancy", "vacancies", "internship",
+    "internships", "recruitment",
+  ]
+
   ## Entry-level phrases added to your `level_keywords_*`. These are
   ## phrasings of "we want fresh graduates" that are not single keywords.
   entryPhrases* = [

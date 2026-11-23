@@ -118,6 +118,14 @@ There is also `flatten`, used only for keyword search. It turns `-`, `_`, `/`, `
 ### Step 1: is it a job advert at all?
 
 - If it matches a phrase from `notAJob` in `defaults.nim` (school fees, course ads…): **reject**.
+- If it reads like a course or training you register on or pay for (`courseAdvert` in `classify.nim`): **reject**, with the reason "a course or training you register or pay for, not a job" and the signs it found. There are five kinds of sign, each a word list in `defaults.nim`:
+  - registration (`courseRegistration`): فتح باب التسجيل, للتسجيل, سجل الآن, register now…;
+  - a fee (`courseFees`): خصم, رسوم, سعر/بسعر, اجور الدورة, discount, fee…, but not when "بدون", "لا", "مجاناً", "no" or "free" comes just before it on the same line ("بدون رسوم" is free);
+  - a course structure (`courseStructure`): محاور, مدة الدورة/البرنامج, أيام/ساعات تدريبية, شهادة مشاركة/معتمدة, الفئة المستهدفة, course outline…;
+  - a training centre or academy as the advertiser (`courseProviders`): مركز التدريب, أكاديمية, Training Center, Academy…;
+  - course words (`courseWords`): دورة, كورس, ورشة عمل, برنامج تدريبي, course, bootcamp….
+
+  It takes three kinds, one of them a fee or a training centre, so one word ("سيخضع لدورة تدريبية") or a company's free summer programme that opens registration isn't enough. Any sign of hiring or pay (`courseHiring`: راتب, مكافأة, تدريب مدفوع, تعيين/توظيف, وظيفة, فرص عمل, تدريب صيفي, salary, stipend, hiring, employment, internship…) wins over all of them: then the training is part of a job, a paid internship, or a programme that ends in hiring. All its words must be whole words ("رسوم" isn't "رسومات").
 - If it sounds like someone *looking for* a job ("ابحث عن عمل", "محتاج وظيفه", "looking for a job"), **and** has no employer phrase (hiring, تعلن، حاجتها الى، مطلوب…): **reject**. The employer check keeps adverts that open with "Looking for a job? We are hiring…".
 - If it has no job-advert wording at all (`jobSignals`: مطلوب، تعلن، hiring, vacancy, CV…): **reject**.
 
@@ -609,6 +617,10 @@ The corpus still had four posts the filter published wrongly. Each became a rule
 - **"HSE Lead".** Your role only appeared as a field in the requirements ("Degree in Engineering"), so the old senior-title check, which looks for a seniority word *next to your role*, saw nothing. Now, when the match is only a field, a seniority word on the **headline** (the first line) holds the post back. Only the headline: lower lines say "support the project manager", and "الوجبة الاولى" ("first batch") isn't "senior". It doesn't apply when the post explicitly welcomes fresh graduates: then the senior word on the headline is someone else's (a "Senior Talent Acquisition Partner" posting it, "مكتب المدير العام" announcing it). Graduate schemes are exempt too, when the top three lines say "development/graduate programme" or the headline itself says "Program": Baker Hughes calls its scheme "LEAD". "Part of the expansion programme" doesn't count.
 
 Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
+
+### A paid course published as a job (2026-11-23)
+
+A training centre ("… Engineering Company – Training & Development Center") opened registration for a 7-day course "for engineering graduates", with topics, a discount for new graduates and a phone number "for registration". The filter published it: "التخصصات الهندسية" matched as a field, the centre's address said Basra, and "برنامج تدريبي" counted as an entry-level word. None of the `notAJob` phrases was in it. Now several course signs together reject a post (`courseAdvert`, see [step 1](#step-1-is-it-a-job-advert-at-all)); a sign of hiring or pay keeps it. Tests: an invented post like it, in Arabic and in English, is rejected; one or two signs, "free" next to a fee, a paid internship, summer training that leads to employment, a job that provides training and a free programme that ends in hiring keep the verdicts they had before.
 
 ### Multi-job posts, backlog progress, retries, stats (#29, #11, #5, #13)
 

@@ -33,7 +33,7 @@ Every post gets one of three verdicts, **with the reasons**:
 |---|---|
 | ✅ `publish` | Your role, in Basra (or remote), *and* a sign it's for beginners: "fresh graduate", "intern", "0–1 years", help desk… |
 | 🤔 `review` | Role and place fit, but nothing says the level. You decide |
-| ❌ `reject` | Not a job advert, wrong city, needs years of experience, senior title, mandatory certificate… |
+| ❌ `reject` | Not a job advert (a job seeker, a course you register on or pay for…), wrong city, needs years of experience, senior title, mandatory certificate… |
 
 Before deciding, it gathers everything there is to read:
 - the post text;

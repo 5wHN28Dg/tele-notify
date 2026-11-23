@@ -1,7 +1,7 @@
 ## One test per problem from docs/problems-report.md, using invented posts
 ## (your real Saved Messages stay private and are used by `telenotify eval`).
 
-import std/[unittest, os, json, times]
+import std/[unittest, os, json, times, strutils]
 import telenotify/[config, classify]
 
 let cfg = loadConfig(currentSourcePath.parentDir / "keywords.json")
@@ -479,3 +479,75 @@ Requirements: degree in Engineering (in progress); open only to students in thei
     check verdict("""Lead Engineer - Basra
 Part of the Majnoon expansion programme. Apply now.
 Requirements: degree in Engineering. Probation period applies.""") == vReview
+
+suite "paid course and training adverts (false positive 2026-11-23)":
+  # Invented posts, written like the advert the bot published: a training
+  # centre opening registration for a paid course, with a discount for new
+  # graduates, in Basra. No job, salary or hiring anywhere.
+  const courseAdvert = """شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+2- البرمجة بلغة السلم
+3- تطبيقات عملية
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+انستغرام: @example_training
+استثمر في مهاراتك اليوم"""
+
+  test "a training centre's paid course is not a job":
+    let d = classify(courseAdvert, cfg)
+    check d.verdict == vReject
+    check d.reasons.len == 1
+    check d.reasons[0].startsWith("a course or training you register or pay for")
+
+  test "the same advert in English":
+    check verdict("""Example Engineering – Training & Development Center
+Registration is open for our training course: Industrial Automation Basics
+Course outline: PLC, SCADA, HMI
+Duration: 5 days, 30 training hours, accredited certificate
+Special discount for fresh graduates!
+Target audience: electrical engineering graduates
+Don't miss this opportunity! Location: Basra. Register now: 07700000000""") == vReject
+
+  test "a single course word is not enough":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة
+سيخضع المقبولون لدورة تدريبية في الشركة
+ارسال السيرة الذاتية""") == vPublish
+    check verdict("""شركة في البصرة تعلن عن فتح باب التسجيل لمهندس كهرباء حديث التخرج
+للتسجيل ارسال السيرة الذاتية""") == vPublish
+    # one or two kinds of sign, even a training centre, are not a course
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في أكاديمية في البصرة""") == vPublish
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في أكاديمية في البصرة لتقديم الدورات""") == vPublish
+
+  test "free is not a fee":
+    # "بدون رسوم" / "مجاناً": the fee is negated, so only registration,
+    # course words and a duration are left (no fee, no training centre):
+    # held for review as before
+    check verdict("""شركة في البصرة تعلن عن فتح باب التسجيل في البرنامج التدريبي لحديثي التخرج
+هندسة كهرباء، مدة البرنامج شهر، مجاناً وبدون رسوم""") == vReview
+
+  test "a paid internship with a stipend still publishes":
+    check verdict("""أكاديمية شركة نفط البصرة تعلن عن فتح باب التسجيل في برنامج تدريبي مدفوع الأجر
+لخريجي هندسة كهرباء حديثي التخرج
+مدة البرنامج: 3 أشهر، مع مكافأة شهرية للمتدربين
+الموقع: البصرة، للتسجيل عبر الرابط""") == vPublish
+
+  test "summer training in a company that hires still publishes":
+    check verdict("""Training center of a Basra oil company: summer training for electrical engineering students and fresh graduates
+Registration is open, course outline attached, 20 training days
+Outstanding trainees are offered employment. Location: Basra""") == vPublish
+
+  test "a job that provides training still publishes":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة
+يتم توفير التدريب في مركز التدريب التابع للشركة، دورة تدريبية لمدة 10 أيام تدريبية وشهادة معتمدة
+راتب مجزي، للتقديم ارسال السيرة الذاتية""") == vPublish
+
+  test "a free training programme that ends in hiring still publishes":
+    check verdict("""مركز التدريب في شركة الطاقة يعلن عن فتح باب التسجيل في برنامج تدريبي مجاني
+لخريجي هندسة كهرباء حديثي التخرج، محاور البرنامج: السلامة، التشغيل، الصيانة
+البرنامج ينتهي بالتعيين في الشركة. الموقع: البصرة""") == vPublish

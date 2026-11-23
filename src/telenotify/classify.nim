@@ -6,7 +6,9 @@
 ##
 ## The decision, in order. The first rule that fires wins:
 ##
-## 1. Not a job advert at all (job seeker, course ad, ...) -> reject.
+## 1. Not a job advert at all (job seeker, course ad, ...) -> reject. A
+##    course is found by a phrase (`notAJob`) or by several signs together
+##    (`courseAdvert`: registration, a fee, topics, a training centre...).
 ## 2. No job-ad wording anywhere (مطلوب، تعلن، hiring, vacancy...) -> reject.
 ## 3. Split into job blocks (blocks.nim). For each block:
 ##    a. Find your roles. Ignore a role whose line also says senior / lead /
@@ -379,6 +381,35 @@ proc hasCvHeading(norm: string, cfg: Config): bool =
         if h.start == 0 and h.stop >= l.len: return true
   false
 
+proc courseAdvert(flat: string, cfg: Config): seq[string] =
+  ## The signs of a course or training the reader registers on or pays for
+  ## (false positive 2026-11-23), or @[] when it isn't one. Five kinds of
+  ## sign: registration, a fee, a course structure (topics, duration,
+  ## certificate), a training centre or academy as the advertiser, course
+  ## words. It is one when three kinds show up, one of them a fee or a
+  ## training centre (a company's free summer programme also opens
+  ## registration), and nothing says hiring or pay: then the training is
+  ## part of a job or a paid internship. One word ("دورة") is never enough.
+  if flat.contains(cfg.courseHiring): return @[]
+  var fee = ""
+  for h in flat.hits(cfg.courseFees):
+    var before = flat.runeSafe(h.start - 25, h.start)
+    let nl = before.rfind('\n')
+    if nl >= 0: before = before[nl + 1 .. ^1]
+    if before.contains(cfg.courseFree): continue # "بدون رسوم", "no fees"
+    fee = h.keyword
+    break
+  var signs: seq[string]
+  var paid = fee != ""
+  if paid: signs.add fee
+  for (list, commercial) in [(cfg.courseProviders, true), (cfg.courseRegistration, false),
+                             (cfg.courseStructure, false), (cfg.courseWords, false)]:
+    let (found, h) = flat.firstHit(list)
+    if found:
+      signs.add h.keyword
+      if commercial: paid = true
+  if signs.len >= 3 and paid: signs else: @[]
+
 proc classify*(text: string, cfg: Config): Decision =
   let norm = text.normalizeText
   let flat = norm.flatten
@@ -386,6 +417,10 @@ proc classify*(text: string, cfg: Config): Decision =
   let (nj, njHit) = flat.firstHit(cfg.notAJob)
   if nj:
     return Decision(verdict: vReject, reasons: @["not a job advert: '" & njHit.keyword & "'"])
+  let course = flat.courseAdvert(cfg)
+  if course.len > 0:
+    return Decision(verdict: vReject, reasons: @["a course or training you register or pay for, not a job: '" &
+                                                  course.join("', '") & "'"])
   if (norm.contains(jobSeeker) or flat.contains(cfg.seekerPhrases) or norm.hasCvHeading(cfg)) and
       not flat.contains(cfg.employerPhrases):
     return Decision(verdict: vReject, reasons: @["someone looking for a job, not offering one"])

@@ -89,6 +89,9 @@ type
     seekerPhrases*, employerPhrases*, notAPlaceAfter*, jobNouns*: KeywordList
     studentsOnly*, graduateWords*, programmes*, headlineProgrammes*, headlineSeniority*: KeywordList
     cvHeadings*, freshGradWelcome*, requirementWords*: KeywordList
+    ## signs of a course advert (`courseAdvert` in classify.nim)
+    courseRegistration*, courseFees*, courseFree*, courseStructure*: KeywordList
+    courseProviders*, courseWords*, courseHiring*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -193,6 +196,13 @@ proc parseConfig*(j: JsonNode): Config =
   result.optionalMarkers = toKeywords(optionalMarkers)
   result.applyAnyway = toKeywords(applyAnyway)
   result.notAJob = toKeywords(@notAJob & j.strings("extra_not_a_job"))
+  result.courseRegistration = toKeywords(courseRegistration, strict = true)
+  result.courseFees = toKeywords(courseFees, strict = true)
+  result.courseFree = toKeywords(courseFree, strict = true)
+  result.courseStructure = toKeywords(courseStructure, strict = true)
+  result.courseProviders = toKeywords(courseProviders, strict = true)
+  result.courseWords = toKeywords(courseWords, strict = true)
+  result.courseHiring = toKeywords(courseHiring, strict = true)
   result.maxExperienceYears = j{"max_experience_years"}.getInt(1)
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
   result.extraJobSites = j.strings("extra_job_sites")
