@@ -384,20 +384,26 @@ proc hasCvHeading(norm: string, cfg: Config): bool =
 let hashtag = re2(r"#[^\s#]+")
 let sentenceEnd = {'\n', '.', '!', '?', ';'}
 
-proc wordBefore(flat: string, h: Hit): string =
-  ## The word before the one `h` is in, with its prefix ("وبدون"), on any
-  ## line: "مجاناً وبدون رسوم" gives "وبدون".
-  if h.start == 0: return "" # (rfind's last = -1 would mean "to the end")
-  let start = flat.rfind({' ', '\n'}, last = h.start - 1) + 1
-  let before = flat[0 ..< start].strip(leading = false)
-  before[before.rfind({' ', '\n'}) + 1 .. ^1]
+## How far the course rule looks around a word: about 80 Arabic letters.
+## Bounded, so a 3 MB job page costs no more than a short post per word
+## (copying all the text before each word made it quadratic: 11 s for
+## 168 KB of "للعمل").
+const lookAround = 160
 
 proc wordsBefore(flat: string, h: Hit, n: int): string =
-  ## Up to `n` words before the one `h` is in.
-  if h.start == 0: return ""
-  let start = flat.rfind({' ', '\n'}, last = h.start - 1) + 1
-  let words = strutils.splitWhitespace(flat[0 ..< start])
+  ## Up to `n` words before the one `h` is in (within `lookAround`), with
+  ## their prefixes: "مجاناً وبدون رسوم" gives "وبدون" for n = 1.
+  let w = flat.runeSafe(h.start - lookAround, h.start)
+  if w.len == 0: return "" # (rfind's last = -1 would mean "to the end")
+  let start = w.rfind({' ', '\n'}, last = w.len - 1) + 1
+  let words = strutils.splitWhitespace(w[0 ..< start])
   words[max(0, words.len - n) .. ^1].join(" ")
+
+proc wordBefore(flat: string, h: Hit): string = flat.wordsBefore(h, 1)
+
+proc wordAfterIn(flat: string, h: Hit, list: KeywordList): bool =
+  ## Is the text right after `h` one of `list` (within `lookAround`)?
+  flat.runeSafe(h.stop, h.stop + lookAround).followedBy(Hit(), list)
 
 proc courseHiring(flat: string, cfg: Config): bool =
   ## A word of hiring or pay anywhere in the post, hashtags and signature
@@ -405,7 +411,10 @@ proc courseHiring(flat: string, cfg: Config): bool =
   ## (`courseHiringWords`, whole words), word starts like "راتب"/"تعيين"
   ## (`courseHiringStems`), or "للعمل" right after a job ("مهندس شبكات
   ## للعمل"), unless it is a course's promise ("تؤهلك للعمل").
-  if flat.contains(cfg.courseHiringStems): return true
+  for h in flat.hits(cfg.courseHiringStems):
+    # "اجور الدوره" is the course's fee, not wages
+    if h.keyword == "اجور" and flat.wordAfterIn(h, cfg.courseNotWages): continue
+    return true
   for h in flat.hits(cfg.courseHiringWords):
     # "الوثائق المطلوبه": the article makes it "required", not "wanted"
     if flat[h.start ..< h.stop].startsWith("مطلوب") and flat.runeSafe(h.start - 4, h.start) == "ال":
@@ -433,10 +442,13 @@ proc courseFee(norm: string, cfg: Config): string =
   for sentence in norm.replace("؟", "\n").replace("؛", "\n").split(sentenceEnd):
     let f = sentence.flatten
     var fee = ""
+    var benefits = -1 # does the sentence talk about staff benefits? (looked up once)
     for h in f.hits(cfg.courseFees):
       if f.wordBefore(h).contains(cfg.courseNotFeeBefore): continue
-      if f.followedBy(h, cfg.courseNotFeeAfter): continue
-      if f[h.start ..< h.stop].contains(cfg.courseDiscounts) and f.contains(cfg.courseBenefits): continue
+      if f.wordAfterIn(h, cfg.courseNotFeeAfter): continue
+      if f[h.start ..< h.stop].contains(cfg.courseDiscounts):
+        if benefits < 0: benefits = ord(f.contains(cfg.courseBenefits))
+        if benefits == 1: continue
       fee = h.keyword
       break
     if fee == "": continue

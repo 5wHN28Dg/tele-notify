@@ -180,9 +180,9 @@ A post looks like a paid course when it has a **fee** and signs of **two more** 
 - **a fee** (`courseFees`: خصم, رسوم, سعر, discount, fee, price…), read sentence by sentence (a sentence ends at a new line, `.`, `!`, `?`, `؟`, `;` or `؛`). A fee word doesn't count:
   - when the word right before it is "بدون", "لا", "مجاناً", "no", "free" or "عرض" (`courseNotFeeBefore`): "بدون رسوم", "عرض سعر";
   - when the word right after it is a drawing or quotation word (`courseNotFeeAfter`): "الرسوم الهندسية", "الرسوم التوضيحية", "price quotations";
-  - for a discount (خصم, discount) in a sentence about staff benefits (`courseBenefits`: الامتيازات, للموظفين, staff, benefits…): "Benefits: staff discount", "الامتيازات: خصم 50%".
+  - for a discount (خصم, discount) in a sentence about staff benefits (`courseBenefits`: الامتيازات, للموظفين, السكن, النقل, النادي, staff, benefits…): "Benefits: staff discount", "الامتيازات: خصم 50%", "خصم على الاشتراك بالنادي".
 
-  When a fee word's sentence also says free (`courseFreeSentence`: مجاناً, مجاني, لا توجد اي رسوم, بدون اي رسوم, free, no fees…), the whole post counts as free: "التقديم مجاني ولا توجد اي رسوم", "الرسوم مجاناً للأوائل و 100 ألف للبقية". "بدون خبرة، رسوم البرنامج" still has a fee: "بدون" isn't right before "رسوم".
+  When a fee word's sentence also says free (`courseFreeSentence`: مجاناً, مجاني, لا توجد اي رسوم, بدون اي رسوم, free, no fees…) or that the company pays it (تتحملها الشركة, على نفقة الشركة), the whole post counts as free: "التقديم مجاني ولا توجد اي رسوم", "الرسوم مجاناً للأوائل و 100 ألف للبقية". "بدون خبرة، رسوم البرنامج" still has a fee: "بدون" isn't right before "رسوم".
 - **registration** (`courseRegistration`): فتح باب التسجيل, للتسجيل, سجل الآن, register now…;
 - **course structure** (`courseStructure`): محاور, مدة الدورة/البرنامج, أيام/ساعات تدريبية, شهادة معتمدة, الفئة المستهدفة, course outline…;
 - **a training centre** (`courseProviders`): مركز التدريب, أكاديمية, Training Center, Academy…. Only centres that say "training": a "Development Center" is an employer. A training centre alone doesn't make a post paid;
@@ -192,10 +192,12 @@ Hashtags and a channel's signature (from "تابعونا", "follow us", "subscri
 
 **Hiring or pay** is looked for in the whole post, hashtags and signatures included ("#مطلوب", "#وظائف_البصرة"):
 - main's own job-advert wording (`jobSignals`, `extra_job_signals`, `employerPhrases`) and `courseHiringWords` (مطلوب, نبحث عن, salary, stipend, hiring, internship, summer training, looking for, join our team, your CV…), as whole words. Left out are the phrases a course uses too (`courseNotHiring`: برنامج تدريبي, فرصة تدريب, اعلان/تعلن/يعلن, opportunity). "مطلوب" with the article ("الوثائق المطلوبة") doesn't count;
-- `courseHiringStems`, matched at the **start of a word**: راتب (راتباً), تعيين (تعيينهم), وظيفة/وظيفت (وظيفتك, but not "مسارك الوظيفي"), وظائف, توظيف, تعاقد, منحة, مكافأة, تدريبي مدفوع, ضمهم, تدريب صيفي (للتدريب الصيفي), بحاجة إلى, الدوام…;
+- `courseHiringStems`, matched at the **start of a word**: راتب (راتباً), تعيين (تعيينهم), وظيفة/وظيفت (وظيفتك, but not "مسارك الوظيفي"), وظائف, توظيف, تعاقد, منحة, مكافأة and مكافئة, اجور (but not "اجور الدورة/الكورس/الاشتراك/التسجيل/البرنامج", `courseNotWages`: that's a fee), اجر يومي, مبلغ شهري, مخصص شهري, بدل نقل, يتقاضى, تثبيت, تدريبي مدفوع, ضمهم, تدريب صيفي (للتدريب الصيفي), بحاجة إلى, الدوام…. Not a bare "مدفوع": that is also "a paid course";
 - "للعمل" when one of the four words before it is a job noun ("مهندس شبكات حديث التخرج للعمل"), unless the word right before it is a course's promise ("تؤهلك للعمل", `courseQualifies`).
 
-Known limits: a course advert with a hiring or pay word of its own still publishes, as on main: "يؤهلك للحصول على وظيفة", a topic like "إعداد الرواتب", "includes an internship opportunity", "apply now", or a "#وظائف" hashtag or signature. That's the price of never holding back a real job.
+Known limits: **every one of main's job-advert words counts as hiring**: الشروط, التقديم, للتقديم, المتطلبات, المؤهلات, السيرة الذاتية, الدوام, مطلوب, نبحث/تبحث عن, requirements, qualifications, apply, CV, career, job, looking for…, as well as the pay words above. So a course advert that uses any one of them still publishes, as on main: "شروط التقديم", "apply now", "يؤهلك للحصول على وظيفة", a topic like "إعداد الرواتب", "includes an internship opportunity", a "#وظائف" hashtag or a channel signature. In the second recheck of the PR's sample that was 9 course adverts out of 18. That's the price of never holding back a real job.
+
+Speed: the rule only looks about 80 letters (160 bytes) around each word it checks, so a long job page costs no more per word than a short post. Looking at all the text before each word made it quadratic: 168 KB of "س للعمل" took 11 s and a 312 KB sentence of fee words 10 s (release build; main: 0.2 s). Now they take 0.4 s, and a 1 MB page 1.4 s (main: 1.7 s). A test checks this on 1.5 MB of such text against the same text without those words.
 
 ## 4. Experience extraction in detail (`experience.nim`)
 

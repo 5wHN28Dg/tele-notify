@@ -93,7 +93,7 @@ type
     courseRegistration*, courseFees*, courseDiscounts*, courseBenefits*: KeywordList
     courseNotFeeBefore*, courseNotFeeAfter*, courseFreeSentence*: KeywordList
     courseStructure*, courseProviders*, courseWords*, courseSignature*: KeywordList
-    courseHiringStems*, courseHiringWords*, courseQualifies*: KeywordList
+    courseHiringStems*, courseHiringWords*, courseQualifies*, courseNotWages*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -210,6 +210,7 @@ proc parseConfig*(j: JsonNode): Config =
   result.courseWords = toKeywords(courseWords, strict = true)
   result.courseSignature = toKeywords(courseSignature)
   result.courseQualifies = toKeywords(courseQualifies, strict = true)
+  result.courseNotWages = toKeywords(courseNotWages, strict = true)
   # word starts: "راتب" also finds "راتباً", "تعيين" "تعيينهم"
   result.courseHiringStems = toKeywords(courseHiringStems)
   # main's job-advert wording counts as hiring, except what courses say too
