@@ -381,7 +381,26 @@ proc hasCvHeading(norm: string, cfg: Config): bool =
         if h.start == 0 and h.stop >= l.len: return true
   false
 
-proc courseAdvert(flat: string, cfg: Config): seq[string] =
+let hashtag = re2(r"#[^\s#]+")
+
+proc courseHiringWord(norm: string, cfg: Config): bool =
+  ## A word of hiring or pay (`courseHiring`), outside hashtags and the
+  ## channel's signature lines: channels tag course adverts "#وظائف" and
+  ## sign them "تابعونا على قناة وظائف البصرة".
+  for line in norm.splitLines:
+    if line.flatten.contains(cfg.courseSignature): continue
+    if line.replace(hashtag, " ").flatten.contains(cfg.courseHiring): return true
+  false
+
+proc wordBefore(flat: string, h: Hit): string =
+  ## The word before the one `h` is in, with its prefix ("وبدون"), on any
+  ## line: "مجاناً وبدون رسوم" gives "وبدون".
+  if h.start == 0: return "" # (rfind's last = -1 would mean "to the end")
+  let start = flat.rfind({' ', '\n'}, last = h.start - 1) + 1
+  let before = flat[0 ..< start].strip(leading = false)
+  before[before.rfind({' ', '\n'}) + 1 .. ^1]
+
+proc courseAdvert(norm, flat: string, cfg: Config): seq[string] =
   ## The signs of a course or training the reader registers on or pays for
   ## (false positive 2026-11-23), or @[] when it isn't one. Five kinds of
   ## sign: registration, a fee, a course structure (topics, duration,
@@ -389,16 +408,18 @@ proc courseAdvert(flat: string, cfg: Config): seq[string] =
   ## words. It is one when three kinds show up, one of them a fee or a
   ## training centre (a company's free summer programme also opens
   ## registration), and nothing says hiring or pay: then the training is
-  ## part of a job or a paid internship. One word ("دورة") is never enough.
-  if flat.contains(cfg.courseHiring): return @[]
+  ## part of a job or a paid or hiring traineeship. One word ("دورة") is
+  ## never enough.
+  if norm.courseHiringWord(cfg): return @[]
   var fee = ""
+  var free = false
   for h in flat.hits(cfg.courseFees):
-    var before = flat.runeSafe(h.start - 25, h.start)
-    let nl = before.rfind('\n')
-    if nl >= 0: before = before[nl + 1 .. ^1]
-    if before.contains(cfg.courseFree): continue # "بدون رسوم", "no fees"
-    fee = h.keyword
-    break
+    # "الرسوم: مجاناً": the whole post is free, whatever other fee word it has
+    if flat.followedBy(h, cfg.courseFreeAfter): free = true
+    # "بدون رسوم", "no fees": only the word right before counts, so "بدون
+    # خبرة، رسوم البرنامج" still has a fee
+    elif fee == "" and not flat.wordBefore(h).contains(cfg.courseFreeBefore): fee = h.keyword
+  if free: fee = ""
   var signs: seq[string]
   var paid = fee != ""
   if paid: signs.add fee
@@ -417,7 +438,7 @@ proc classify*(text: string, cfg: Config): Decision =
   let (nj, njHit) = flat.firstHit(cfg.notAJob)
   if nj:
     return Decision(verdict: vReject, reasons: @["not a job advert: '" & njHit.keyword & "'"])
-  let course = flat.courseAdvert(cfg)
+  let course = courseAdvert(norm, flat, cfg)
   if course.len > 0:
     return Decision(verdict: vReject, reasons: @["a course or training you register or pay for, not a job: '" &
                                                   course.join("', '") & "'"])

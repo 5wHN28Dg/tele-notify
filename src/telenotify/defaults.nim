@@ -136,7 +136,10 @@ const
   ## One sign proves nothing ("سيخضع لدورة تدريبية" is a job that trains
   ## you); `courseAdvert` in classify.nim needs three of the five kinds,
   ## one of them a fee or a training centre, and no hiring or pay
-  ## (`courseHiring`). All are whole words: "رسوم" is not "رسومات".
+  ## (`courseHiring`). These five lists and `courseFree*` are whole words
+  ## ("رسوم" is not "رسومات"); an Arabic prefix (و ف ب ل ك ال...) is allowed.
+  ## Phrases already in `notAJob` ("اجور الدوره", "شهاده مشاركه") aren't
+  ## repeated here: that check runs first.
   courseRegistration* = [
     "فتح باب التسجيل", "باب التسجيل", "للتسجيل", "سجل الان", "سارع بالتسجيل",
     "التسجيل في الدوره", "التسجيل في البرنامج", "التسجيل في الكورس",
@@ -144,47 +147,77 @@ const
     "registration open", "registrations are open", "registrations open",
     "enroll now", "enrol now", "sign up now",
   ]
-  ## Not "مجاناً"/"free": a free course has no fee. A fee word right after
-  ## one of `courseFree` ("بدون رسوم", "no fees") doesn't count.
+  ## Not "مجاناً"/"free": a free course has no fee.
   courseFees* = [
-    "خصم", "خصومات", "رسوم", "سعر", "اجور الدوره", "اجور الكورس",
+    "خصم", "خصومات", "رسوم", "سعر", "اجور الكورس",
     "اجور الاشتراك", "اجور التسجيل", "قسط الدوره", "تكلفه الدوره",
     "discount", "fee", "fees", "price", "tuition",
   ]
-  courseFree* = [
+  ## The word right before a fee word that makes it no fee ("بدون رسوم",
+  ## "no fees"): that fee word doesn't count.
+  courseFreeBefore* = [
     "بدون", "بلا", "دون", "لا", "مجانا", "مجاني", "مجانيه", "no", "without",
     "free", "zero",
   ]
+  ## The word right after a fee word that makes the whole post free
+  ## ("الرسوم: مجاناً", "fee: free"): no fee word counts.
+  courseFreeAfter* = [
+    "مجانا", "مجاني", "مجانيه", "بالمجان", "free", "none", "zero", "لا يوجد",
+    "لا توجد",
+  ]
   courseStructure* = [
     "محاور", "مده الدوره", "مده البرنامج", "مده الكورس", "ايام تدريبيه",
-    "يوم تدريبي", "ساعات تدريبيه", "ساعه تدريبيه", "شهاده مشاركه",
+    "يوم تدريبي", "ساعات تدريبيه", "ساعه تدريبيه",
     "شهاده معتمده", "شهاده حضور", "الفئه المستهدفه", "course outline",
     "course content", "course contents", "course duration", "training hours",
     "training days", "certificate of completion", "certificate of attendance",
     "accredited certificate", "target audience",
   ]
+  ## Only centres that say "training": a "Software Development Center" is
+  ## an employer.
   courseProviders* = [
     "مركز تدريب", "مركز التدريب", "مركز للتدريب", "معهد تدريب", "اكاديميه",
-    "training center", "training centre", "development center",
-    "development centre", "training institute", "academy",
+    "training center", "training centre", "training institute", "academy",
   ]
   courseWords* = [
     "دوره", "دورات", "كورس", "كورسات", "ورشه عمل", "ورش عمل", "ورشه تدريبيه",
     "برنامج تدريبي", "البرنامج التدريبي", "course", "courses",
     "training workshop", "bootcamp", "boot camp",
   ]
-  ## Hiring or pay: with one of these, the training is part of a job or a
-  ## paid internship, not a course advert. Not a bare "paid"/"مدفوعه":
-  ## that is also "a paid course".
+  ## Hiring, pay or an employer's wording: with one of these, the training
+  ## is part of a job or a paid or hiring traineeship, not a course advert.
+  ## Unlike the lists above, an Arabic entry here matches the start of a
+  ## word, so it covers the forms built on it: "راتب" also matches
+  ## "راتباً"/"راتبه", "تعيين" "تعيينهم", "وظيف" "وظيفتك"/"الوظيفه". English
+  ## entries are whole words. Not a bare "paid"/"مدفوعه": that is also "a
+  ## paid course". Hashtags and channel signature lines are left out
+  ## before this list is searched (`courseSignature`): channels tag courses
+  ## "#وظائف" too.
   courseHiring* = [
-    "راتب", "رواتب", "مكافاه", "مكافات", "مخصصات", "اجر شهري",
-    "مدفوع الاجر", "مدفوعه الاجر", "تدريب مدفوع", "تعيين", "توظيف",
-    "فرصه عمل", "فرص عمل", "فرصه وظيفيه", "فرص وظيفيه", "وظيفه", "وظائف",
-    "شاغر", "شواغر", "عقد عمل", "تدريب صيفي", "حاجتها الى",
-    "salary", "salaries", "stipend", "allowance", "paid internship",
-    "paid training", "paid traineeship", "hiring", "hire", "employment",
-    "employed", "job offer", "vacancy", "vacancies", "internship",
-    "internships", "recruitment",
+    # pay
+    "راتب", "رواتب", "مكافا", "منحه", "منح شهريه", "مخصصات", "اجر شهري",
+    "مدفوع الاجر", "مدفوعه الاجر", "تدريب مدفوع", "تدريبي مدفوع",
+    "تدريب باجر", "تدريبي باجر",
+    # hiring
+    "تعيين", "توظيف", "وظيف", "وظائف", "فرصه عمل", "فرص عمل", "شاغر", "شواغر",
+    "عقد عمل", "ضمهم", "ضمه", "سيتم ضم", "للعمل",
+    "تدريب صيفي", "تدريب الصيفي",
+    # an employer's wording
+    "مطلوب", "حاجه الى", "حاجتها الى", "حاجته الى", "حاجتنا الى",
+    "حاجتهم الى", "نبحث عن", "تبحث عن", "يبحث عن", "يعلن عن حاجته",
+    "تعلن عن حاجتها",
+    "salary", "salaries", "stipend", "stipends", "allowance", "paid internship",
+    "paid training", "paid traineeship", "hiring", "we are hiring", "hire",
+    "hired", "employment", "employed", "job offer", "job opening", "vacancy",
+    "vacancies", "internship", "internships", "summer training",
+    "summer internship", "recruitment", "looking for", "join our team",
+    "join the team", "join our", "wanted", "your cv",
+  ]
+  ## A line with one of these is the channel's signature ("تابعونا على قناة
+  ## وظائف البصرة"), not the advert: left out when looking for hiring words.
+  courseSignature* = [
+    "تابعونا", "تابعوا", "تابعنا", "اشتركوا", "اشترك في قناه", "انضموا الى قناه",
+    "قناتنا", "follow us", "follow our", "join our channel", "subscribe",
   ]
 
   ## Entry-level phrases added to your `level_keywords_*`. These are

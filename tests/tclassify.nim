@@ -551,3 +551,117 @@ Outstanding trainees are offered employment. Location: Basra""") == vPublish
     check verdict("""مركز التدريب في شركة الطاقة يعلن عن فتح باب التسجيل في برنامج تدريبي مجاني
 لخريجي هندسة كهرباء حديثي التخرج، محاور البرنامج: السلامة، التشغيل، الصيانة
 البرنامج ينتهي بالتعيين في الشركة. الموقع: البصرة""") == vPublish
+
+suite "course adverts: review of #152 (jobs and traineeships main publishes)":
+  # Each of these is published by main; the course rule must not reject it.
+  test "a trainer job at a training academy (بحاجة الى)":
+    check verdict("""أكاديمية النور للتدريب في البصرة بحاجة الى مهندس كهرباء حديث التخرج للعمل كمدرب في دورات PLC
+للتسجيل ارسال السيرة الذاتية على الواتساب""") == vPublish
+
+  test "a trainer job at a training centre (مطلوب)":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل مدرباً في مركز تدريب في البصرة لتقديم الدورات
+للتقديم ارسال السيرة الذاتية""") == vPublish
+
+  test "a trainer job at a Training Center (looking for)":
+    check verdict("""We are looking for an electrical engineer (fresh graduate) to teach PLC courses at our Training Center in Basra.
+Send your CV.""") == vPublish
+
+  test "a paid traineeship: تدريبي مدفوع, منحة":
+    check verdict("""أكاديمية شركة نفط البصرة تعلن عن فتح باب التسجيل في برنامج تدريبي مدفوع لخريجي هندسة كهرباء حديثي التخرج
+مع منحة شهرية للمتدربين، الموقع: البصرة""") == vPublish
+
+  test "summer training: للتدريب الصيفي":
+    check verdict("""تعلن شركة نفط البصرة – مركز التدريب والتطوير عن فتح باب التسجيل للتدريب الصيفي لطلبة هندسة كهرباء والخريجين الجدد
+مدة البرنامج: 6 أسابيع. الموقع: البصرة""") == vPublish
+
+  test "summer training in English, apply with a CV":
+    check verdict("""Training center of a Basra oil company: summer training for electrical engineering students and fresh graduates
+Registration is open, course outline attached, 20 training days. Location: Basra. Send your CV to apply.""") == vPublish
+
+  test "free training, the best trainees hired: ضمهم للعمل":
+    check verdict("""تعلن شركة الطاقة – مركز التدريب عن فتح باب التسجيل في برنامج تدريبي مجاني لخريجي هندسة كهرباء حديثي التخرج في البصرة
+والمتميزون سيتم ضمهم للعمل في الشركة""") == vPublish
+
+  test "free training, the best trainees join the team":
+    check verdict("""Basra Energy Company Training Center: registration is open for a free training program for electrical engineering fresh graduates in Basra.
+Top trainees will join our engineering team. Apply now.""") == vPublish
+
+  test "a fee followed by free: الرسوم: مجاناً بالكامل":
+    check verdict("""تعلن شركة الطاقة عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج في البصرة
+الرسوم: مجاناً بالكامل""") == vPublish
+
+  test "hiring with a pronoun: تعيينهم":
+    check verdict("""تعلن شركة الطاقة – مركز التدريب عن فتح باب التسجيل في برنامج تدريبي مجاني لخريجي هندسة كهرباء حديثي التخرج في البصرة
+وسيتم تعيينهم في الشركة بعد اجتياز البرنامج""") == vPublish
+
+  test "a salary with tanween: راتباً":
+    check verdict("""أكاديمية شركة نفط البصرة تعلن عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج
+يتقاضى المتدرب راتبا شهريا خلال فترة البرنامج. الموقع: البصرة""") == vPublish
+
+  test "a job at a Software Development Center (looking for)":
+    check verdict("""Our Software Development Center in Basra is looking for a fresh graduate python developer.
+Free courses for new staff. Register now through the link with your CV.""") == vPublish
+
+  test "a job at an academy's courses department (مطلوب)":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج لأكاديمية النور في البصرة للعمل في قسم الدورات
+رابط التسجيل في الوصف""") == vPublish
+
+  test "an employer's wording alone (تبحث عن) keeps a trainer job":
+    check verdict("""أكاديمية النور في البصرة تبحث عن مهندس كهرباء حديث التخرج كمدرب في دورات PLC
+للتسجيل ارسال السيرة الذاتية""") == vPublish
+
+  test "English summer training with no other hiring word":
+    check verdict("""Summer training for electrical engineering students and fresh graduates at our Training Center in Basra.
+Registration is open, course outline attached. Apply now.""") == vPublish
+
+  test "an employer's wording alone (looking for) keeps a trainer job":
+    check verdict("""Our Training Center in Basra is looking for a fresh graduate electrical engineer to teach PLC courses.
+Register now via the link.""") == vPublish
+
+  test "free training whose best trainees are taken on (ضمهم) still publishes":
+    check verdict("""تعلن شركة الطاقة – مركز التدريب عن فتح باب التسجيل في برنامج تدريبي مجاني لخريجي هندسة كهرباء حديثي التخرج في البصرة
+والمتميزون سيتم ضمهم الى كادر الشركة""") == vPublish
+
+  test "two kinds of sign, a training centre and courses, are not a course":
+    check verdict("""Junior python developer opportunity in Basra for fresh graduates.
+Free courses at our Training Center.""") == vPublish
+
+  test "a development centre is not a training centre":
+    # no hiring word at all: only "Development Center" would make it paid
+    check verdict("""Python developer opportunity at our Software Development Center in Basra for fresh graduates.
+Free courses for new staff. Register now through the link.""") == vPublish
+
+suite "course adverts: review of #152 (courses that must stay rejected)":
+  test "an unrelated 'بدون خبرة' before a fee doesn't make it free":
+    check classify("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+بدون خبرة، رسوم البرنامج 150 ألف دينار""", cfg).reasons[0].startsWith("a course or training")
+
+  test "an unrelated 'No experience' before a fee doesn't make it free":
+    check classify("""Registration is open for our training course for electrical engineering fresh graduates in Basra. Apply now.
+No experience needed. Fee: 100$""", cfg).reasons[0].startsWith("a course or training")
+
+  test "a '#وظائف' hashtag doesn't bring a course back":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+#وظائف_البصرة""") == vReject
+
+  test "a channel signature line doesn't bring a course back":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+تابعونا على قناة وظائف البصرة""") == vReject
