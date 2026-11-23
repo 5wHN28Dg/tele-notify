@@ -90,8 +90,10 @@ type
     studentsOnly*, graduateWords*, programmes*, headlineProgrammes*, headlineSeniority*: KeywordList
     cvHeadings*, freshGradWelcome*, requirementWords*: KeywordList
     ## signs of a course advert (`courseAdvert` in classify.nim)
-    courseRegistration*, courseFees*, courseFreeBefore*, courseFreeAfter*: KeywordList
-    courseStructure*, courseProviders*, courseWords*, courseHiring*, courseSignature*: KeywordList
+    courseRegistration*, courseFees*, courseDiscounts*, courseBenefits*: KeywordList
+    courseNotFeeBefore*, courseNotFeeAfter*, courseFreeSentence*: KeywordList
+    courseStructure*, courseProviders*, courseWords*, courseSignature*: KeywordList
+    courseHiringStems*, courseHiringWords*, courseQualifies*: KeywordList
     maxExperienceYears*: int
     extraJobSites*: seq[string]  ## more sites whose pages carry a schema.org JobPosting
     publishWhenUnsure*: bool    ## old behaviour: no level evidence either way -> publish
@@ -198,14 +200,25 @@ proc parseConfig*(j: JsonNode): Config =
   result.notAJob = toKeywords(@notAJob & j.strings("extra_not_a_job"))
   result.courseRegistration = toKeywords(courseRegistration, strict = true)
   result.courseFees = toKeywords(courseFees, strict = true)
-  result.courseFreeBefore = toKeywords(courseFreeBefore, strict = true)
-  result.courseFreeAfter = toKeywords(courseFreeAfter, strict = true)
+  result.courseDiscounts = toKeywords(courseDiscounts, strict = true)
+  result.courseBenefits = toKeywords(courseBenefits, strict = true)
+  result.courseNotFeeBefore = toKeywords(courseNotFeeBefore, strict = true)
+  result.courseNotFeeAfter = toKeywords(courseNotFeeAfter, strict = true)
+  result.courseFreeSentence = toKeywords(courseFreeSentence, strict = true)
   result.courseStructure = toKeywords(courseStructure, strict = true)
   result.courseProviders = toKeywords(courseProviders, strict = true)
   result.courseWords = toKeywords(courseWords, strict = true)
-  # word starts: "راتب" also finds "راتباً", "تعيين" "تعيينهم"
-  result.courseHiring = toKeywords(courseHiring)
   result.courseSignature = toKeywords(courseSignature)
+  result.courseQualifies = toKeywords(courseQualifies, strict = true)
+  # word starts: "راتب" also finds "راتباً", "تعيين" "تعيينهم"
+  result.courseHiringStems = toKeywords(courseHiringStems)
+  # main's job-advert wording counts as hiring, except what courses say too
+  var notHiring: HashSet[string]
+  for w in courseNotHiring: notHiring.incl w.normalizeText.flatten.strip
+  var hiring: seq[string]
+  for w in @courseHiringWords & @jobSignals & j.strings("extra_job_signals") & @employerPhrases:
+    if w.normalizeText.flatten.strip notin notHiring: hiring.add w
+  result.courseHiringWords = toKeywords(hiring, strict = true)
   result.maxExperienceYears = j{"max_experience_years"}.getInt(1)
   result.publishWhenUnsure = j{"publish_when_unsure"}.getBool(false)
   result.extraJobSites = j.strings("extra_job_sites")
