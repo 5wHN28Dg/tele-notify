@@ -171,6 +171,34 @@ verdict: publish
 
 ---
 
+### Last: a paid course is held for review (`courseAdvert`)
+
+A post that would be **published** but looks like a course or training you pay for goes to **review** instead, with the reason "but it looks like a course or training you pay for: '<signs>'". It never rejects, and it never touches a post that is already a review or a reject. The owner decided this on 2026-11-23, asked what a course-looking post should get: "Send to review (Recommended)".
+
+A post looks like a paid course when it has a **fee** and signs of **two more** kinds, and **no word of hiring or pay**. The lists are in `defaults.nim`; the sign lists are whole words (an Arabic prefix such as و or ال may come first, so "رسوم" matches "الرسوم" but not "رسومات"):
+
+- **a fee** (`courseFees`: خصم, رسوم, سعر, discount, fee, price…), read sentence by sentence (a sentence ends at a new line, `.`, `!`, `?`, `؟`, `;` or `؛`). A fee word doesn't count:
+  - when the word right before it is "بدون", "لا", "مجاناً", "no", "free" or "عرض" (`courseNotFeeBefore`): "بدون رسوم", "عرض سعر";
+  - when the word right after it is a drawing or quotation word (`courseNotFeeAfter`): "الرسوم الهندسية", "الرسوم التوضيحية", "price quotations";
+  - for a discount (خصم, discount) in a sentence about staff benefits (`courseBenefits`: الامتيازات, للموظفين, السكن, النقل, النادي, staff, benefits…): "Benefits: staff discount", "الامتيازات: خصم 50%", "خصم على الاشتراك بالنادي".
+
+  When a fee word's sentence also says free (`courseFreeSentence`: مجاناً, مجاني, لا توجد اي رسوم, بدون اي رسوم, free, no fees…) or that the company pays it (تتحملها الشركة, على نفقة الشركة), the whole post counts as free: "التقديم مجاني ولا توجد اي رسوم", "الرسوم مجاناً للأوائل و 100 ألف للبقية". "بدون خبرة، رسوم البرنامج" still has a fee: "بدون" isn't right before "رسوم".
+- **registration** (`courseRegistration`): فتح باب التسجيل, للتسجيل, سجل الآن, register now…;
+- **course structure** (`courseStructure`): محاور, مدة الدورة/البرنامج, أيام/ساعات تدريبية, شهادة معتمدة, الفئة المستهدفة, course outline…;
+- **a training centre** (`courseProviders`): مركز التدريب, أكاديمية, Training Center, Academy…. Only centres that say "training": a "Development Center" is an employer. A training centre alone doesn't make a post paid;
+- **course words** (`courseWords`): دورة, كورس, ورشة عمل, برنامج تدريبي, course, bootcamp….
+
+Hashtags and a channel's signature (from "تابعونا", "follow us", "subscribe"… to the end of its line, `courseSignature`) aren't counted as signs: "#دورات" or "تابعونا على قناة دورات البصرة" don't make a job a course.
+
+**Hiring or pay** is looked for in the whole post, hashtags and signatures included ("#مطلوب", "#وظائف_البصرة"):
+- main's own job-advert wording (`jobSignals`, `extra_job_signals`, `employerPhrases`) and `courseHiringWords` (مطلوب, نبحث عن, salary, stipend, hiring, internship, summer training, looking for, join our team, your CV…), as whole words. Left out are the phrases a course uses too (`courseNotHiring`: برنامج تدريبي, فرصة تدريب, اعلان/تعلن/يعلن, opportunity). "مطلوب" with the article ("الوثائق المطلوبة") doesn't count;
+- `courseHiringStems`, matched at the **start of a word**: راتب (راتباً), تعيين (تعيينهم), وظيفة/وظيفت (وظيفتك, but not "مسارك الوظيفي"), وظائف, توظيف, تعاقد, منحة, مكافأة and مكافئة, اجور (but not "اجور الدورة/الكورس/الاشتراك/التسجيل/البرنامج", `courseNotWages`: that's a fee), اجر يومي, مبلغ شهري, مخصص شهري, بدل نقل, يتقاضى, تثبيت, تدريبي مدفوع, ضمهم, تدريب صيفي (للتدريب الصيفي), بحاجة إلى, الدوام…. Not a bare "مدفوع": that is also "a paid course";
+- "للعمل" when one of the four words before it is a job noun ("مهندس شبكات حديث التخرج للعمل"), unless the word right before it is a course's promise ("تؤهلك للعمل", `courseQualifies`).
+
+Known limits: **every one of main's job-advert words counts as hiring**: الشروط, التقديم, للتقديم, المتطلبات, المؤهلات, السيرة الذاتية, الدوام, مطلوب, نبحث/تبحث عن, requirements, qualifications, apply, CV, career, job, looking for…, as well as the pay words above. So a course advert that uses any one of them still publishes, as on main: "شروط التقديم", "apply now", "يؤهلك للحصول على وظيفة", a topic like "إعداد الرواتب", "includes an internship opportunity", a "#وظائف" hashtag or a channel signature. In the second recheck of the PR's sample that was 9 course adverts out of 18. That's the price of never holding back a real job.
+
+Speed: the rule only looks about 80 letters (160 bytes) around each word it checks, so a long job page costs no more per word than a short post. Looking at all the text before each word made it quadratic: 168 KB of "س للعمل" took 5 to 11 s and a 312 KB sentence of fee words 4 to 10 s (release build; main: 0.1 to 0.2 s). Now they take 0.16 s and 0.2 s, and a 1 MB page 0.74 s (main: 0.65 s). A test checks this on 1.5 MB of such text against the same text without those words.
+
 ## 4. Experience extraction in detail (`experience.nim`)
 
 The old code had one giant regex returning yes/no. The new one returns numbers:
@@ -609,6 +637,10 @@ The corpus still had four posts the filter published wrongly. Each became a rule
 - **"HSE Lead".** Your role only appeared as a field in the requirements ("Degree in Engineering"), so the old senior-title check, which looks for a seniority word *next to your role*, saw nothing. Now, when the match is only a field, a seniority word on the **headline** (the first line) holds the post back. Only the headline: lower lines say "support the project manager", and "الوجبة الاولى" ("first batch") isn't "senior". It doesn't apply when the post explicitly welcomes fresh graduates: then the senior word on the headline is someone else's (a "Senior Talent Acquisition Partner" posting it, "مكتب المدير العام" announcing it). Graduate schemes are exempt too, when the top three lines say "development/graduate programme" or the headline itself says "Program": Baker Hughes calls its scheme "LEAD". "Part of the expansion programme" doesn't count.
 
 Corpus: wrong publishes 4 → 0; true matches published 5 → 5, none lost.
+
+### A paid course published as a job (2026-11-23)
+
+A training centre ("… Engineering Company – Training & Development Center") opened registration for a 7-day course "for engineering graduates", with topics, a discount for new graduates and a phone number "for registration". The filter published it: "التخصصات الهندسية" matched as a field, the centre's address said Basra, and "برنامج تدريبي" counted as an entry-level word. None of the `notAJob` phrases was in it. Now such a post goes to review ([`courseAdvert`](#last-a-paid-course-is-held-for-review-courseadvert)). The first versions of the rule rejected it, and the two reviews of the PR (#152) found real jobs and traineeships they rejected (12 in the second review alone); asked, the owner chose review. Every post of both reviews is a test: those main publishes still publish, or at worst go to review.
 
 ### Multi-job posts, backlog progress, retries, stats (#29, #11, #5, #13)
 
