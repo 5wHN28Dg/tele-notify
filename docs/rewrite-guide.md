@@ -197,7 +197,7 @@ Hashtags and a channel's signature (from "تابعونا", "follow us", "subscri
 
 Known limits: **every one of main's job-advert words counts as hiring**: الشروط, التقديم, للتقديم, المتطلبات, المؤهلات, السيرة الذاتية, الدوام, مطلوب, نبحث/تبحث عن, requirements, qualifications, apply, CV, career, job, looking for…, as well as the pay words above. So a course advert that uses any one of them still publishes, as on main: "شروط التقديم", "apply now", "يؤهلك للحصول على وظيفة", a topic like "إعداد الرواتب", "includes an internship opportunity", a "#وظائف" hashtag or a channel signature. In the second recheck of the PR's sample that was 9 course adverts out of 18. That's the price of never holding back a real job.
 
-Speed: the rule only looks about 80 letters (160 bytes) around each word it checks, so a long job page costs no more per word than a short post. Looking at all the text before each word made it quadratic: 168 KB of "س للعمل" took 11 s and a 312 KB sentence of fee words 10 s (release build; main: 0.2 s). Now they take 0.4 s, and a 1 MB page 1.4 s (main: 1.7 s). A test checks this on 1.5 MB of such text against the same text without those words.
+Speed: the rule only looks about 80 letters (160 bytes) around each word it checks, so a long job page costs no more per word than a short post. Looking at all the text before each word made it quadratic: 168 KB of "س للعمل" took 5 to 11 s and a 312 KB sentence of fee words 4 to 10 s (release build; main: 0.1 to 0.2 s). Now they take 0.16 s and 0.2 s, and a 1 MB page 0.74 s (main: 0.65 s). A test checks this on 1.5 MB of such text against the same text without those words.
 
 ## 4. Experience extraction in detail (`experience.nim`)
 
