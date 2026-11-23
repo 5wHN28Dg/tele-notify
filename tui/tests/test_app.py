@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import InvalidThemeError
-from textual.widgets import TabbedContent
+from textual.widgets import TabbedContent, Tabs
 
 from telenotify_tui.app import TeleNotifyApp
 
@@ -41,9 +41,50 @@ async def test_the_ansi_themes_are_not_offered(paths):
             app.theme = "ansi-light"
 
 
-@pytest.mark.parametrize("env_theme, expected", [("ansi-light", "textual-dark"), ("ansi-dark,textual-light", "textual-light")])
+async def test_only_the_checked_themes_are_offered(paths):
+    """#81: the command palette offered about 19 themes; only textual-dark and textual-light
+    have their colours checked (contrast, the chart's series), so only they are offered."""
+    from textual.theme import ThemeProvider
+
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert set(app.available_themes) == {"textual-dark", "textual-light"}
+        offered = {name for name, _ in ThemeProvider(app.screen).commands}
+        assert offered == {"textual-dark", "textual-light"}
+        for name in ("nord", "dracula", "solarized-light"):
+            with pytest.raises(InvalidThemeError):
+                app.theme = name
+
+
+@pytest.mark.parametrize("key, tab, main", [("2", "review", "review-list"), ("1", "dashboard", "feed")])
+async def test_the_tabs_key_again_focuses_its_main_widget(paths, key, tab, main):
+    """#60: pressing 2 again on Review moved focus to the tab bar, so s / d / k did nothing.
+    The key of the tab already shown focuses that tab's main widget instead."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press(key)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one(TabbedContent).active == tab
+        assert app.focused is not None and app.focused.id == main
+        await pilot.press(key)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.query_one(TabbedContent).active == tab
+        assert app.focused is not None and app.focused.id == main, app.focused
+        app.set_focus(app.query_one(Tabs))     # from the tab bar too, the key goes back into the tab
+        await pilot.press(key)
+        await pilot.pause()
+        await pilot.pause()
+        assert app.focused is not None and app.focused.id == main, app.focused
+
+
+@pytest.mark.parametrize("env_theme, expected", [("ansi-light", "textual-dark"), ("ansi-dark,textual-light", "textual-light"),
+                                                 ("nord", "textual-dark")])
 def test_an_ansi_theme_from_the_environment_isnt_used(paths, env_theme, expected):
-    """#112: TEXTUAL_THEME (read when Textual is imported) can't bring an ansi theme back."""
+    """#112, #81: TEXTUAL_THEME (read when Textual is imported) can't bring an ansi theme back,
+    nor any other theme that isn't offered."""
     import os
     import subprocess
     import sys

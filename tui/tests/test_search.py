@@ -7,7 +7,7 @@ import time
 import traceback
 from typing import Self
 
-from conftest import BAD, GOOD
+from conftest import BAD, GOOD, UNCLEAR
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
 from telenotify_tui import bot
@@ -678,3 +678,27 @@ async def test_the_chat_picker_shows_all_chats_once_read(paths):
         await open_search(app, pilot)
         assert "4 results" in search_bar(app)
         assert "all chats" in search_bar(app) and "loading chats" not in search_bar(app)
+
+
+async def test_y_copies_the_selected_post_in_reading_order(paths):
+    """#78: y copies the selected post's text as stored (reading order, not as drawn), with a toast."""
+    app = TeleNotifyApp(paths, refresh_seconds=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await open_search(app, pilot)
+        app.query_one("#results", DataTable).focus()
+        await pilot.press("down")
+        await pilot.pause()
+        selected = pane._selected
+        assert selected is not None and selected.text == UNCLEAR   # two lines, drawn right to left
+        await pilot.press("y")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert app.clipboard == selected.text
+        assert any("OSC 52" in n.message for n in app._notifications)   # no desktop here: not "Copied"
+        await pilot.press("p")                    # the paste box: y is a letter typed there
+        await pilot.pause()
+        app.copy_to_clipboard("")
+        await pilot.press("y")
+        await pilot.pause()
+        assert app.clipboard == ""
+        assert app.query_one("#paste-text", TextArea).text == "y"

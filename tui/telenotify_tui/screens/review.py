@@ -6,7 +6,7 @@ counted down at the top), `d` discards it,
 `k` keeps it as a match without sending it (for a post that already reached
 the channel another way, e.g. the old bot forwarded it), `n` / down moves on, `o` opens the post in the browser, `r` shows what the
 filter read (it runs `telenotify check` with link scraping), `h` shows what
-was decided recently.
+was decided recently, `y` copies the open post's text.
 
 `u` undoes the last decision made here; in History (`h`), it undoes the
 decision under the cursor, wherever it was made (`telenotify review` too).
@@ -44,7 +44,7 @@ from textual.widgets.option_list import Option
 
 from .. import bot
 from ..clean import clean
-from ..postview import PostView
+from ..postview import PostView, copy_post
 from ..rtl import Block, visual
 from ..store import BUSY_NOTE, Review, is_busy, unreadable_note
 from . import settings_data as sd
@@ -193,6 +193,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         Binding("r", "check", "Filter read"),
         Binding("h", "toggle_history", "History"),
         Binding("u", "undo", "Undo"),
+        Binding("y", "copy_post", "Copy post", show=False),   # in the keys panel; the footer keeps the tab keys at 80 columns
         Binding("space", "scroll_post(1)", "Scroll post"),
         Binding("b", "scroll_post(-1)", "Scroll back", show=False),
     ]
@@ -317,7 +318,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._ticker = self.set_interval(self.COUNTDOWN_EVERY, self._countdown, pause=True)
 
     def on_show(self) -> None:
-        self.call_after_refresh(self._focus_main)
+        self.call_after_refresh(self.focus_main)
         self._arm()
 
     def on_resize(self, _event: events.Resize) -> None:
@@ -355,7 +356,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         else:
             self._ticker.pause()
 
-    def _focus_main(self) -> None:
+    def focus_main(self) -> None:
         # Only while this tab is still the one shown: focusing a widget in a
         # hidden tab would make the tabs jump back here.
         if not self._shown(self):
@@ -399,6 +400,8 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             if self._undo_target() is None or self._undo_settling:
                 return None   # greyed: nothing to undo, or the row under the cursor has only just come
             return True
+        if action == "copy_post" and self.is_mounted:
+            return True if self.current is not None and self.current.text else None
         return True
 
     def _history_pick(self) -> Review | None:
@@ -485,7 +488,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self.query_one(wid).display = wid == which
         focused = self.screen.focused
         if focused is None or focused is self or self in focused.ancestors:
-            self.call_after_refresh(self._focus_main)
+            self.call_after_refresh(self.focus_main)
 
     def _fill_queue(self, items: list[Review], exists: bool, has_table: bool) -> None:
         if not items:
@@ -668,20 +671,20 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         starting = self._bot_starting if starting is None else starting
         logged_out = self._bot_logged_out if logged_out is None else logged_out
         if self.app.paths.dry_run:
-            return f"#{r.msg_id} approved: recorded only (dry run, nothing is sent) (u undoes)"
+            return f"#{r.msg_id} approved: recorded only (dry run, nothing is sent) ({self._undo_key()} undoes)"
         if logged_out and not up and not starting:
             # the Dashboard's words for a log-out
             return (f"#{r.msg_id} approved. Not logged in to Telegram: it will be sent once you run "
-                    "telenotify login and start the bot (u undoes)")
+                    f"telenotify login and start the bot ({self._undo_key()} undoes)")
         if starting and not up:
             return (f"#{r.msg_id} approved. The bot is starting: it will be sent once it has caught up "
-                    "(u undoes)")
+                    f"({self._undo_key()} undoes)")
         if not up:
-            return f"#{r.msg_id} approved. The bot isn't running: it will be sent when the bot starts (u undoes)"
+            return f"#{r.msg_id} approved. The bot isn't running: it will be sent when the bot starts ({self._undo_key()} undoes)"
         left = (send_after or 0) - int(time.time() if now is None else now)
         if left > 0:
-            return f"#{r.msg_id} approved: sent to the channel in {left} s (u undoes)"
-        return f"#{r.msg_id} approved: the bot sends it within seconds (u undoes until it starts)"
+            return f"#{r.msg_id} approved: sent to the channel in {left} s ({self._undo_key()} undoes)"
+        return f"#{r.msg_id} approved: the bot sends it within seconds ({self._undo_key()} undoes until it starts)"
 
     @staticmethod
     def _back_in_queue(decided: Review, now: Review) -> str:
@@ -781,6 +784,9 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
 
     def on_key(self, event: events.Key) -> None:
         self._user_acted()
+        if not self.app.letter_keys and len(event.key) == 1 and event.key.isalpha():
+            self._press_at = None   # the letter keys are off (#140): s / k / d / u do nothing, so say nothing
+            return
         # a key carries the time it was pressed; a slow machine may handle it much later
         if event.key in ("s", "k", "d") and self.current is not None:
             self._press_at = event.time   # a footer click's key carries the click's time (app.simulate_key)
@@ -790,7 +796,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._press_at = event.time
             r = self._history_pick()
             if self._undo_settling and r is not None:
-                self._action_note = (f"#{r.msg_id} has only just come under the cursor: check it, then press u",
+                self._action_note = (f"#{r.msg_id} has only just come under the cursor: check it, then press {self._undo_key()}",
                                      "warn")
                 self._refresh_note()
         else:
@@ -803,6 +809,22 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._action_note = None
             self._refresh_note()
         self._reserve_note(self._watching_last())
+
+    def show_key_hints(self) -> None:
+        """The letter keys were turned on or off: the notes' key names follow (run 9)."""
+        old, new = ("Undo", "u") if self.app.letter_keys else ("u", "Undo")
+
+        def swap(text: str) -> str:
+            return text.replace(f"({old} undoes", f"({new} undoes").replace(f"then press {old}", f"then press {new}")
+        self._decided_note = swap(self._decided_note)
+        if self._action_note is not None:
+            self._action_note = (swap(self._action_note[0]), self._action_note[1])
+        if self.is_mounted:
+            self._refresh_note()
+
+    def _undo_key(self) -> str:
+        """How the notes name undo: `u`, or the Undo button while the letter keys are off (#140)."""
+        return "u" if self.app.letter_keys else "Undo"
 
     def _too_early(self, r: Review) -> None:
         before = f"{self._decided_note}  ·  " if self._decided_note else ""
@@ -852,7 +874,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
                 self._decided_note = self._approved_note(r, now.send_after if now else None)
             else:
                 msg = "kept as a match, not sent" if status == "kept" else "discarded"
-                self._decided_note = f"#{r.msg_id} {msg} (u undoes)"
+                self._decided_note = f"#{r.msg_id} {msg} ({self._undo_key()} undoes)"
             self._decided_style = "good"
             self._say(self._decided_note, "good")
         self._reserve_note(self._watching_last())
@@ -874,7 +896,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         r, status = target
         if self._history_mode and self._made() - self._hist_shown_at < self.DECIDE_DELAY:
             # a double tap, a held key or a double click: the row only just came under the cursor
-            self._action_note = (f"#{r.msg_id} has only just come under the cursor: check it, then press u", "warn")
+            self._action_note = (f"#{r.msg_id} has only just come under the cursor: check it, then press {self._undo_key()}", "warn")
             self._refresh_note()
             return
         try:
@@ -915,6 +937,13 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
             self._await_pick = False
             ol.highlighted = ids.index(r.id)
             self._sync_detail()
+
+    def action_copy_post(self) -> None:
+        """Copy the open post's text, as stored (reading order, not the order it is drawn in)."""
+        r = self.current
+        if r is None or not r.text:
+            return
+        copy_post(self.app, r.text)
 
     def action_send(self) -> None:
         self._decide("to_send")
@@ -983,7 +1012,7 @@ class ReviewPane(Vertical, can_focus=True):  # focusable so the keys work even w
         self._history_mode = not self._history_mode
         self.note("")
         self.reload()
-        self.call_after_refresh(self._focus_main)
+        self.call_after_refresh(self.focus_main)
 
     @on(Button.Pressed)
     def _button(self, event: Button.Pressed) -> None:

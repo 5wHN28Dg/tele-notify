@@ -30,6 +30,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.color import Color, ColorParseError
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import (
@@ -38,18 +39,21 @@ from textual.widgets import (
     DataTable,
     Input,
     Label,
+    OptionList,
     Select,
     Static,
     TabbedContent,
     Tabs,
 )
 from textual.widgets.data_table import CellDoesNotExist
+from textual.widgets.option_list import Option
 
 from .. import bot
 from ..clean import clean
 from ..postview import PostView
 from ..rtl import Block, visual
 from ..store import BUSY_NOTE, Alert, ChatStats, Judged, Store, is_busy, unreadable_note
+from ..tones import tone
 from . import dashboard_data as dd
 from . import search_data
 from .armed import Armed
@@ -352,6 +356,79 @@ class ConfirmScreen(Armed, ModalScreen[bool]):
         self._answer(event.button.id == "confirm-yes")
 
 
+class ServiceMenu(ModalScreen["str | None"]):
+    """The service's actions, one key away (#83, the owner's option C): Start, Stop, Restart in a
+    list. The arrows move, enter or a click picks (the pane then asks first, as the buttons do),
+    escape closes with nothing done. While an action runs, the items are off and a line says why."""
+
+    ACTIONS = (("start", "Start"), ("stop", "Stop"), ("restart", "Restart"))
+
+    DEFAULT_CSS = """
+    /* at the top, just under the tab bar, so no row of it can lie over the confirm's buttons, which
+       open centred where the menu was: a double or triple click on a row can't fall through onto
+       the action button (PR #137 review run 7); the confirm is at least 10 rows, centred, so its
+       buttons start on row 12 or lower at 24 rows, and this menu ends by row 9 */
+    ServiceMenu { align: center top; }
+    ServiceMenu > Vertical { margin-top: 3; }
+    ServiceMenu > Vertical {
+        width: 40; height: auto;
+        border: round $foreground; background: $surface; color: $foreground;
+        border-title-color: $foreground; border-subtitle-color: $foreground;
+    }
+    ServiceMenu #service-why { width: 100%; height: auto; padding: 0 1; }
+    ServiceMenu #service-why.-idle { display: none; }
+    ServiceMenu OptionList, ServiceMenu OptionList:focus {
+        border: none; padding: 0 1; background: $surface; background-tint: $foreground 0%;
+    }
+    /* the highlighted row in the theme's text pair, reversed (Textual's block cursor is 3.78:1 in
+       textual-dark), focused or not, so the choice shows in both themes and NO_COLOR */
+    ServiceMenu OptionList > .option-list--option-highlighted,
+    ServiceMenu OptionList:focus > .option-list--option-highlighted {
+        background: $foreground; color: $background; text-style: bold;
+    }
+    """
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "close", "Close")]
+
+    def __init__(self, name: str, busy: str | None = None):
+        super().__init__()
+        self.service, self.busy = name, busy
+
+    def compose(self) -> ComposeResult:
+        box = Vertical()
+        box.border_title = f"Service: {self.service}"
+        box.border_subtitle = "↑↓ move · enter pick · esc close"
+        with box:
+            yield Static("", id="service-why")
+            yield OptionList(*(Option(f" {label} ", id=action) for action, label in self.ACTIONS),
+                             id="service-actions")
+
+    def on_mount(self) -> None:
+        self.set_busy(self.busy)
+        self.query_one(OptionList).focus()
+
+    def set_busy(self, busy: str | None) -> None:
+        """`busy` names the action running (its items are off meanwhile), or None: all on again."""
+        self.busy = busy
+        menu = self.query_one(OptionList)
+        for action, _label in self.ACTIONS:
+            (menu.disable_option if busy else menu.enable_option)(action)
+        why = self.query_one("#service-why", Static)
+        why.set_class(not busy, "-idle")
+        doing = {"start": "Starting", "stop": "Stopping", "restart": "Restarting"}.get(busy or "", busy)
+        why.update(f"{doing} {self.service}: these are off until it's done." if busy else "")
+        # no row looks picked while none can be; the first again once they're on
+        menu.highlighted = None if busy else (menu.highlighted or 0)
+
+    @on(OptionList.OptionSelected)
+    def _picked(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if not self.busy:
+            self.dismiss(event.option.id)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class RangeScreen(ModalScreen["tuple[date, date] | None"]):
     """Ask for a custom period: from / to as YYYY-MM-DD, both days included.
     Enter in "from" moves to "to"; Enter in "to" (or Show) checks and closes;
@@ -469,6 +546,10 @@ class DashboardPane(Vertical):
         Binding("p", "pick_period", "Period"),
         Binding("d", "custom_range", "Dates"),
         Binding("v", "flip_top", "Flip"),
+        # one key opens the service's actions (#83, the owner's option C); each then asks first, as
+        # the buttons do. Named under the Bot box and in the keys panel, not in the footer (at 80
+        # columns it would push the tab keys off it). On this pane only: Review's `s` is Send
+        Binding("s", "service_menu", "Service", show=False),
     ]
 
     def __init__(self) -> None:
@@ -480,7 +561,7 @@ class DashboardPane(Vertical):
         self._counted: tuple[dd.PeriodChoice, float, dd.PeriodStats, float] | None = None
         self._sort: tuple[str, bool] = ("total", True)
         self._chat_names: dict[str, str] = {}   # chat name as drawn -> as read, for sorting
-        self._busy = False
+        self._busy: str | None = None   # the service action running, if one is
         self._reading = False
         self._read_again = False   # asked for a fresh read while one was running
         self._feed: dict[str, Judged] = {}
@@ -539,6 +620,7 @@ class DashboardPane(Vertical):
         self.query_one("#dash-activity").border_title = "Activity"
         bot_box = self.query_one("#dash-bot")
         bot_box.border_title = "Bot"
+        self.show_key_hints()
         self.query_one("#svc-name", Static).update(bot.SERVICES[self.mode])
         # the chart is drawn in the theme's colours (#102): draw it again when the theme changes
         self.app.theme_changed_signal.subscribe(self, self._theme_changed)
@@ -546,6 +628,8 @@ class DashboardPane(Vertical):
     def _theme_changed(self, _theme) -> None:
         if self.snapshot is not None:
             self._show_activity(self.snapshot)
+            self._show_alerts(self.snapshot)   # the health table's status colour too
+        self._show_status()   # its error and warning colours come from the theme too (#139)
 
     def on_resize(self, event: events.Resize) -> None:
         # NARROW and SHORT are the window's size, as the README says (this pane is 2 columns
@@ -562,9 +646,26 @@ class DashboardPane(Vertical):
         self.call_after_refresh(self._show_status)
 
     def _top_titles(self) -> None:
-        hint = "v: activity" if self.has_class("-narrow") else ""
-        self.query_one("#dash-bot").border_subtitle = hint
-        self.query_one("#dash-activity").border_title = "Activity" + ("  (v: bot)" if self.has_class("-narrow") else "")
+        narrow = self.has_class("-narrow")
+        if self.app.letter_keys:
+            keys = "s service"   # the service's actions (#83)
+            self.query_one("#dash-bot").border_subtitle = keys + ("  ·  v: activity" if narrow else "")
+            self.query_one("#dash-activity").border_title = "Activity" + ("  (v: bot)" if narrow else "")
+        else:   # the letter keys are off (#140): their actions are in the command palette
+            self.query_one("#dash-bot").border_subtitle = "ctrl+p: Service" + (", Flip" if narrow else "")
+            self.query_one("#dash-activity").border_title = "Activity" + ("  (ctrl+p: Flip)" if narrow else "")
+
+    NAV: ClassVar[dict[str, str]] = {"feed": "Live feed", "chats": "Chats", "alerts": "Alerts & health"}
+
+    def show_key_hints(self) -> None:
+        """The keys named in this tab: the letter ones only while they work (#140)."""
+        for view, label in self.NAV.items():
+            # Content, not markup: as markup, "[f]" was taken for a style and never drawn
+            self.query_one(f"#nav-{view}", Button).label = Content(label + self.app.key_hint(f" [{view[0]}]"))
+        self._top_titles()
+        self._show_status()
+        if self.snapshot is not None:
+            self._show_activity(self.snapshot)   # the Chats view's line names p and d
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "flip_top":
@@ -604,7 +705,11 @@ class DashboardPane(Vertical):
         return (box.id == "dash-activity") == self.has_class("-show-activity")
 
     def on_show(self) -> None:
-        # Focus the feed when the tab is shown, so f / c / a and the arrow keys work at once.
+        self.focus_main()
+
+    def focus_main(self) -> None:
+        """Focus the feed when the tab is shown (or its key pressed again), so f / c / a and
+        the arrow keys work at once; focus already in this tab stays where it is."""
         focused = self.screen.focused
         if focused is None or self not in focused.ancestors:
             self.query_one("#feed", DataTable).focus()
@@ -718,7 +823,7 @@ class DashboardPane(Vertical):
 
         def svc(mode: str) -> tuple[str, str]:
             st = self.services.get(mode, "…")
-            style = "green" if st == "active" else "red" if st == "failed" else "dim"
+            style = "green" if st == "active" else tone(self.app, "error") if st == "failed" else "dim"
             if st == "unknown":
                 st = "unknown (no systemctl?)" if all(v == "unknown" for v in self.services.values()) else st
             return st, style
@@ -750,7 +855,8 @@ class DashboardPane(Vertical):
         elif snap.busy:
             out.append(BUSY_NOTE, style="bold")   # words, theme colours: readable in both themes
         elif snap.error:
-            out.append(unreadable_note(bot.SERVICES[self.mode]), style="red")   # words, not the exception (#98)
+            # words, not the exception (#98), in a colour readable in both themes and NO_COLOR (#139)
+            out.append(unreadable_note(bot.SERVICES[self.mode]), style=tone(self.app, "error"))
         elif not snap.exists:
             out.append(f"No state file yet ({clean(self.paths.state.name)}).\n", style="dim")
             out.append("Start the bot in this mode to see it here.", style="dim")
@@ -762,7 +868,7 @@ class DashboardPane(Vertical):
             elif now - snap.last_alive < ALIVE_SECONDS:
                 alive = (f"alive (seen {fmt_age(now - snap.last_alive)} ago)", "green")
             else:
-                alive = (f"not seen for {fmt_age(now - snap.last_alive)}", "red")
+                alive = (f"not seen for {fmt_age(now - snap.last_alive)}", tone(self.app, "error"))
             row("Mode", (mode, "bold"), ("  ·  ", "dim"), alive)
             stale = snap.last_alive is None or now - snap.last_alive >= ALIVE_SECONDS
             if stale:
@@ -770,20 +876,20 @@ class DashboardPane(Vertical):
                 conn, conn_style = "not running", "dim"
             else:
                 conn = snap.connection or "unknown"
-                conn_style = "green" if conn == "ready" else "dim" if conn == "unknown" else "yellow"
+                conn_style = "green" if conn == "ready" else "dim" if conn == "unknown" else tone(self.app, "warning")
             up = []
             if snap.started_at and not stale:
                 up = [("  ·  ", "dim"), (f"up {fmt_age(now - snap.started_at)}", "")]
             if not snap.login_needed:   # the first line already says it: keep the box short enough for the buttons
                 row("Telegram", (conn, conn_style), *up)
             if snap.pending:
-                row("Review", (f"{snap.pending} pending", "bold yellow"), ("  press 2 to review", "dim"))
+                row("Review", (f"{snap.pending} pending", f"bold {tone(self.app, 'warning')}"), ("  press 2 to review", "dim"))
             else:
                 row("Review", ("nothing pending", "dim"))
             if snap.alerts:
                 a = snap.alerts[0]
                 row("Alerts", (f"{len(snap.alerts)}", ""),
-                    (f"  last {fmt_age(now - a.at)} ago, press a", "dim"))
+                    (f"  last {fmt_age(now - a.at)} ago{self.app.key_hint(', press a')}", "dim"))
         out.rstrip()
         return out
 
@@ -802,7 +908,8 @@ class DashboardPane(Vertical):
         by = {"day": "by day", "week": "by week", "month": "by month", "year": "by year"}[ps.bucket]
         box.border_subtitle = f"{ps.period.describe()} · {by}"
         whole = "   whole days, today included" if ps.period.kind in ("7d", "30d") else ""
-        note.update(Text(f"{ps.period.describe()}{whole}   (p: change the period, d: pick dates)", style="dim"))
+        keys = "p: change the period, d: pick dates" if self.app.letter_keys else "ctrl+p: Period, Dates"
+        note.update(Text(f"{ps.period.describe()}{whole}   ({keys})", style="dim"))
         tot = ps.totals
         t = Text()
         m = SERIES_MARK
@@ -980,13 +1087,13 @@ class DashboardPane(Vertical):
         health = self.query_one("#health", DataTable)
         health.clear()
         for p in snap.problems:
-            style = "dim" if p.status == "silent" else "red"
+            style = "dim" if p.status == "silent" else tone(self.app, "error")
             health.add_row(Text(visual(p.title)), Text(visual(p.status), style=style), Text(visual(p.detail)))
         self._problems_shown = len(snap.problems)
         bits = []
         if snap.problems:
             bits.append(f"{len(snap.problems)} chat(s) need a look")
-        note.update(Text("  ".join(bits), style="yellow") if bits else "")
+        note.update(Content.styled("  ".join(bits), "$tn-warning") if bits else "")   # readable in NO_COLOR (#139)
 
     # ---------------------------------------------------------- views
 
@@ -1007,9 +1114,23 @@ class DashboardPane(Vertical):
     @on(Button.Pressed, "#svc-buttons Button")
     def _service_button(self, event: Button.Pressed) -> None:
         event.stop()
+        self.action_service(str(event.button.id).removeprefix("svc-"))
+
+    def action_service_menu(self) -> None:
+        """`s`: the service's actions in a menu; the one picked asks first, as its button does."""
+        self._show_top("bot")   # a narrow window shows the Bot box, where the answer appears
+
+        def picked(action: str | None) -> None:
+            if action:
+                self.action_service(action)
+
+        self.app.push_screen(ServiceMenu(bot.SERVICES[self.mode], self._busy), picked)
+
+    def action_service(self, action: str) -> None:
+        """Start, stop or restart this mode's service (a button, or picked in the `s` menu), after asking."""
         if self._busy:
             return
-        action = str(event.button.id).removeprefix("svc-")
+        self._show_top("bot")   # a narrow window shows the Bot box, where the answer appears
         name = bot.SERVICES[self.mode]
 
         def answered(yes: bool | None) -> None:
@@ -1036,21 +1157,26 @@ class DashboardPane(Vertical):
     async def _run_service(self, action: str) -> None:
         result = self.query_one("#svc-result", Static)
         name = bot.SERVICES[self.mode]
-        self._busy = True
+        self._busy = action
         for b in self.query("#svc-buttons Button"):
             b.disabled = True
+        self.refresh_bindings()
         result.update(Text(f"{action} {name}…", style="dim"))
         try:
             ok, msg = await bot.service_action(self.mode, action)
         except (OSError, ValueError) as e:
             ok, msg = False, str(e)
         finally:
-            self._busy = False
+            self._busy = None
             for b in self.query("#svc-buttons Button"):
                 b.disabled = False
+            self.refresh_bindings()
+            for screen in self.app.screen_stack:   # a menu opened meanwhile: its items on again
+                if isinstance(screen, ServiceMenu):
+                    screen.set_busy(None)
         if ok:
-            result.update(Text(f"{action} {name}: done", style="green"))
-        else:
-            result.update(Text(f"{action} {name} failed: {msg or 'no reason given'}", style="red"))
+            result.update(Content.styled(f"{action} {name}: done", "$tn-success"))
+        else:   # Content with the theme's variable: right again after a theme change (#139)
+            result.update(Content.styled(f"{action} {name} failed: {msg or 'no reason given'}", "$tn-error"))
         self._load_services()
         self._request_state()

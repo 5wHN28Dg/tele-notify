@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 DUPLICATE_FIX = " (press D or \"Remove duplicates\" to keep one of each)"
+DUPLICATE_FIX_NO_KEY = " (press \"Remove duplicates\" to keep one of each)"   # the letter keys off (#140)
 
 MISSING: Any = object()   # "key not in the file" (the bot then uses its default)
 
@@ -145,11 +146,14 @@ def load(path: Path) -> dict:
 
 
 def secret_status(cfg: dict) -> dict[str, str]:
-    """'set' or 'missing' for api_id / api_hash. The values themselves are never shown."""
+    """'set' or 'missing' for api_id / api_hash, as the bot reads them (config.nim: api_id with
+    getInt(0), api_hash with getStr("")): an api_id that isn't a whole number, or an api_hash that
+    isn't a string, is missing. The values themselves are never shown."""
     out = {}
     for k in SECRET_KEYS:
         v = cfg.get(k)
-        ok = bool(v) and not isinstance(v, bool) and (k != "api_id" or isinstance(v, int))
+        kind = int if k == "api_id" else str
+        ok = bool(v) and not isinstance(v, bool) and isinstance(v, kind)
         out[k] = "set" if ok else "missing"
     return out
 

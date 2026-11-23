@@ -1,6 +1,7 @@
 """Settings screen: edit config.json without hand-editing JSON.
 
-Five sections (keyword lists, places, other filters, chats, the bot itself).
+Five sections (keyword lists, places, other filters, chats, the bot itself), and Screen: the
+screen's own settings (letter keys, #140), kept beside config.json rather than in it.
 Edits stay in memory until ctrl+s; saving backs the file up, replays only
 the changed keys on top of the file as it is on disk (unknown keys,
 secrets and key order are kept) and writes it atomically. `t` runs the
@@ -22,6 +23,7 @@ from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -37,10 +39,11 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from .. import bot
+from .. import bot, prefs
 from ..clean import clean
 from ..rtl import visual
 from ..store import BUSY, is_busy, unreadable_note
+from ..tones import tone
 from . import settings_data as sd
 from .armed import Armed
 
@@ -144,29 +147,34 @@ class EvalModal(ModalScreen[None]):
             yield Button("Close (esc)", id="close")
 
     def on_mount(self) -> None:
+        self.query_one(DataTable).add_columns("label", *sd.VERDICTS)
+        self._draw()
+        # worse / better and a failed test are in the theme's colours: draw them again when it changes
+        self.app.theme_changed_signal.subscribe(self, lambda _theme: self._draw())
+
+    def _draw(self) -> None:
         t = self.query_one(DataTable)
-        t.add_columns("label", *sd.VERDICTS)
+        t.clear()
         if not self.before.error and not self.after.error:
             for row in sd.compare_eval(self.before, self.after):
                 t.add_row(row[0].label, *[self._cell(c) for c in row], key=row[0].label)
         self.query_one("#eval-summary", Static).update(self.summary())
 
-    @staticmethod
-    def _cell(c: sd.EvalCell) -> Text:
+    def _cell(self, c: sd.EvalCell) -> Text:
         s = f"{c.before} -> {c.after}" if c.before != c.after else str(c.after)
-        style = {"worse": "bold red", "better": "bold green"}.get(c.mood, "")
+        style = {"worse": f"bold {tone(self.app, 'error')}", "better": f"bold {tone(self.app, 'success')}"}.get(c.mood, "")
         return Text(s + (" !" if c.mood == "worse" else ""), style=style)
 
     def summary(self) -> Text:
         out = Text()
         for name, r in (("saved config", self.before), ("your edits", self.after)):
             if r.error:
-                out.append(f"{name}: the test failed: {clean(r.error)}\n", style="bold red")
+                out.append(f"{name}: the test failed: {clean(r.error)}\n", style=f"bold {tone(self.app, 'error')}")
         if self.before.error or self.after.error:
             return out
 
         def line(what: str, b: int, a: int) -> None:
-            style = "bold red" if a > b else ("bold green" if a < b else "")
+            style = f"bold {tone(self.app, 'error')}" if a > b else (f"bold {tone(self.app, 'success')}" if a < b else "")
             word = " (worse)" if a > b else (" (better)" if a < b else " (same)")
             out.append(f"{what}: {b} -> {a}{word}\n", style=style)
 
@@ -230,6 +238,11 @@ class EditorButton(Button, can_focus=False):
 
 
 KEYS_HINT = "click picks · enter / double click: edit · del / x: delete · a: add"
+KEYS_HINT_NO_LETTERS = "click picks · enter / double click: edit · del: delete"   # letter keys off (#140)
+LETTER_KEYS_HELP = ("Single-letter shortcuts, such as s, p and y. Off: only the ctrl keys, the number keys, "
+                    "esc, enter, space, the arrows and the dialogs' y / n work, and each letter key's action "
+                    "is in the command palette (ctrl+p). The screen's own setting: it applies at once and is "
+                    "kept in screen.json beside config.json, not saved with ctrl+s.")
 
 
 class KeywordEditor(Vertical):
@@ -476,6 +489,15 @@ class ChatTable(DataTable):
 # ------------------------------------------------------------------ pane
 
 LIST_SECTIONS = ("roles", "places", "filters")
+STATUS_ROOM = 50   # columns the status bar has at 80 x 24: the section name is added only if the line still fits
+
+
+class ProblemsScroll(VerticalScroll):
+    """A section's problems: sized to them, scrolled (with its scrollbar) past max-height. It takes the
+    focus only when there is something to scroll, so the keys can reach the hidden lines."""
+
+    def allow_focus(self) -> bool:
+        return self.max_scroll_y > 0
 CHATS_TIMEOUT = 0.25   # seconds the chat-list read waits for the bot's lock (on the UI thread)
 
 
@@ -491,7 +513,16 @@ class SettingsPane(Vertical):
     SettingsPane #sections TabPane { padding: 0; }
     SettingsPane .lists { height: 1fr; }
     SettingsPane .picker { width: 34; height: 1fr; }
-    SettingsPane .problems { height: auto; max-height: 5; }
+    /* the problems under each section: whole when they fit, else a scrollbar shows (never cut silently) */
+    SettingsPane .problems { height: auto; max-height: 8; }
+    SettingsPane .problems > Static { height: auto; }
+    /* a scrolled area with the focus (the problems list, the Bot form) shows a bar at its left edge
+       in the text colour: 12:1 or more on the background in both themes and NO_COLOR (A23) */
+    /* the highlighted row of a focused list in the theme's text pair, reversed: Textual's block cursor
+       is 3.78:1 in textual-dark, and the pickers' " !" is drawn in the row's own colour (PR #137 run 5) */
+    SettingsPane OptionList:focus > .option-list--option-highlighted { background: $foreground; color: $background; }
+    SettingsPane VerticalScroll { border-left: blank; }
+    SettingsPane VerticalScroll:focus { border-left: outer $foreground; }
     SettingsPane .form-row { height: auto; min-height: 1; margin-top: 1; }
     SettingsPane .form-row Label { width: 22; }
     SettingsPane .form-row Input { width: 1fr; }
@@ -560,7 +591,15 @@ class SettingsPane(Vertical):
                             for k in keys:
                                 yield from self._form_row(k)
                             yield Static(id="secrets", classes="form-row")
-                    yield Static(id=f"problems-{sec}", classes="problems")
+                    with ProblemsScroll(classes="problems"):
+                        yield Static(id=f"problems-{sec}")
+            # this screen's own settings, not config.json's (#140)
+            with TabPane("Screen", id="sec-screen"), VerticalScroll():
+                with Horizontal(classes="form-row"):
+                    yield Label("letter keys")
+                    yield Checkbox("on", value=True, id="screen-letter-keys")
+                    yield Static(LETTER_KEYS_HELP, id="help-letter-keys", classes="help muted")
+                yield Static("", id="screen-note", classes="form-row")
 
     def _form_row(self, key: str) -> ComposeResult:
         with Horizontal(classes="form-row"):
@@ -592,8 +631,15 @@ class SettingsPane(Vertical):
         t.add_column("kind", key="kind")
         t.add_column("status", key="status")
         t.add_column("id", key="id")
+        self.show_key_hints()
         # config.json only: the chat list is read when the tab is shown (it may be locked)
         self.call_after_refresh(self.load, chats=False)
+        # the chat table's status is drawn in the theme's error colour: draw it again when it changes
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
+
+    def _theme_changed(self, _theme) -> None:
+        if self.original is not None:
+            self.refresh_chats()
 
     # ------------------------------------------------------- data in/out
 
@@ -734,34 +780,65 @@ class SettingsPane(Vertical):
     def update_status(self) -> None:
         if self.original is None:
             self.query_one("#settings-status", Static).update(
-                Text(f"config.json can't be used: {clean(self.load_error)}", style="bold red"))
+                Content.styled(f"config.json can't be used: {clean(self.load_error)}", "bold $tn-error"))
             return
         n = len(sd.changed_keys(self.original, self.edited))
         errs = len(sd.errors(self.problems))
         warns = len(self.problems) - errs
-        sec = sd.secret_status(self.original)
-        t = Text()
-        t.append(f"{n} unsaved change{'s' if n != 1 else ''}" if n else "saved",
-                 style="bold yellow" if n else "green")
-        if errs:
-            t.append(f" · {errs} problem{'s' if errs != 1 else ''} to fix", style="bold red")
+        parts: list[tuple[str, str]] = [
+            (f"{n} unsaved change{'s' if n != 1 else ''}" if n else "saved", "bold $tn-warning" if n else "")]
+        # counts only, so the line is whole in the 50 columns the bar has at 80 x 24 (#58); what the
+        # problems are is listed in their section, whose tab is marked "!". Missing API keys stop the bot
+        # logging in: a problem too, listed under Bot, so "no problems" is never said beside them
+        total = errs + (1 if self.missing_keys() else 0)
+        if total:
+            parts.append((f" · {total} problem{'s' if total != 1 else ''}", "bold $tn-error"))
         if warns:
-            t.append(f" · {warns} warning{'s' if warns != 1 else ''}", style="yellow")
-        t.append(f" · api_id {sec['api_id']} · api_hash {sec['api_hash']}", style="dim")
-        self.query_one("#settings-status", Static).update(t)
+            parts.append((f" · {warns} warning{'s' if warns != 1 else ''}", "$tn-warning"))
+        if not total and not warns:   # said, not left out: the count is always in view
+            parts.append((" · no problems", ""))
+        where = self.problem_sections() if total else []
+        if len(where) == 1:   # where to look, when it fits: a first-time user starts on another tab
+            name = f" ({where[0]})"
+            if len(name) <= STATUS_ROOM - sum(len(t) for t, _ in parts):
+                parts[1] = (parts[1][0] + name, parts[1][1])   # after "N problem(s)"
+        self.query_one("#settings-status", Static).update(Content.assemble(*parts))
+
+    def problem_sections(self) -> list[str]:
+        """The titles of the sections with a problem (an error, or missing API keys under Bot)."""
+        bad = {p.key for p in self.problems if p.error}
+        return [title for sec, title, keys in sd.SECTIONS
+                if bad & set(keys) or (sec == "bot" and self.missing_keys())]
+
+    def missing_keys(self) -> str:
+        """"API keys", or the one of api_id / api_hash missing from the file as opened; "" if both are set."""
+        sec = sd.secret_status(self.original or {})
+        missing = [k for k, v in sec.items() if v == "missing"]
+        return "" if not missing else "API keys" if len(missing) == len(sec) else missing[0]
 
     def update_problems(self) -> None:
-        for sec, _title, keys in sd.SECTIONS:
+        for sec, title, keys in sd.SECTIONS:
             grouped: dict[tuple[bool, str], list[str]] = {}   # the same message for several lists: one line
             for p in self.problems:
                 if p.key in keys:
                     grouped.setdefault((p.error, p.message), []).append(p.key)
-            t = Text()
+            lines: list[Content] = []
+            missing = self.missing_keys() if sec == "bot" and self.original is not None else ""
+            if missing:   # counted in the status bar; not a save error: this screen never writes them
+                both = missing == "API keys"
+                what = "api_id and api_hash are" if both else f"{missing} is"
+                lines.append(Content.styled(f"problem: {what} missing from config.json, so the bot can't log in; "
+                                            f"add {'them' if both else 'it'} there (this screen never changes them)",
+                                            "$tn-error"))
             for (error, message), ks in sorted(grouped.items(), key=lambda x: not x[0][0]):
-                t.append(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}") + "\n",
-                         style="red" if error else "yellow")
-            t.rstrip()
-            self.query_one(f"#problems-{sec}", Static).update(t)
+                if not self.app.letter_keys:  # type: ignore[attr-defined]
+                    message = message.replace(sd.DUPLICATE_FIX, sd.DUPLICATE_FIX_NO_KEY)
+                lines.append(Content.styled(visual(("error: " if error else "warning: ") + f"{', '.join(ks)}: {message}"),
+                                            "$tn-error" if error else "$tn-warning"))
+            self.query_one(f"#problems-{sec}", Static).update(Content("\n").join(lines))
+            # the section's tab says it has problems (errors, missing keys) or warnings: " !" in words too
+            tab = self.query_one("#sections", TabbedContent).get_tab(f"sec-{sec}")
+            tab.label = title + (" !" if lines else "")
 
     def update_pickers(self) -> None:
         bad: dict[str, bool] = {}
@@ -777,7 +854,10 @@ class SettingsPane(Vertical):
                 label = Text(f"{'*' if key in changed else ' '}{key} ")
                 label.append(f"({n})", style="dim")
                 if key in bad:
-                    label.append(" !", style="bold red" if bad[key] else "yellow")
+                    # in the row's own text colour, bold: readable on the highlighted row too (its
+                    # background is the cursor's, not the one the tones are made for); the problems
+                    # list below says error or warning in words
+                    label.append(" !", style="bold")
                 picker.replace_option_prompt_at_index(i, label)
 
     def update_tab_label(self) -> None:
@@ -817,7 +897,7 @@ class SettingsPane(Vertical):
         keep = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
         table.clear()
         for r in rows:
-            status = Text(visual(r.status), style="red" if r.status not in ("ok", "") else "")
+            status = Text(visual(r.status), style=tone(self.app, "error") if r.status not in ("ok", "") else "")
             title = Text(visual(r.title), style="italic dim" if not r.known else "")
             table.add_row(Text("[x]" if r.watched else "[ ]", style="bold green" if r.watched else "dim"), Text("->", style="bold green") if r.target else "",
                           title, Text(visual(r.kind)), status, Text(str(r.id), style="dim"), key=str(r.id))
@@ -878,6 +958,34 @@ class SettingsPane(Vertical):
         else:
             v = text
         self._put(key, v)
+
+    @on(Checkbox.Changed, "#screen-letter-keys")
+    def _letter_keys(self, event: Checkbox.Changed) -> None:
+        event.stop()
+        event.checkbox.label = "on" if event.value else "off"
+        self.app.set_letter_keys(event.value)  # type: ignore[attr-defined]   # show_key_hints says if not kept
+
+    def show_key_hints(self) -> None:
+        """The keys named on this tab's buttons and lines: the letter ones only while they work (#140)."""
+        on = self.app.letter_keys  # type: ignore[attr-defined]
+        box = self.query_one("#screen-letter-keys", Checkbox)
+        with self.prevent(Checkbox.Changed):   # the palette's command turns them on or off too
+            box.value = on
+        box.label = "on" if on else "off"
+        note = self.query_one("#screen-note", Static)
+        if not self.app.letter_keys_work:  # type: ignore[attr-defined]
+            box.disabled = True
+            note.update(Content.styled(f"warning: {prefs.LETTER_KEYS_BROKEN}", "$tn-warning"))
+        else:   # however it was switched (here or the palette): say if it wasn't kept (run 9)
+            problem = self.app.letter_keys_problem  # type: ignore[attr-defined]
+            note.update(Content.styled(visual(f"warning: {problem}"), "$tn-warning") if problem else "")
+        self.query_one("#test", Button).label = "Test t" if on else "Test"
+        self.query_one("#dedupe", Button).label = "Remove duplicates D" if on else "Remove duplicates"
+        for editor in self.query(KeywordEditor):
+            editor.query_one("#kw-keys", Static).update(KEYS_HINT if on else KEYS_HINT_NO_LETTERS)
+            editor.query_one("#kw-add", Button).label = "Add (a)" if on else "Add"
+        if self.original is not None or self.load_error:
+            self.update_problems()
 
     @on(Checkbox.Changed)
     def _switch(self, event: Checkbox.Changed) -> None:
@@ -949,8 +1057,9 @@ class SettingsPane(Vertical):
         errs = sd.errors(sd.validate(self.edited))
         if errs:
             self.changed()
+            # the messages quote config.json's own values (not chat IDs: …): never read as markup (run 11)
             self.notify("Not saved: fix these first:\n" + "\n".join(f"{p.key}: {p.message}" for p in errs[:5]),
-                        severity="error", timeout=8)
+                        severity="error", timeout=8, markup=False)
             return
         if not self.dirty:
             self.notify("Nothing to save.")

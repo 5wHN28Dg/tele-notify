@@ -129,7 +129,7 @@ day.
   - Low vision: the terminal's own font size; checked as the cell grid a 200 % font gives on the typical screen
     (A4, about 80 × 24 on a 1920 × 1080 laptop).
   - Motor: keyboard only or mouse only (A18). Chords (`ctrl+s`, `ctrl+r`, `ctrl+q`) need an alternative (A22).
-    Copying a post needs a mouse drag today (A20, #78).
+    Copying a post: `y` in Review and Search, or a mouse drag (A20, #78).
   - Tremor: the review double-tap guard (`DECIDE_DELAY`) and the safe focus in dialogs (S2, #55).
   - One hand: every main-task key is a single key or has a button; chords are the gap (A22).
   - Cognitive: plain words (A24), one decision per dialog, nothing to remember (the footer shows the keys).
@@ -173,7 +173,7 @@ day.
   All truecolour.
 - **Sizes:** 80 × 24 smallest (80 × 23 inside `tmux` with its status line, also checked); 120 × 40 typical; 200 × 50 largest checked.
 - **Themes:** `textual-dark` (default) and `textual-light`, switched in Textual's command palette (`ctrl+p`), not
-  saved between runs (#73). The palette also offers 17 other themes that aren't supported (#81; the two ansi themes were removed in #116).
+  saved between runs (#73). The palette offers only these two (#81; the ansi themes were removed in #116, the other 17 in #81).
 - **Inputs:** the keyboard and the mouse are both first-class in the screen; the keyboard alone in the command line.
 - **Assistive technology:** the terminal's font size; GNOME's High Contrast and Large Text through the terminal;
   GNOME's Reduced Motion and animations off (Textual's own animations must follow them, A11; Textual has
@@ -191,7 +191,7 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 |---|---|---|---|---|
 | Matching jobs reach my channel on their own | owner, recipients | continuous | each match is forwarded once | ALERT1 latency below; ALERT2 score |
 | See whether the bot is fine | owner | daily | service state, connection, dry run or real, pending reviews and alerts read on the Dashboard | 0 actions (screen just opened); first useful screen within 2 s warm on the 1M-post state file |
-| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K 2 once keys exist (#83; today Tab presses, at most 6) |
+| Start, stop or restart the bot | owner | weekly | the service is in the asked state, and the screen says so | M 2 (Dashboard open); K 3 to 5 (`s` opens the Service menu, 0 to 2 arrows to Start, Stop or Restart, `enter`, then `y`; #83). Amended 2026-11-22: the owner picked the one-key menu (option C) over capital keys, in their words "I choose C for 137" |
 | Review an unsure post (sends to the public channel) | owner | daily | the post is sent, discarded or kept, labelled, with undo offered | K/M 1 per post (Review open, post read); from Dashboard +1 |
 | Undo a review decision | owner | weekly | any decision the bot hasn't acted on is back in the queue, its label removed | K/M 1 for the last one; K/M 3 for an older one from History (today only the last of this run, #76) |
 | Find why a post got its verdict | owner | weekly | the post's verdict and reasons are on screen | K: `3` + the words + 1; M: 1 + the words + 1 (Dashboard open) |
@@ -213,6 +213,7 @@ scripts, from the start state named in brackets, with each key, click and arrow 
 | Log in again after Telegram logs the account out (recovering access) | owner | rare | `telenotify login` works and the service restarts | the screen says what to run (#65); within 3 min |
 | Log out and uninstall (leaving) | owner, other installers | rare | the session, service, programs and data are gone, or kept where the README says | not documented yet (#72) |
 | Change the Arabic display mode or the theme (the accessibility settings) | owner | rare | the mode is in effect | 1 flag or variable for Arabic; theme through the command palette, not saved (#73) |
+| Turn the letter keys off or on (#140; the single-letter shortcuts, WCAG 2.1.4) | owner | rare | the letter keys do nothing and aren't named (or work again); the header says "letter keys off (ctrl+p)" while off; kept for next time in `screen.json` | K 2 + typing (`ctrl+p`, "letter", `enter`), from any tab; M 3 (`4` or a click on Settings, the Screen tab, the switch) |
 
 First run budget: 3 screens before the first main task (default).
 
@@ -234,6 +235,8 @@ table adds the intent order and the rest of the product. One row per layout; gro
 | Settings tab, Chats (chat table) | watch, unwatch, pick the target | as the tab table | Save | `ctrl+s` / click Save | 1 the chat table with watched marks; 2 the target chat; 3 saved or unsaved |
 | Settings tab, Chats (chat-ID editor, before the bot has saved a chat list) | type chat IDs and the target | the ID list, the target field, Save | Save | `ctrl+s` / click Save | 1 why it's IDs; 2 the fields; 3 saved or unsaved |
 | Settings tab, Bot | dry run, alerts, paths | the options and the saved marker | Save | `ctrl+s` / click Save | 1 the options; 2 saved or unsaved |
+| Settings tab, Screen (#140) | the screen's own settings: turn the single-letter shortcuts off or on | the "letter keys" switch with on / off in words, its help, and a note if it can't be kept or can't act | the switch (applies at once, not with Save) | `space` or `enter` on the switch / click it; also `ctrl+p` "Letter keys: turn off / on" anywhere | 1 the switch and its state; 2 what stays working; 3 where it is kept |
+| Dashboard Service menu (`ServiceMenu`, `s`) | pick start, stop or restart | the title with the service, the three items, the keys line; why they're off while one runs | the picked item opens the confirm | arrows + `enter` / click; `esc` closes | 1 the service; 2 the items; 3 why off |
 | Dashboard confirm dialog (`ConfirmScreen`: start, stop, restart the service) | a decision now | the question, the service and mode, both buttons | the safe choice has focus | `esc` / `n` cancels | 1 the question; 2 the consequence; 3 the buttons |
 | Settings confirm dialogs (`ConfirmModal`: revert unsaved changes; use the file's value after an outside change; save and restart; quit with unsaved changes) | a decision now | the question, the object, both buttons | the safe choice has focus | `esc` / `n` cancels | 1 the question; 2 the consequence; 3 the buttons |
 | Dates form (`RangeScreen`, custom period) | type a range | both fields, the error, the buttons | Show | enter / click | 1 the fields; 2 the error; 3 the buttons |
@@ -346,7 +349,7 @@ The platform's: Textual's widgets, its `textual-dark` and `textual-light` themes
 
 Not N/A, so they apply: L1 and L6 for messages, since the summary posted in the channel when forwarding is blocked
 (#80, `"forward_fallback": "summary"`) is in Arabic (labels and phrases; values as written), so a fluent speaker's
-reading of it is an owner-check item (below); A20 (copying needs a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
+reading of it is an owner-check item (below); A20 (copying: `y`, or a drag, #78), O1 to O4 (alerts reach the phone through Telegram; the
 Dashboard's alert count, #79), A3 and A4 (met through the terminal's font, checked as above), A12 (see Users), A19 (pointer
 targets: terminal cells, and a destructive button spaced from others; Delete sits beside Edit and Add, and Discard
 beside Send: checked in the first full audit, #87), A22, T2 and T4 (a Telegram session; the bot

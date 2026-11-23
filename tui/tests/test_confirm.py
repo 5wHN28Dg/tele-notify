@@ -153,7 +153,7 @@ async def test_a_too_early_press_says_why_nothing_happened(paths, cfg_path, monk
         await pilot.pause()
         await pilot.press("y")
         await pilot.pause()
-        assert "Too quick" in str(app.screen.query_one("#confirm-wait").render())
+        assert "Ignored, too soon" in str(app.screen.query_one("#confirm-wait").render())
 
 
 @pytest.mark.parametrize("theme", ["textual-dark", "textual-light"])
@@ -307,7 +307,7 @@ async def test_after_the_delay_a_press_confirms(paths, fake_systemctl, monkeypat
         await _armed(pilot, screen)                            # drawn: the delay is set
         app.post_message(_key("y", "y", screen._armed_at - 0.1))   # made too early: says so
         await pilot.pause()
-        assert "Too quick" in str(screen.query_one("#confirm-wait").render())
+        assert "Ignored, too soon" in str(screen.query_one("#confirm-wait").render())
         while time.monotonic() < screen._armed_at + 0.05:
             await pilot.pause(0.05)
         now = time.monotonic()
@@ -419,7 +419,7 @@ async def test_a_click_right_after_a_refused_one_isnt_swallowed(paths, fake_syst
         app.post_message(_up(yes, just_early))
         await pilot.pause()                                     # at once: Textual's own press effect ends in 0.2 s
         assert isinstance(app.screen, ConfirmScreen)
-        assert "Too quick" in str(screen.query_one("#confirm-wait").render())   # it was refused
+        assert "Ignored, too soon" in str(screen.query_one("#confirm-wait").render())   # it was refused
         assert not yes.has_class("-active")   # not left looking pressed (Textual would ignore the next press)
         while time.monotonic() < screen._armed_at + 0.05:      # well within the (lengthened) press effect
             await pilot.pause(0.02)

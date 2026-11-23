@@ -10,6 +10,7 @@ current settings what they would say now.
   check`, links not followed); `J` follows links too and shows the text the
   filter read. Then and now are shown side by side.
 * `p` opens a box to paste any post and judge it, for trying things out.
+* `y` copies the selected post's text.
 
 Searching never blocks the screen: the state file is read in a thread
 ("searching…" shows meanwhile), a newer search replaces one still running,
@@ -28,13 +29,14 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import get_current_worker
 
 from .. import bot
 from ..clean import clean
-from ..postview import PostView
+from ..postview import PostView, copy_post
 from ..rtl import Block, visual
 from ..store import BUSY, Judged, is_busy, unreadable_note
 from . import search_data
@@ -131,6 +133,7 @@ class SearchPane(Vertical):
         Binding("j", "rejudge(False)", "Re-judge"),
         Binding("J", "rejudge(True)", "Re-judge + links"),
         Binding("p", "paste", "Paste a post"),
+        Binding("y", "copy_post", "Copy post", show=False),   # in the keys panel; the footer keeps the tab keys at 80 columns
         Binding("escape", "close_paste", "Back", show=False),
     ]
 
@@ -207,10 +210,11 @@ class SearchPane(Vertical):
         table.add_column("role", key="role")
         table.add_column("first reason", key="reason")
         self._show_detail(None)
+        self.show_key_hints()
         self.watch(self.query_one("#chat", Select), "expanded", self._chat_dropdown_toggled, init=False)
         note = self._binary_note()
         if note:
-            self.query_one("#paste-result", Static).update(Text(note, style="yellow"))
+            self.query_one("#paste-result", Static).update(Content.styled(note, "$tn-warning"))
             self.query_one("#paste-judge", Button).disabled = True
             self.query_one("#paste-judge-links", Button).disabled = True
 
@@ -352,7 +356,7 @@ class SearchPane(Vertical):
             if not self._chats_shown and not sel.expanded:   # not "loading" any more
                 _set_options(sel, [(CHATS_NOT_READ, "all")], "all")
         if problem:
-            count.update(Text(clean(problem), style="yellow"))
+            count.update(Content.styled(clean(problem), "$tn-warning"))   # readable in NO_COLOR too (#139)
         else:
             n = len(rows)
             count.update(f"{n}{'+' if n >= LIMIT else ''} result{'s' if n != 1 else ''}")
@@ -434,6 +438,7 @@ class SearchPane(Vertical):
 
     def _show_detail(self, j: Judged | None, keep_result: bool = False) -> None:
         self._selected = j
+        self.refresh_bindings()   # y (copy) is on only with a post open
         head = self.query_one("#search-detail-head", Static)
         reasons = self.query_one("#detail-reasons", Static)
         text = self.query_one("#search-detail-text", Static)
@@ -442,7 +447,8 @@ class SearchPane(Vertical):
             self.query_one("#judge-result", Static).update("")
         buttons = [self.query_one("#rejudge", Button), self.query_one("#rejudge-links", Button)]
         if j is None:
-            head.update(Text("Nothing selected. Search above, or press p to paste a post.", style="dim"))
+            paste = "press p" if self.app.letter_keys else "use ctrl+p, Paste a post,"   # the letter keys off (#140)
+            head.update(Text(f"Nothing selected. Search above, or {paste} to paste a post.", style="dim"))
             reasons.update("")
             text.update("")
             note.update("")
@@ -465,13 +471,33 @@ class SearchPane(Vertical):
         if j.text.strip():
             text.update(Block(j.text, head=Text("text:", style="bold")))
         else:
-            text.update(Text("The text of this post wasn't stored (older bot versions didn't keep it), "
-                             "so it can't be shown or re-judged.", style="yellow"))
+            text.update(Content.styled("The text of this post wasn't stored (older bot versions didn't keep it), "
+                             "so it can't be shown or re-judged.", "$tn-warning"))
         binary_note = self._binary_note()
         can = not binary_note and bool(j.text.strip())
         for b in buttons:
             b.disabled = not can
         note.update(Text(binary_note))
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "copy_post" and self.is_mounted:
+            ok = not self.has_class("pasting") and self._selected is not None and bool(self._selected.text.strip())
+            return True if ok else None   # shown, but off with no post open
+        return True
+
+    def show_key_hints(self) -> None:
+        """The keys named on this tab's buttons and lines: the letter ones only while they work (#140)."""
+        self.query_one("#rejudge", Button).label = "Re-judge now" + self.app.key_hint(" (j)")
+        self.query_one("#rejudge-links", Button).label = "+ links" + self.app.key_hint(" (J)")
+        if self._selected is None:
+            self._show_detail(None)
+
+    def action_copy_post(self) -> None:
+        """Copy the selected post's text, as stored (reading order, not the order it is drawn in)."""
+        j = self._selected
+        if self.has_class("pasting") or j is None or not j.text.strip():
+            return
+        copy_post(self.app, j.text)
 
     # ---------------------------------------------------------- re-judge
 
@@ -487,10 +513,10 @@ class SearchPane(Vertical):
         if j is None:
             return
         if not self._binary_ok():
-            out.update(Text(self._binary_note(), style="yellow"))
+            out.update(Content.styled(self._binary_note(), "$tn-warning"))
             return
         if not j.text.strip():
-            out.update(Text("No stored text to re-judge.", style="yellow"))
+            out.update(Content.styled("No stored text to re-judge.", "$tn-warning"))
             return
         out.update(Text("judging with the current settings" + (", following links" if follow_links else "") + "…",
                         style="dim"))
@@ -519,6 +545,7 @@ class SearchPane(Vertical):
     def action_paste(self) -> None:
         self._deferred_judge = None   # a j waiting for results never judges the paste box
         self.add_class("pasting")
+        self.refresh_bindings()
         self.query_one("#paste-text", TextArea).focus()
 
     @on(TextArea.Changed, "#paste-text")
@@ -533,6 +560,7 @@ class SearchPane(Vertical):
     def action_close_paste(self) -> None:
         if self.has_class("pasting"):
             self.remove_class("pasting")
+            self.refresh_bindings()
             self.query_one("#results", DataTable).focus()
 
     @on(Button.Pressed, "#paste-close")
@@ -551,10 +579,10 @@ class SearchPane(Vertical):
         out = self.query_one("#paste-result", Static)
         text = self.query_one("#paste-text", TextArea).text
         if not self._binary_ok():
-            out.update(Text(self._binary_note(), style="yellow"))
+            out.update(Content.styled(self._binary_note(), "$tn-warning"))
             return
         if not text.strip():
-            out.update(Text("Paste some text first.", style="yellow"))
+            out.update(Content.styled("Paste some text first.", "$tn-warning"))
             return
         out.update(Text("judging…", style="dim"))
         self.run_worker(self._paste_worker(text, follow_links), exclusive=True, group="search-paste")
