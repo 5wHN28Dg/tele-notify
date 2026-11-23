@@ -1,7 +1,7 @@
 ## One test per problem from docs/problems-report.md, using invented posts
 ## (your real Saved Messages stay private and are used by `telenotify eval`).
 
-import std/[unittest, os, json, times]
+import std/[unittest, os, json, times, strutils]
 import telenotify/[config, classify]
 
 let cfg = loadConfig(currentSourcePath.parentDir / "keywords.json")
@@ -479,3 +479,839 @@ Requirements: degree in Engineering (in progress); open only to students in thei
     check verdict("""Lead Engineer - Basra
 Part of the Majnoon expansion programme. Apply now.
 Requirements: degree in Engineering. Probation period applies.""") == vReview
+
+suite "paid course adverts go to review (false positive 2026-11-23)":
+  # Invented posts, written like the advert the bot published: a training
+  # centre opening registration for a paid course, with a discount for new
+  # graduates, in Basra. No job, salary or hiring anywhere. The owner chose
+  # on 2026-11-23 that such a post goes to review, never to reject.
+  const courseAdvert = """شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+2- البرمجة بلغة السلم
+3- تطبيقات عملية
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+انستغرام: @example_training
+استثمر في مهاراتك اليوم"""
+
+  proc courseReview(post: string): bool =
+    let d = classify(post, cfg)
+    d.verdict == vReview and d.reasons[^1].startsWith("but it looks like a course or training you pay for")
+
+  test "a training centre's paid course goes to review":
+    check courseReview(courseAdvert)
+
+  test "the same advert in English":
+    check courseReview("""Example Engineering – Training & Development Center
+Registration is open for our training course: Industrial Automation Basics
+Course outline: PLC, SCADA, HMI
+Duration: 5 days, 30 training hours, accredited certificate
+Special discount for fresh graduates!
+Target audience: electrical engineering graduates
+Don't miss this opportunity! Location: Basra. Register now: 07700000000""")
+
+  test "long posts stay fast (the rule only looks a few words around each word)":
+    # A fetched job page can be megabytes. Copying the text before each
+    # "للعمل" or fee word made this quadratic: 11 s for 168 KB of "س للعمل"
+    # and 10 s for a 312 KB sentence of "رسوم الهندسيه" (release build).
+    const head = "تعلن شركة في البصرة عن برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج\n"
+    proc timed(post: string): float =
+      let t0 = epochTime()
+      discard verdict(post)
+      epochTime() - t0
+    proc repeated(unit: string, bytes: int): string =
+      result = head
+      while result.len < bytes: result.add unit
+    let work = repeated("س للعمل ", 200_000)       # no job noun before it
+    let fees = repeated("رسوم الهندسيه ", 300_000)  # one long sentence
+    var mixed = head
+    while mixed.len < 1_000_000:
+      mixed.add repeated("العمل في الشركة مع النظام ", 900)[head.len .. ^1]
+      mixed.add "س للعمل، رسوم الهندسيه\n"
+    # each against the same size of text without a single "للعمل" or fee word
+    for (post, plain) in [(work, repeated("س العملي ", 200_000)),
+                          (fees, repeated("رسومات هندسيه ", 300_000)),
+                          (mixed, repeated("العمل في الشركة مع النظام ", 1_000_000))]:
+      let (t, base) = (timed(post), timed(plain))
+      checkpoint "course rule: " & $t & " s, the same size without its words: " & $base & " s"
+      check t < 3 * base + 0.5
+
+  test "it only holds back a publish: a rejected course stays rejected":
+    let d = classify("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في برنامج تدريبي متخصص
+محاور البرنامج: أنظمة التحكم
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية
+📍 الموقع: بغداد – الكرادة""", cfg)
+    check d.verdict == vReject
+    check not d.reasons[^1].startsWith("but it looks like a course")
+
+  test "it only holds back a publish: a review stays a review for its own reason":
+    let d = classify("""شركة في البصرة تعلن عن فتح باب التسجيل في البرنامج التدريبي لحديثي التخرج
+هندسة كهرباء، مدة البرنامج شهر، مجاناً وبدون رسوم""", cfg)
+    check d.verdict == vReview
+    check d.reasons[^1] == "no sign of level either way"
+
+  test "one or two signs are not enough":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة
+سيخضع المقبولون لدورة تدريبية في الشركة
+ارسال السيرة الذاتية""") == vPublish
+    check verdict("""شركة في البصرة تعلن عن فتح باب التسجيل لمهندس كهرباء حديث التخرج
+للتسجيل ارسال السيرة الذاتية""") == vPublish
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في أكاديمية في البصرة لتقديم الدورات""") == vPublish
+
+  test "without a fee a training centre is not a paid course":
+    check verdict("""مركز التدريب في شركة الطاقة يعلن عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج في البصرة
+محاور البرنامج: السلامة والتشغيل""") == vPublish
+
+  test "an unrelated 'بدون خبرة' before a fee doesn't make it free":
+    check courseReview("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+بدون خبرة، رسوم البرنامج 150 ألف دينار""")
+
+  test "an unrelated 'No experience.' before a fee doesn't make it free":
+    check courseReview("""Registration is open for our training course for electrical engineering fresh graduates in Basra. Don't miss this opportunity.
+No experience needed. Fee: 100$""")
+
+  test "a free phrase in the fee's sentence makes the post free":
+    check verdict("""تعلن وزارة الاتصالات عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة حاسبات حديثي التخرج في البصرة
+ملاحظة: التقديم مجاني ولا توجد اي رسوم""") == vPublish
+    check verdict("""تعلن اكاديمية النور في البصرة عن فتح باب التسجيل في دورة مهندس شبكات لحديثي التخرج
+الرسوم مجانا للأوائل و 100 الف للبقية""") == vPublish
+
+  test "engineering drawings and price quotations are not fees":
+    check verdict("""تعلن شركة الرافدين للمقاولات في البصرة عن توفر فرصة لمهندس كهرباء حديث التخرج
+المهام: اعداد الرسوم الهندسية والمخططات
+خريج دورة AutoCAD وحاصل على شهادة معتمدة""") == vPublish
+    check verdict("""Electrical Engineer (Sales) in Basra, fresh graduates welcome.
+Duties: prepare price quotations for clients. Completed an AutoCAD course; accredited certificate preferred.
+A great opportunity.""") == vPublish
+
+  test "a staff discount is a benefit, not a fee":
+    check verdict("""تعلن أكاديمية الخليج في البصرة عن توفر فرصة لمهندس شبكات حديث التخرج لإدارة شبكة الأكاديمية
+الامتيازات: خصم 50% على دورات الأكاديمية""") == vPublish
+    check verdict("""Software Engineer in Basra, fresh graduates welcome. A great opportunity.
+Benefits: staff discount on all academy courses.""") == vPublish
+
+  test "main's job-advert wording keeps a job (Job Title)":
+    check verdict("""Job Title: Network Engineer at Basra Training Center. Fresh graduates welcome.
+Duties: deliver CCNA courses; trainees get a 10% discount.""") == vPublish
+
+  test "a hiring hashtag (#مطلوب) keeps a job":
+    check verdict("""#مطلوب
+مهندس شبكات حديث التخرج في أكاديمية النور – البصرة
+يقدم دورات الشبكات للمتدربين مع خصم 20% للطلبة""") == vPublish
+
+  test "hiring words match word starts (تعيينهم)":
+    check verdict("""تعلن شركة الطاقة عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج في البصرة، رسوم الاستمارة 10 الاف
+وسيتم تعيينهم في الشركة بعد اجتياز البرنامج""") == vPublish
+
+  test "'للعمل' right after a job keeps a job":
+    check verdict("""أكاديمية النور في البصرة تفتح باب التسجيل لمهندس شبكات حديث التخرج للعمل مدرباً في دوراتها
+مع خصم 50% على دوراتها لعائلته""") == vPublish
+
+  test "'المطلوبة' (required documents) is not 'wanted'":
+    check courseReview("""يعلن مركز التدريب الهندسي في البصرة عن فتح باب التسجيل في دورة مهندس شبكات لخريجي هندسة حاسبات حديثي التخرج
+الرسوم 150 الف
+الوثائق المطلوبة: صورة الهوية""")
+
+  test "'مسارك الوظيفي' is not a job":
+    check courseReview("""تعلن اكاديمية النور في البصرة عن فتح باب التسجيل في دورة مهندس شبكات لحديثي التخرج
+ابدأ مسارك الوظيفي، الرسوم 100 الف مع خصم للخريجين""")
+
+  test "'تؤهلك للعمل' is a course's promise, not a job":
+    check courseReview("""اكاديمية النور في البصرة تفتح باب التسجيل في دورة مهندس شبكات لحديثي التخرج تؤهلك للعمل في الشركات
+الرسوم 100 الف""")
+
+  test "hashtags are not course signs":
+    check verdict("""تعلن شركة النخيل في البصرة عن فتح باب التسجيل لخريجي هندسة كهرباء حديثي التخرج
+رسوم الاستمارة 10 الاف
+#دورات #كورسات""") == vPublish
+
+  test "a channel signature is not a course sign":
+    check verdict("""تعلن شركة النخيل في البصرة عن فتح باب التسجيل لخريجي هندسة كهرباء حديثي التخرج، رسوم الاستمارة 10 الاف
+تابعونا على قناة دورات البصرة""") == vPublish
+
+  test "only the signature is left out, not the rest of its line":
+    check courseReview("""تعلن اكاديمية النور في البصرة عن دورة لخريجي هندسة كهرباء حديثي التخرج، الرسوم 100 الف، تابعونا على قناة اكاديمية النور""")
+
+suite "course adverts: every post of the #152 reviews":
+  # main publishes all of these except where noted; the course rule may
+  # hold one for review but never rejects it
+  test "review 1/A2_trainer_job_ar (main: publish)":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل مدرباً في مركز تدريب في البصرة لتقديم الدورات
+للتقديم ارسال السيرة الذاتية""") == vPublish
+
+  test "review 1/A3_trainer_job_en (main: publish)":
+    check verdict("""We are looking for an electrical engineer (fresh graduate) to teach PLC courses at our Training Center in Basra.
+Send your CV.""") == vPublish
+
+  test "review 1/A_trainer_job_ar (main: publish)":
+    check verdict("""أكاديمية النور للتدريب في البصرة بحاجة الى مهندس كهرباء حديث التخرج للعمل كمدرب في دورات PLC
+للتسجيل ارسال السيرة الذاتية على الواتساب""") == vPublish
+
+  test "review 1/B2_paid_trainee_ar (main: reject)":
+    check verdict("""مركز التدريب في شركة الطاقة يعلن عن فتح باب التسجيل في برنامج تدريب بأجر لخريجي هندسة كهرباء حديثي التخرج في البصرة""") == vReject
+
+  test "review 1/B_paid_trainee_ar (main: publish)":
+    check verdict("""أكاديمية شركة نفط البصرة تعلن عن فتح باب التسجيل في برنامج تدريبي مدفوع لخريجي هندسة كهرباء حديثي التخرج
+مع منحة شهرية للمتدربين، الموقع: البصرة""") == vPublish
+
+  test "review 1/C_summer_ar (main: publish)":
+    check verdict("""تعلن شركة نفط البصرة – مركز التدريب والتطوير عن فتح باب التسجيل للتدريب الصيفي لطلبة هندسة كهرباء والخريجين الجدد
+مدة البرنامج: 6 أسابيع. الموقع: البصرة""") == vPublish
+
+  test "review 1/D2_summer_en (main: reject)":
+    check verdict("""Basra Oil Company Training Center announces its summer training program for electrical engineering students and fresh graduates.
+Registration is open now. Location: Basra""") == vReject
+
+  test "review 1/D_summer_en (main: publish)":
+    check verdict("""Training center of a Basra oil company: summer training for electrical engineering students and fresh graduates
+Registration is open, course outline attached, 20 training days. Location: Basra. Send your CV to apply.""") == vPublish
+
+  test "review 1/E0_pr_advert (main: publish)":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000""") == vReview
+
+  test "review 1/E1_footer_hashtag (main: publish)":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+#وظائف_البصرة""") == vPublish
+
+  test "review 1/E2_footer_channel (main: publish)":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+تابعونا على قناة وظائف البصرة""") == vPublish
+
+  test "review 1/E3_qualifies_for_job (main: publish)":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+البرنامج يؤهلك للحصول على وظيفة في سوق العمل""") == vPublish
+
+  test "review 1/E4_payroll_topic (main: publish)":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+2- إعداد الرواتب والأجور""") == vPublish
+
+  test "review 1/E5_internship_mention (main: publish)":
+    check verdict("""شركة النخيل الهندسية – مركز التدريب والتطوير
+يعلن المركز عن فتح باب التسجيل في البرنامج التدريبي
+برنامج تدريبي متخصص: "أساسيات أنظمة التحكم الصناعي PLC"
+محاور البرنامج التدريبي:
+1- مقدمة في أنظمة التحكم
+مدة البرنامج: 5 أيام تدريبية
+🎓 خصم خاص للخريجين الجدد!
+الفئة المستهدفة: خريجو التخصصات الهندسية وطلبة المراحل المنتهية
+📍 الموقع: البصرة – العشار
+للتسجيل والاستفسار: 07700000000
+Course includes an internship opportunity""") == vPublish
+
+  test "review 1/F1_neg_bidun_khibra (main: publish)":
+    check verdict("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+بدون خبرة، رسوم البرنامج 150 ألف دينار""") == vReview
+
+  test "review 1/F2_neg_la_tafut (main: publish)":
+    check verdict("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+لا تفوت الفرصة! خصم 30% للخريجين الجدد""") == vReview
+
+  test "review 1/F3_neg_en_free (main: publish)":
+    check verdict("""Registration is open for our training course for electrical engineering fresh graduates in Basra. Apply now.
+Free parking, fee: 100$ per trainee""") == vPublish
+
+  test "review 1/F4_fee_positive_control (main: review)":
+    check verdict("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+رسوم البرنامج 150 ألف دينار""") == vReview
+
+  test "review 1/F5_la_short (main: publish)":
+    check verdict("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+لا تفوت! خصم 30% للخريجين الجدد""") == vReview
+
+  test "review 1/F6_no_en (main: publish)":
+    check verdict("""Registration is open for our training course for electrical engineering fresh graduates in Basra. Apply now.
+No experience needed. Fee: 100$""") == vPublish
+
+  test "review 1/G1_morph (main: publish)":
+    check verdict("""تعلن شركة النخيل عن دورتها التدريبية لخريجي هندسة كهرباء في البصرة
+سجلوا الآن! أسعار خاصة للخريجين الجدد
+محاور الدورة: PLC و SCADA""") == vPublish
+
+  test "review 1/G2_morph_fee_suffix (main: reject)":
+    check verdict("""تعلن شركة النخيل عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة كهرباء في البصرة
+رسومه مخفضة للخريجين الجدد، اجور الدورة مناسبة""") == vReject
+
+  test "review 1/H1_iraqi_vocab (main: reject)":
+    check verdict("""تعلن شركة النخيل عن انطلاق دورة PLC لخريجي هندسة كهرباء في البصرة
+الكلفة 150 ألف دينار فقط، احجز مقعدك الآن، المقاعد محدودة
+تمنح شهادة معتمدة في نهاية الدورة""") == vReject
+
+  test "review 1/I1_free_hire_ar (main: publish)":
+    check verdict("""تعلن شركة الطاقة – مركز التدريب عن فتح باب التسجيل في برنامج تدريبي مجاني لخريجي هندسة كهرباء حديثي التخرج في البصرة
+والمتميزون سيتم ضمهم للعمل في الشركة""") == vPublish
+
+  test "review 1/I2_free_hire_en (main: publish)":
+    check verdict("""Basra Energy Company Training Center: registration is open for a free training program for electrical engineering fresh graduates in Basra.
+Top trainees will join our engineering team. Apply now.""") == vPublish
+
+  test "review 1/I3_fee_free_after (main: publish)":
+    check verdict("""تعلن شركة الطاقة عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج في البصرة
+الرسوم: مجاناً بالكامل""") == vPublish
+
+  test "review 1/J1_hire_pronoun (main: publish)":
+    check verdict("""تعلن شركة الطاقة – مركز التدريب عن فتح باب التسجيل في برنامج تدريبي مجاني لخريجي هندسة كهرباء حديثي التخرج في البصرة
+وسيتم تعيينهم في الشركة بعد اجتياز البرنامج""") == vPublish
+
+  test "review 1/J2_salary_pronoun (main: publish)":
+    check verdict("""أكاديمية شركة نفط البصرة تعلن عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة كهرباء حديثي التخرج
+يتقاضى المتدرب راتبا شهريا خلال فترة البرنامج. الموقع: البصرة""") == vPublish
+
+  test "review 1/K1_devcenter_job_en (main: publish)":
+    check verdict("""Our Software Development Center in Basra is looking for a fresh graduate python developer.
+Free courses for new staff. Register now through the link with your CV.""") == vPublish
+
+  test "review 1/K2_academy_job_ar (main: publish)":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج لأكاديمية النور في البصرة للعمل في قسم الدورات
+رابط التسجيل في الوصف""") == vPublish
+
+  test "review 1/smoke (main: publish)":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة
+ارسال السيرة الذاتية""") == vPublish
+
+  test "review 2/C01_wathaiq_matlooba (main: publish)":
+    check verdict("""يعلن مركز التدريب الهندسي في البصرة عن فتح باب التسجيل في دورة مهندس شبكات لخريجي هندسة حاسبات حديثي التخرج
+الرسوم 150 الف
+الوثائق المطلوبة: صورة الهوية""") == vReview
+
+  test "review 2/C02_masar_wadhifi (main: publish)":
+    check verdict("""تعلن اكاديمية النور في البصرة عن فتح باب التسجيل في دورة مهندس شبكات لحديثي التخرج
+ابدأ مسارك الوظيفي، الرسوم 100 الف مع خصم للخريجين""") == vReview
+
+  test "review 2/C03_souq_amal (main: publish)":
+    check verdict("""اكاديمية النور في البصرة تفتح باب التسجيل في دورة مهندس شبكات لحديثي التخرج تؤهلك للعمل في الشركات
+الرسوم 100 الف""") == vReview
+
+  test "review 2/C04_fee_after_free_word (main: reject)":
+    check verdict("""اكاديمية النور في البصرة: باب التسجيل مفتوح لدورة مهندس شبكات لحديثي التخرج
+السعر: 100 الف بدل 150، الحجز مجانا""") == vReject
+
+  test "review 2/C05_free_word_far (main: publish)":
+    check verdict("""تعلن اكاديمية النور في البصرة عن فتح باب التسجيل في دورة مهندس شبكات لحديثي التخرج
+الرسوم مجانا للأوائل و 100 الف للبقية""") == vPublish
+
+  test "review 2/R01_taaqud_academy (main: publish)":
+    check verdict("""تعلن أكاديمية البصرة للتدريب عن رغبتها بالتعاقد مع مهندس شبكات حديث التخرج
+لتقديم دورات الشبكات للطلبة
+التسجيل عبر الرابط: فتح باب التسجيل حتى نهاية الشهر""") == vPublish
+
+  test "review 2/R02_hashtag_matloob (main: publish)":
+    check verdict("""#مطلوب
+مهندس شبكات حديث التخرج للتدريس في أكاديمية النور - البصرة
+لتقديم دورات الشبكات
+للتسجيل ارسل السيرة الذاتية على الواتساب""") == vPublish
+
+  test "review 2/R03_gov_train_hire (main: publish)":
+    check verdict("""تعلن شركة نفط البصرة / مركز التدريب عن فتح باب التسجيل في الدورة التدريبية لخريجي هندسة حاسبات حديثي التخرج
+وسيتم التعاقد مع الناجحين بعد اجتياز الدورة
+مدة الدورة 3 اشهر""") == vPublish
+
+  test "review 2/R04_scam_warning (main: publish)":
+    check verdict("""تعلن وزارة الاتصالات عن فتح باب التسجيل في برنامج تدريبي لخريجي هندسة حاسبات حديثي التخرج في البصرة
+والتعاقد مع المتميزين
+ملاحظة: التقديم مجاني ولا توجد اي رسوم""") == vPublish
+
+  test "review 2/R05_oneline_signature (main: publish)":
+    check verdict("""مطلوب مهندس شبكات حديث التخرج للعمل مدرب في أكاديمية النور في البصرة لتقديم دورات الشبكات، للتسجيل ارسل سيرتك، تابعونا على قناة وظائف البصرة""") == vPublish
+
+  test "review 2/R06_en_position (main: publish)":
+    check verdict("""Position: Network Engineer (Instructor)
+Company: Basra Training Center
+Location: Basra
+Fresh graduates are welcome
+Duties: deliver CCNA courses and prepare the course content
+Requirements: CCNA certificate
+Apply: send CV to jobs@btc.iq""") == vPublish
+
+  test "review 2/R07_staff_discount (main: publish)":
+    check verdict("""Job Title: Software Engineer
+Location: Basra
+Fresh graduates welcome
+Benefits: staff discount on all academy courses, health insurance
+Register through the link: registration is open until 1 December
+Apply by sending CV to hr@x.iq""") == vPublish
+
+  test "review 2/R08_scam_warning_en (main: reject)":
+    check verdict("""Kurdistan-Basra Telecom announces its Graduate Development Program for fresh graduates in Basra
+Open to computer engineering graduates
+Registration is open now through the link
+The program includes courses in networking
+Note: we never charge any fees""") == vReject
+
+  test "review 2/R09_intern_en (main: publish)":
+    check verdict("""Intern - Network Engineer
+Basra Academy of Technology, Basra
+Fresh graduates
+Course duration and training hours: 3 months, then trainees may receive an offer
+Apply by sending CV""") == vPublish
+
+  test "review 2/R10_rusoom_draftsman (main: publish)":
+    check verdict("""تعلن شركة الرافدين للمقاولات في البصرة عن توفر فرصة لمهندس كهرباء حديث التخرج
+المهام: اعداد الرسوم الهندسية والمخططات
+الشروط: خريج دورة AutoCAD وحاصل على شهادة معتمدة""") == vPublish
+
+  test "review 2/R11_price_sales_en (main: publish)":
+    check verdict("""Job Title: Electrical Engineer (Sales)
+Location: Basra
+Fresh graduates welcome
+Duties: prepare price quotations for clients
+Requirements: completed an AutoCAD course; accredited certificate preferred
+Apply by sending CV""") == vPublish
+
+  test "review 2/R12_shift_dawra (main: publish)":
+    check verdict("""تعلن أكاديمية الخليج في البصرة عن توفر فرصة لمهندس شبكات حديث التخرج
+لإدارة شبكة الأكاديمية
+الدوام: دورة صباحية
+الامتيازات: خصم 50% على دورات الأكاديمية""") == vPublish
+
+  test "review 2/R13_university (main: reject)":
+    check verdict("""تعلن جامعة البصرة / مركز الحاسبة الالكترونية عن قبول مهندسين حاسبات حديثي التخرج كمتدربين لمدة سنة ثم التعيين على الملاك
+شروط التقديم: خريج دورة CCNA
+فتح باب التسجيل الكترونياً، رسوم الاستمارة 10 الاف""") == vReject
+
+  test "review 2/R14_hashtag_wadhaif_only (main: publish)":
+    check verdict("""#وظائف_البصرة #فرص_عمل
+تعلن أكاديمية التقنية في البصرة عن التعاقد مع مهندس شبكات حديث التخرج للتدريس في دورات الشبكات
+التسجيل عبر الرابط او للتسجيل راسلونا""") == vPublish
+
+  test "first version/p5 (main: publish)":
+    check verdict("""أكاديمية شركة نفط البصرة تعلن عن فتح باب التسجيل في برنامج تدريبي مدفوع الأجر
+لخريجي هندسة كهرباء حديثي التخرج
+مدة البرنامج: 3 أشهر، مع مكافأة شهرية للمتدربين
+الموقع: البصرة، للتسجيل عبر الرابط""") == vPublish
+
+  test "first version/p6 (main: publish)":
+    check verdict("""Training center of a Basra oil company: summer training for electrical engineering students and fresh graduates
+Registration is open, course outline attached, 20 training days
+Outstanding trainees are offered employment. Location: Basra""") == vPublish
+
+  test "first version/p7 (main: publish)":
+    check verdict("""مطلوب مهندس كهرباء حديث التخرج للعمل في البصرة
+يتم توفير التدريب، دورة تدريبية لمدة 10 أيام تدريبية وشهادة معتمدة
+راتب مجزي، للتقديم ارسال السيرة الذاتية""") == vPublish
+
+  test "first version/p8 (main: publish)":
+    check verdict("""مركز التدريب في شركة الطاقة يعلن عن فتح باب التسجيل في برنامج تدريبي مجاني
+لخريجي هندسة كهرباء حديثي التخرج، محاور البرنامج: السلامة، التشغيل، الصيانة
+البرنامج ينتهي بالتعيين في الشركة. الموقع: البصرة""") == vPublish
+
+  test "first version/k3 (main: publish)":
+    check verdict("""Python developer opportunity at our Software Development Center in Basra for fresh graduates.
+Free courses for new staff. Register now through the link.""") == vPublish
+
+  test "first version/k4 (main: publish)":
+    check verdict("""أكاديمية النور في البصرة تبحث عن مهندس كهرباء حديث التخرج كمدرب في دورات PLC
+للتسجيل ارسال السيرة الذاتية""") == vPublish
+
+  test "first version/k5 (main: publish)":
+    check verdict("""Summer training for electrical engineering students and fresh graduates at our Training Center in Basra.
+Registration is open, course outline attached. Apply now.""") == vPublish
+
+  test "first version/k6 (main: publish)":
+    check verdict("""Our Training Center in Basra is looking for a fresh graduate electrical engineer to teach PLC courses.
+Register now via the link.""") == vPublish
+
+  test "first version/k7 (main: publish)":
+    check verdict("""تعلن شركة الطاقة – مركز التدريب عن فتح باب التسجيل في برنامج تدريبي مجاني لخريجي هندسة كهرباء حديثي التخرج في البصرة
+والمتميزون سيتم ضمهم الى كادر الشركة""") == vPublish
+
+  test "first version/k8 (main: publish)":
+    check verdict("""Junior python developer opportunity in Basra for fresh graduates.
+Free courses at our Training Center.""") == vPublish
+
+suite "course adverts: pay wording (recheck of #152)":
+  # Posts main publishes: a paid traineeship with pay wording, often with a
+  # staff discount. They must keep publishing.
+  test "recheck pay/P1":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجور تدريب شهرية، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P2":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+يمنح المتدرب مبلغ شهري، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P3":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع مكافئة شهرية، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P4":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع مخصص شهري، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P5":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع بدل نقل وطعام، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P6":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+يتقاضى المتدرب 300 الف شهريا، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P7":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجر يومي، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P8":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع راتب، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P9":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع مكافأة شهرية، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P10":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع منحة شهرية، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P11":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجور، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P12":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مدفوع، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P13":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع امكانية التثبيت، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck pay/P14":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع امكانية التوظيف، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word اجور تدريب, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجور تدريب شهرية، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word مبلغ شهري, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+يمنح المتدرب مبلغ شهري، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word مكافئة, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع مكافئة شهرية، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word مخصص شهري, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع مخصص شهري، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word بدل نقل, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع بدل نقل وطعام، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word يتقاضى, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+يتقاضى المتدرب 300 الف شهريا، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word اجر يومي, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجر يومي، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word اجور, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجور، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "pay word امكانية التثبيت, with a discount for graduates":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع امكانية التثبيت، خصم 20% للخريجين الجدد
+للتسجيل: الرابط""") == vPublish
+
+  test "fees the company pays (تتحملها الشركة) are free":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+رسوم البرنامج تتحملها الشركة بالكامل
+للتسجيل: الرابط""") == vPublish
+
+  test "'اجور الكورس' is a course fee, not wages":
+    let d = classify("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+اجور الكورس 100 الف
+للتسجيل: الرابط""", cfg)
+    check d.verdict == vReview
+    check d.reasons[^1].startsWith("but it looks like a course")
+
+suite "course adverts: jobs of the #152 recheck":
+  # every job post of the recheck keeps main's verdict
+  test "recheck jobs/J01_trainer_center (main: publish)":
+    check verdict("""مركز تدريب الرافدين في البصرة
+بحاجة الى مدرب شبكات CCNA حديث التخرج
+يفضل خريجي هندسة حاسبات
+ارسال السيرة على الايميل: jobs@rafidain-train.iq""") == vPublish
+
+  test "recheck jobs/J02_academy_staff (main: publish)":
+    check verdict("""أكاديمية البصرة للتكنولوجيا
+فرصة لخريجي علوم الحاسبات للعمل كفني دعم تقني في الأكاديمية
+خصم 50% على الدورات للمنتسبين
+للتقديم ارسل السيرة الذاتية واتساب 07801234567""") == vPublish
+
+  test "recheck jobs/J03_en_trainer (main: publish)":
+    check verdict("""Basra Training Academy is looking for an IT support technician (fresh graduates welcome).
+Duties: maintain the lab PCs used in our courses, register trainees in the system.
+Discount on all courses for staff.
+Send CV to hr@bta.iq""") == vPublish
+
+  test "recheck jobs/J04_registration_job (main: reject)":
+    check verdict("""شركة نفطية في البصرة تعلن عن فتح باب التسجيل للخريجين الجدد
+فني دعم تقني - حديثي التخرج
+رسوم التسجيل: لا يوجد
+يتم التسجيل عبر الرابط""") == vReject
+
+  test "recheck jobs/J05_shuaiba_internship_fee (main: publish)":
+    check verdict("""تعلن شركة الشعيبة للمقاولات عن فرصة تدريب عملي لخريجي هندسة كهرباء في البصرة
+مدة البرنامج 3 اشهر، يحصل المتدرب على شهادة معتمدة
+خصم على السكن للمتدربين
+للتسجيل: 07712345678""") == vPublish
+
+  test "recheck jobs/J06_en_trainee_program (main: reject)":
+    check verdict("""Graduate Trainee Program - Basra
+We are opening registration for our 6-month trainee program for computer engineering graduates.
+Course outline: networks, servers, helpdesk.
+Registration fee: none. Accredited certificate at the end.
+Register now: forms.example/trainee""") == vReject
+
+  test "recheck jobs/J07_noc_shift (main: publish)":
+    check verdict("""شركة اتصالات في البصرة
+مطلوب فني شبكات NOC حديث التخرج
+دورة تدريبية داخلية لمدة اسبوعين قبل المباشرة
+خصم على باقات الانترنت للموظفين""") == vPublish
+
+  test "recheck jobs/J08_trainee_seat (main: publish)":
+    check verdict("""تعلن اكاديمية نفط البصرة عن قبول متدربين في برنامج تدريبي لخريجي هندسة السيطرة
+محاور البرنامج: PLC، SCADA، DCS
+رسوم البرنامج تتحملها الشركة
+باب التسجيل مفتوح حتى نهاية الشهر""") == vPublish
+
+  test "recheck jobs/J09_en_academy_dev (main: publish)":
+    check verdict("""Junior developer wanted at Code Academy Basra.
+You will build the platform our course students use. Training hours: 2 weeks onboarding.
+Price list of our courses is attached for reference.
+Apply: careers@codeacademy.iq""") == vPublish
+
+  test "recheck jobs/J10_volunteer_workshop (main: reject)":
+    check verdict("""فرصة تطوع في البصرة لخريجي علوم الحاسوب
+متطوع لتنظيم ورشة عمل تقنية
+سعر رمزي للغداء 5 الاف
+للتسجيل ارسل اسمك""") == vReject
+
+  test "recheck jobs/J11_trainer_en_fee (main: reject)":
+    check verdict("""IT Training Center in Basra needs a part-time network technician to set up the lab.
+Fresh graduates OK. Our course fees are not your concern, pay is per hour.
+Register your interest: 07709876543""") == vReject
+
+  test "recheck jobs/J12_hospital_it (main: publish)":
+    check verdict("""مستشفى أهلي في البصرة
+فني حاسوب للعمل في قسم الحسابات حديث التخرج
+رسوم المراجعة للموظفين مخفضة، خصم 50%
+مدة الدورة التدريبية الأولى أسبوع
+للتسجيل والتقديم: 07700011122""") == vPublish
+
+  test "recheck jobs/J13_ngo_course_then_hire (main: reject)":
+    check verdict("""منظمة في البصرة: برنامج تدريبي مع فرصة عمل
+دورة أمن سيبراني لخريجي هندسة الحاسبات، رسوم الدورة مدعومة بالكامل
+مدة البرنامج شهرين، شهادة معتمدة
+أفضل المتدربين يتم ضمهم لفريقنا""") == vReject
+
+  test "recheck jobs/J14_en_internship_fee (main: publish)":
+    check verdict("""Help desk intern - Basra
+Course credit available for students. Fees: none, it's a free internship.
+Training center: our Basra office.
+Register now via the link""") == vPublish
+
+  test "recheck jobs/J15_iraqi_vague (main: reject)":
+    check verdict("""شركة الزبير للحاسبات
+نريد شاب حديث التخرج فني صيانة حاسبات
+يفضل من سكنة الزبير
+سعر الساعة يتحدد بالمقابلة
+مدة التدريب أسبوع، ورشة عمل داخلية
+اكاديمية الشركة توفر الدورة""") == vReject
+
+  test "recheck jobs/J16_school_it (main: publish)":
+    check verdict("""مدرسة أهلية في البصرة تحتاج موظف IT
+مهامه: صيانة الأجهزة وإدارة منصة الدورات الإلكترونية
+خصم على أقساط أبنائه
+للتسجيل أرسل CV""") == vPublish
+
+  test "recheck jobs/J17_en_fee_collector (main: reject)":
+    check verdict("""Basra Academy hiring an IT assistant.
+Tasks: manage course registrations and collect course fees in the system.
+Fresh graduates. Send your CV.""") == vReject
+
+  test "recheck jobs/J18_ar_salary_free (main: reject)":
+    check verdict("""اكاديمية التنمية في البصرة
+تطلب فني شبكات حديث التخرج
+مهام: تجهيز قاعات الدورات، ادارة الشبكة
+الدوام صباحي، خصم للموظفين""") == vReject
+
+  test "recheck jobs/J19_shared_post (main: reject)":
+    check verdict("""فرص في البصرة:
+1- فني دعم تقني حديث التخرج في شركة اتصالات
+2- دورة CCNA في مركز التدريب، الرسوم 100 الف، للتسجيل 0770""") == vReject
+
+  test "recheck jobs/J20_en_bootcamp_job (main: publish)":
+    check verdict("""Junior developer (fresh graduate) - Basra
+We run a coding bootcamp and need a teaching assistant who can code.
+Price: we cover your bootcamp seat. Training center in Al-Ashar.
+Register now with your CV.""") == vPublish
+
+  test "recheck jobs/J21_trainer_needed (main: reject)":
+    check verdict("""مركز تدريب في البصرة يحتاج مدرب برمجة بايثون حديث التخرج
+الأجور حسب عدد الدورات، رسوم الدورة يدفعها الطالب
+للتسجيل ارسل رقمك""") == vReject
+
+  test "recheck jobs/J22_gov_trainee (main: reject)":
+    check verdict("""شركة نفط البصرة تعلن عن فتح باب التسجيل لتدريب خريجي هندسة الحاسبات
+البرنامج التدريبي لمدة 6 أشهر، بدون رسوم
+محاور: شبكات، أنظمة تحكم
+الفئة المستهدفة: حديثي التخرج""") == vReject
+
+  test "recheck jobs/J23_en_discount_customers (main: publish)":
+    check verdict("""IT support technician - Basra (entry level)
+Our training center offers customers a 20% discount, you will handle the booking system.
+Register now: send CV to it@center.iq""") == vPublish
+
+  test "recheck jobs/J24_ar_salary_word_missing (main: reject)":
+    check verdict("""شركة الأمل في البصرة
+فني دعم تقني حديث التخرج
+بعد اجتياز دورة تدريبية لمدة أسبوع بأكاديمية الشركة
+خصم على الدورات اللاحقة
+للتسجيل 07800000000""") == vReject
+
+  test "recheck jobs/J25_en_course_mention (main: reject)":
+    check verdict("""Entry level network technician, Basra.
+Requirements: completed a CCNA course. Fee for the CCNA exam reimbursed.
+Academy graduates welcome. Register now via our form.""") == vReject
+
+  test "recheck jobs/J26_ar_trainee_pay_unusual (main: publish)":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي للخريجين الجدد من علوم الحاسبات
+مع اجور تدريب شهرية، خصم على الاشتراك بالنادي
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck jobs/J27_ar_tilan_job_discount (main: publish)":
+    check verdict("""تعلن شركة الخليج للاتصالات في البصرة عن حاجتها الى فني شبكات حديث التخرج
+المزايا: تأمين صحي، خصم على خدمات الشركة
+التقديم عبر الرابط""") == vPublish
+
+  test "recheck jobs/J28_trainee_program_free (main: publish)":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي لخريجي علوم الحاسبات حديثي التخرج
+مدة البرنامج 3 اشهر بعدها يتم التعيين للمتميزين
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck jobs/J29_trainee_program_mention_fee_none (main: publish)":
+    check verdict("""تعلن شركة البصرة للبرمجيات عن برنامج تدريبي لخريجي علوم الحاسبات حديثي التخرج
+مدة البرنامج 3 اشهر، البرنامج بدون أي رسوم على المتدرب
+مكافأة شهرية للمتدربين
+للتسجيل: الرابط""") == vPublish
+
+  test "recheck jobs/J30_trainee_program_company_covers (main: review)":
+    check verdict("""تعلن شركة نفط الجنوب عن فتح باب التسجيل في البرنامج التدريبي لخريجي هندسة السيطرة الجدد في البصرة
+محاور البرنامج: PLC، DCS، السلامة
+الرسوم على حساب الشركة""") == vReview
+
+  test "recheck jobs/J31_en_trainee_sponsored (main: reject)":
+    check verdict("""Basra Gas Company opens registration for its training program for fresh graduates in electrical engineering.
+Training days: 60. Fees are covered by the company. Accredited certificate at the end.""") == vReject
+
+  test "recheck jobs/J32_ar_trainee_stipend_word (main: publish)":
+    check verdict("""تعلن شركة الرافدين في البصرة عن برنامج تدريبي مدته 6 اشهر لخريجي هندسة حاسبات
+يمنح المتدرب مبلغ شهري 300 الف
+خصم على السكن
+للتسجيل: 0770""") == vPublish
+
+  test "recheck jobs/J33_en_trainee_transport (main: publish)":
+    check verdict("""Training opportunity for fresh graduates in computer engineering, Basra oil sector.
+Program duration: 3 months on site. Transport provided; price of meals discounted.
+Register now via the form.""") == vPublish
+
+  test "recheck jobs/J34_ar_tadreeb_amali (main: publish)":
+    check verdict("""فرصة تدريب عملي لحديثي التخرج من هندسة كهرباء في حقل الرميلة
+مدة البرنامج: 3 أشهر
+خصم 50% على السكن داخل الحقل
+للتسجيل 07801234567""") == vPublish
+
+  test "recheck jobs/J35_en_bonus (main: publish)":
+    check verdict("""Training opportunity: junior developer trainee in Basra for fresh graduates.
+Training hours: full time for 3 months, with a monthly bonus.
+Discount on our courses after you finish. Register now.""") == vPublish
+
+  test "recheck jobs/J36_ar_mukafaa_misspelt (main: publish)":
+    check verdict("""تعلن شركة البصرة للحلول التقنية عن برنامج تدريبي لحديثي التخرج من هندسة حاسبات
+مدة البرنامج 4 اشهر، مع مكافئة شهرية
+خصم على الدورات اللاحقة
+للتسجيل الرابط""") == vPublish
+
+  test "recheck jobs/J37_ar_ojoor (main: publish)":
+    check verdict("""تعلن شركة الفاو الهندسية عن برنامج تدريبي مدفوع الأجور لحديثي التخرج من هندسة كهرباء
+المدة 6 اشهر
+خصم على النقل
+للتسجيل 0770""") == vPublish

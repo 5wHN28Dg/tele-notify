@@ -130,6 +130,133 @@ const
     "رسوم التسجيل", "registration fee", "course fees", "job simulation", "job simulations", "virtual experience program",
   ]
 
+  ## Signs of a course or training the reader pays for (false positive
+  ## 2026-11-23: a training centre's paid course "for engineering
+  ## graduates, discount for new graduates" was published). They never
+  ## reject: `courseAdvert` in classify.nim only holds a post that would be
+  ## published for review (the owner's decision of 2026-11-23). It needs a
+  ## fee and two other kinds of sign, and no word of hiring or pay. These
+  ## lists are whole words ("رسوم" is not "رسومات"); an Arabic prefix
+  ## (و ف ب ل ك ال...) is allowed in front.
+  courseRegistration* = [
+    "فتح باب التسجيل", "باب التسجيل", "للتسجيل", "سجل الان", "سارع بالتسجيل",
+    "التسجيل في الدوره", "التسجيل في البرنامج", "التسجيل في الكورس",
+    "رابط التسجيل", "التسجيل مفتوح", "register now", "registration is open",
+    "registration open", "registrations are open", "registrations open",
+    "enroll now", "enrol now", "sign up now",
+  ]
+  ## Not "مجاناً"/"free": a free course has no fee. "اجور الدوره" and
+  ## "سعر الدوره" aren't here: `notAJob` rejects them first.
+  courseFees* = [
+    "خصم", "خصومات", "رسوم", "سعر", "اجور الكورس", "اجور الاشتراك",
+    "اجور التسجيل", "قسط الدوره", "تكلفه الدوره", "discount", "fee", "fees",
+    "price", "tuition",
+  ]
+  ## Fee words that are a discount: not a fee when the sentence is about
+  ## staff benefits (`courseBenefits`: "staff discount", "الامتيازات: خصم").
+  courseDiscounts* = ["خصم", "خصومات", "discount"]
+  courseBenefits* = [
+    "للموظفين", "الموظفين", "للعاملين", "العاملين", "منتسبي", "الامتيازات",
+    "امتيازات", "المزايا", "مزايا", "السكن", "النقل", "النادي", "نادي",
+    "staff", "employee", "employees",
+    "benefits", "perks",
+  ]
+  ## A fee word right after one of these is not a fee: "بدون رسوم",
+  ## "no fees", "عرض سعر" (a quotation).
+  courseNotFeeBefore* = [
+    "بدون", "بلا", "دون", "لا", "مجانا", "مجاني", "مجانيه", "no", "without",
+    "free", "zero", "عرض", "عروض", "تسعير",
+  ]
+  ## ...or right before one of these: "الرسوم الهندسيه" (engineering
+  ## drawings), "price quotation".
+  courseNotFeeAfter* = [
+    "الهندسيه", "هندسيه", "البيانيه", "بيانيه", "المتحركه", "متحركه",
+    "التخطيطيه", "تخطيطيه", "التوضيحيه", "توضيحيه", "الفنيه", "فنيه",
+    "ثلاثيه", "ثنائيه", "والمخططات", "المخططات", "اوتوكاد", "autocad",
+    "quotation", "quotations", "quote", "quotes", "list", "lists", "offer",
+    "offers", "analysis", "comparison",
+  ]
+  ## Anywhere in the sentence of a fee word: the post is free.
+  courseFreeSentence* = [
+    "مجانا", "مجاني", "مجانيه", "بالمجان", "لا توجد اي رسوم", "لا يوجد اي رسوم",
+    "لا توجد رسوم", "بدون اي رسوم", "بدون رسوم", "لا رسوم", "free",
+    "free of charge", "no fee", "no fees", "never charge",
+    # the employer pays it
+    "تتحملها الشركه", "تتحمل الشركه", "يتحملها", "تتحملها", "على نفقه الشركه",
+    "على حساب الشركه",
+  ]
+  courseStructure* = [
+    "محاور", "مده الدوره", "مده البرنامج", "مده الكورس", "ايام تدريبيه",
+    "يوم تدريبي", "ساعات تدريبيه", "ساعه تدريبيه",
+    "شهاده معتمده", "شهاده حضور", "الفئه المستهدفه", "course outline",
+    "course content", "course contents", "course duration", "training hours",
+    "training days", "certificate of completion", "certificate of attendance",
+    "accredited certificate", "target audience",
+  ]
+  ## Only centres that say "training": a "Software Development Center" is
+  ## an employer.
+  courseProviders* = [
+    "مركز تدريب", "مركز التدريب", "مركز للتدريب", "معهد تدريب", "اكاديميه",
+    "training center", "training centre", "training institute", "academy",
+  ]
+  courseWords* = [
+    "دوره", "دورات", "كورس", "كورسات", "ورشه عمل", "ورش عمل", "ورشه تدريبيه",
+    "برنامج تدريبي", "البرنامج التدريبي", "course", "courses",
+    "training workshop", "bootcamp", "boot camp",
+  ]
+  ## Hiring or pay, matched at the *start* of a word, so the forms built on
+  ## it count too: "راتب" also finds "راتباً", "تعيين" "تعيينهم", "وظيفت"
+  ## "وظيفتك". Not "وظيفي" ("مسارك الوظيفي" is a course's pitch) and not a
+  ## bare "paid"/"مدفوعه" (also "a paid course").
+  courseHiringStems* = [
+    "راتب", "رواتب", "مكافا", "منحه", "منح شهريه", "مخصصات", "اجر شهري",
+    "مدفوع الاجر", "مدفوعه الاجر", "تدريب مدفوع", "تدريبي مدفوع",
+    "تدريب باجر", "تدريبي باجر", "تعيين", "توظيف", "وظيفه", "وظيفت", "وظائف",
+    "فرصه عمل", "فرص عمل", "شاغر", "شواغر", "عقد عمل", "تعاقد", "التعاقد",
+    "ضمهم", "ضمه", "سيتم ضم", "تدريب صيفي", "تدريب الصيفي", "حاجه الى",
+    "حاجتها الى", "حاجته الى", "حاجتنا الى", "حاجتهم الى", "يعلن عن حاجته",
+    "تعلن عن حاجتها", "الدوام", "دوام",
+    # more pay wording: "اجور" too, but not "اجور الدوره" (`courseNotWages`)
+    "اجور", "اجر يومي", "مبلغ شهري", "مكافئه", "مخصص شهري", "بدل نقل",
+    "يتقاض", "تتقاض", "امكانيه التثبيت", "تثبيت",
+  ]
+  ## "اجور" right before one of these is a course fee, not wages.
+  courseNotWages* = [
+    "الدوره", "الدورات", "الكورس", "الكورسات", "الاشتراك", "التسجيل",
+    "البرنامج",
+  ]
+  ## Hiring words that must be whole words. `jobSignals` and
+  ## `employerPhrases` are added to these (config.nim), except
+  ## `courseNotHiring`. "مطلوب" with the article ("الوثائق المطلوبه")
+  ## doesn't count (classify.nim).
+  courseHiringWords* = [
+    "مطلوب", "مطلوبه", "مطلوبين", "مطلوبون", "نبحث عن", "تبحث عن", "يبحث عن",
+    "salary", "salaries", "stipend", "stipends", "allowance", "paid internship",
+    "paid training", "paid traineeship", "hiring", "we are hiring", "hire",
+    "hired", "employment", "employed", "job offer", "job opening", "vacancy",
+    "vacancies", "internship", "internships", "summer training",
+    "summer internship", "recruitment", "looking for", "join our team",
+    "join the team", "wanted", "your cv",
+  ]
+  ## Job-advert wording that a course advert uses too ("يعلن المركز عن فتح
+  ## باب التسجيل في برنامج تدريبي"): not a hiring word. "للعمل" is handled
+  ## on its own: only after a job noun.
+  courseNotHiring* = [
+    "برنامج تدريبي", "فرصه تدريب", "اعلان", "تعلن", "يعلن", "نعلن",
+    "opportunity", "opportunities", "للعمل",
+  ]
+  ## "تؤهلك للعمل" is a course's promise, not a job.
+  courseQualifies* = [
+    "تؤهلك", "يؤهلك", "تؤهل", "يؤهل", "مؤهل", "لتاهيلك", "جاهز", "جاهزا",
+  ]
+  ## A channel's signature ("تابعونا على قناة وظائف البصرة"): from here to
+  ## the end of its line is left out when counting course signs. (It still
+  ## counts as hiring wording, like the rest of the post.)
+  courseSignature* = [
+    "تابعونا", "تابعوا", "تابعنا", "اشتركوا", "اشترك في قناه", "انضموا الى قناه",
+    "قناتنا", "follow us", "follow our", "join our channel", "subscribe",
+  ]
+
   ## Entry-level phrases added to your `level_keywords_*`. These are
   ## phrasings of "we want fresh graduates" that are not single keywords.
   entryPhrases* = [
